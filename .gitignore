@@ -11,3 +11,9 @@ venv/
 # System files
 .DS_Store
 */.DS_Store
+
+*/__pycache__/
+*.pyc
+*.cpython-*
+wandb/
+coding_assistant_notes.md

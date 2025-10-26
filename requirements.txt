@@ -9,3 +9,5 @@ captum
 sae-lens
 wandb
 random
+trl
+peft

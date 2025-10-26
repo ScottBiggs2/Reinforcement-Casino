@@ -12,7 +12,7 @@ def find_field(columns, candidates):
             return c
     return None
 
-def load_openr1_subset(tokenizer_name="google/gemma-3-270m",
+def load_openr1_subset(tokenizer_name="google/gemma-3-270m-it",
                        split="train",
                        subset_size=2000,
                        seed=42,
