@@ -17,3 +17,10 @@ venv/
 *.cpython-*
 wandb/
 coding_assistant_notes.md
+
+results/
+*.pt 
+*.pth
+*.json
+*.log
+
