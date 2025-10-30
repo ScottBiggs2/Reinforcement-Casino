@@ -82,7 +82,6 @@ tokenizer.padding_side = "right"
 data_collator = DataCollatorWithPadding(
     tokenizer=tokenizer,
     max_length=1024,
-    max_prompt_length=512,
     pad_to_multiple_of=8,   # optional, helps Tensor Cores
 )
 
