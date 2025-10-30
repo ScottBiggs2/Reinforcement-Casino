@@ -24,7 +24,8 @@ OUTPUT_DIR = "./checkpoints_gemma3_dpo"
 DELTA_LOG_DIR = "./delta_logs"
 FULL_DUMP_EVERY = 200
 THRESHOLD = 1e-4
-SUBSET_SIZE = 500  # reduce for faster bring-up
+NUM_STEPS = 20000
+SUBSET_SIZE = None  # reduce for faster bring-up
 
 WANDB_PROJECT = "gemma3-dpo-subnetwork-emergence"
 WANDB_RUN_NAME = "gemma3-270m-it_lightR1_subset"
@@ -173,6 +174,7 @@ cfg = DPOConfig(
     per_device_train_batch_size=2,
     gradient_accumulation_steps=8,
     learning_rate=5e-6,
+    max_steps=NUM_STEPS,
     num_train_epochs=1,
     bf16=True, fp16=False,
     logging_steps=1,
