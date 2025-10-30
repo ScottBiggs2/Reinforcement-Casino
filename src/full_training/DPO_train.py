@@ -11,6 +11,7 @@ from transformers import (
     DataCollatorWithPadding,
 )
 from trl import DPOTrainer, DPOConfig
+from typing import List, Dict, Any
 
 
 #######################################
@@ -79,11 +80,46 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
 
-data_collator = DataCollatorWithPadding(
-    tokenizer=tokenizer,
-    max_length=1024,
-    pad_to_multiple_of=8,   # optional, helps Tensor Cores
-)
+def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    """
+    Collate function for TRL DPO:
+      inputs: list of {"prompt": str, "chosen": str, "rejected": str}
+      outputs: padded Long tensors for each of prompt/chosen/rejected (ids + mask)
+    """
+    prompts  = [ex["prompt"]  for ex in examples]
+    chosens  = [ex["chosen"]  for ex in examples]
+    rejects  = [ex["rejected"] for ex in examples]
+
+    # Tokenize without padding, then pad in batch for each field
+    enc_prompt = [tokenizer(p, truncation=True, max_length=512,  return_tensors="pt") for p in prompts]
+    enc_chosen = [tokenizer(c, truncation=True, max_length=1024, return_tensors="pt") for c in chosens]
+    enc_reject = [tokenizer(r, truncation=True, max_length=1024, return_tensors="pt") for r in rejects]
+
+    # Pad each group separately; return_tensors="pt" gives Long input_ids by default
+    batch_prompt = tokenizer.pad(
+        enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8
+    )
+    batch_chosen = tokenizer.pad(
+        enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8
+    )
+    batch_reject = tokenizer.pad(
+        enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8
+    )
+
+    # Ensure int64 (just in case)
+    for k in ("input_ids", "attention_mask"):
+        batch_prompt[k] = batch_prompt[k].to(torch.long)
+        batch_chosen[k] = batch_chosen[k].to(torch.long)
+        batch_reject[k] = batch_reject[k].to(torch.long)
+
+    return {
+        "prompt_input_ids":       batch_prompt["input_ids"],
+        "prompt_attention_mask":  batch_prompt["attention_mask"],
+        "chosen_input_ids":       batch_chosen["input_ids"],
+        "chosen_attention_mask":  batch_chosen["attention_mask"],
+        "rejected_input_ids":     batch_reject["input_ids"],
+        "rejected_attention_mask":batch_reject["attention_mask"],
+    }
 
 #######################################
 # 3. Load policy model (trainable) + ref model (frozen)
@@ -144,7 +180,7 @@ trainer = DPOTrainer(
     processing_class=tokenizer,   # ok to keep; collator will do the heavy lifting
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    data_collator=data_collator,  # <<< THIS ensures int64 input_ids
+    data_collator=dpo_collator_fn,  # <<< THIS ensures int64 input_ids
 )
 
 #######################################
