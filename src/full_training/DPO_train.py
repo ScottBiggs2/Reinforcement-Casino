@@ -177,7 +177,6 @@ cfg = DPOConfig(
 trainer = DPOTrainer(
     model=model,
     args=cfg,
-    processing_class=tokenizer,   # ok to keep; collator will do the heavy lifting
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     data_collator=dpo_collator_fn,  # <<< THIS ensures int64 input_ids
