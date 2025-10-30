@@ -30,12 +30,57 @@ WANDB_RUN_NAME = "gemma3-270m-it_lightR1_subset"
 # 1. Load dataset
 #######################################
 
-raw_ds = load_dataset(DATASET_NAME, split="train")  # has prompt/chosen/rejected
-if SUBSET_SIZE is not None:
-    raw_ds = raw_ds.select(range(min(SUBSET_SIZE, len(raw_ds))))
+raw_ds = load_dataset("qihoo360/Light-R1-DPOData", split="train")
 
-train_dataset = raw_ds
+def msg_to_text(x):
+    # x can be str, dict {"from","value"}, or list[dict]
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        return x.get("value", "")
+    if isinstance(x, list):
+        # concatenate message values; if you want only user/system in prompt,
+        # filter by role for prompt later.
+        return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
+    return str(x)
+
+def normalize_record(rec):
+    # Light-R1 examples often store conversation turns; we derive plain strings
+    prompt_raw   = rec.get("prompt", "")
+    chosen_raw   = rec.get("chosen", "")
+    rejected_raw = rec.get("rejected", "")
+
+    # If prompt is a list of turns, prefer only non-assistant content for the prompt string.
+    if isinstance(prompt_raw, list):
+        prompt_text = "\n".join(
+            m.get("value","") for m in prompt_raw
+            if isinstance(m, dict) and m.get("from","").lower() != "assistant"
+        ).strip()
+    else:
+        prompt_text = msg_to_text(prompt_raw).strip()
+
+    chosen_text   = msg_to_text(chosen_raw).strip()
+    rejected_text = msg_to_text(rejected_raw).strip()
+
+    return {
+        "prompt": prompt_text,
+        "chosen": chosen_text,
+        "rejected": rejected_text,
+    }
+
+# Keep only the normalized columns so TRL doesn't try to "maybe_extract_prompt"
+norm_ds = raw_ds.map(
+    normalize_record,
+    remove_columns=raw_ds.column_names
+)
+
+# (Optional) take a subset to iterate quickly
+if SUBSET_SIZE is not None:
+    norm_ds = norm_ds.select(range(min(SUBSET_SIZE, len(norm_ds))))
+
+train_dataset = norm_ds
 eval_dataset = None
+
 
 #######################################
 # 2. Load tokenizer
