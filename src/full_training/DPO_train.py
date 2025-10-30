@@ -60,7 +60,7 @@ def normalize_record(rec):
 
     return {"prompt": prompt_text, "chosen": chosen_text, "rejected": rejected_text}
 
-raw_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
+norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
 
 # (Optional) take a subset to iterate quickly
 if SUBSET_SIZE is not None:
@@ -68,13 +68,6 @@ if SUBSET_SIZE is not None:
 
 train_dataset = norm_ds
 eval_dataset = None
-
-data_collator = DPODataCollatorWithPadding(
-    tokenizer=tokenizer,
-    max_length=1024,
-    max_prompt_length=512,
-    pad_to_multiple_of=8,   # optional, helps Tensor Cores
-)
 
 #######################################
 # 2. Load tokenizer
@@ -84,6 +77,13 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
+
+data_collator = DPODataCollatorWithPadding(
+    tokenizer=tokenizer,
+    max_length=1024,
+    max_prompt_length=512,
+    pad_to_multiple_of=8,   # optional, helps Tensor Cores
+)
 
 #######################################
 # 3. Load policy model (trainable) + ref model (frozen)
