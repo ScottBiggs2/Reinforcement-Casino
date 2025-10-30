@@ -8,9 +8,10 @@ from transformers import (
     AutoTokenizer,
     TrainingArguments,
     TrainerCallback,
+    DataCollatorWithPadding,
 )
 from trl import DPOTrainer, DPOConfig
-from trl.trainer.utils import DPODataCollatorWithPadding
+
 
 #######################################
 # 0. Config
@@ -78,7 +79,7 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
 
-data_collator = DPODataCollatorWithPadding(
+data_collator = DataCollatorWithPadding(
     tokenizer=tokenizer,
     max_length=1024,
     max_prompt_length=512,
