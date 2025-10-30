@@ -51,22 +51,12 @@ tokenizer.padding_side = "right"
 #######################################
 
 # policy model: this one will get updated
-policy_model = AutoModelForCausalLM.from_pretrained(
+model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16,
     device_map="auto",
 )
-policy_model.config.use_cache = False  # Trainer compat
-
-# reference model: same weights initially, kept frozen
-ref_model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-)
-ref_model.config.use_cache = False
-for p in ref_model.parameters():
-    p.requires_grad = False  # make sure it's frozen
+model.config.use_cache = False  # Trainer compat
 
 #######################################
 # 4. TrainingArguments
