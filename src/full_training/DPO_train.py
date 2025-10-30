@@ -80,45 +80,55 @@ if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
 
-def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-    """
-    Collate function for TRL DPO:
-      inputs: list of {"prompt": str, "chosen": str, "rejected": str}
-      outputs: padded Long tensors for each of prompt/chosen/rejected (ids + mask)
-    """
-    prompts  = [ex["prompt"]  for ex in examples]
-    chosens  = [ex["chosen"]  for ex in examples]
-    rejects  = [ex["rejected"] for ex in examples]
 
-    # Tokenize without padding, then pad in batch for each field
+def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    # If the dataset was already preprocessed, just stack/pad those tensors.
+    if "prompt_input_ids" in examples[0]:
+        def pad_stack(key):
+            seqs = [torch.tensor(ex[key]) if not torch.is_tensor(ex[key]) else ex[key] for ex in examples]
+            lens = [s.size(-1) for s in seqs]
+            maxlen = max(lens)
+            out = torch.full((len(seqs), maxlen), fill_value=0, dtype=torch.long)
+            mask = torch.zeros((len(seqs), maxlen), dtype=torch.long)
+            for i, s in enumerate(seqs):
+                out[i, : s.size(-1)] = s.to(torch.long)
+                mask[i, : s.size(-1)] = 1
+            return out, mask
+
+        p_ids, p_mask = pad_stack("prompt_input_ids")
+        c_ids, c_mask = pad_stack("chosen_input_ids")
+        r_ids, r_mask = pad_stack("rejected_input_ids")
+        return {
+            "prompt_input_ids": p_ids, "prompt_attention_mask": p_mask,
+            "chosen_input_ids": c_ids, "chosen_attention_mask": c_mask,
+            "rejected_input_ids": r_ids, "rejected_attention_mask": r_mask,
+        }
+
+    # Otherwise, we expect raw strings.
+    prompts  = [ex.get("prompt", "")   for ex in examples]
+    chosens  = [ex.get("chosen", "")   for ex in examples]
+    rejects  = [ex.get("rejected", "") for ex in examples]
+
     enc_prompt = [tokenizer(p, truncation=True, max_length=512,  return_tensors="pt") for p in prompts]
     enc_chosen = [tokenizer(c, truncation=True, max_length=1024, return_tensors="pt") for c in chosens]
     enc_reject = [tokenizer(r, truncation=True, max_length=1024, return_tensors="pt") for r in rejects]
 
-    # Pad each group separately; return_tensors="pt" gives Long input_ids by default
-    batch_prompt = tokenizer.pad(
-        enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8
-    )
-    batch_chosen = tokenizer.pad(
-        enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8
-    )
-    batch_reject = tokenizer.pad(
-        enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8
-    )
+    batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+    batch_chosen = tokenizer.pad(enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+    batch_reject = tokenizer.pad(enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8)
 
-    # Ensure int64 (just in case)
     for k in ("input_ids", "attention_mask"):
         batch_prompt[k] = batch_prompt[k].to(torch.long)
         batch_chosen[k] = batch_chosen[k].to(torch.long)
         batch_reject[k] = batch_reject[k].to(torch.long)
 
     return {
-        "prompt_input_ids":       batch_prompt["input_ids"],
-        "prompt_attention_mask":  batch_prompt["attention_mask"],
-        "chosen_input_ids":       batch_chosen["input_ids"],
-        "chosen_attention_mask":  batch_chosen["attention_mask"],
-        "rejected_input_ids":     batch_reject["input_ids"],
-        "rejected_attention_mask":batch_reject["attention_mask"],
+        "prompt_input_ids":        batch_prompt["input_ids"],
+        "prompt_attention_mask":   batch_prompt["attention_mask"],
+        "chosen_input_ids":        batch_chosen["input_ids"],
+        "chosen_attention_mask":   batch_chosen["attention_mask"],
+        "rejected_input_ids":      batch_reject["input_ids"],
+        "rejected_attention_mask": batch_reject["attention_mask"],
     }
 
 #######################################
