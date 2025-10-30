@@ -9,7 +9,7 @@ from transformers import (
     TrainingArguments,
     TrainerCallback,
 )
-from trl import DPOTrainer
+from trl import DPOTrainer, DPOConfig
 
 #######################################
 # 0. Config
@@ -93,19 +93,36 @@ training_args = TrainingArguments(
 
 # IMPORTANT:
 # We pass (policy_model, ref_model) POSITIONALLY.
-# We still provide beta if the TRL version you're pinned to supports it.
-# If your local TRL version still errors on beta, pin `trl==0.7.4` where beta is documented. :contentReference[oaicite:5]{index=5}
 
-trainer = DPOTrainer(
-    policy_model,
-    ref_model,
-    training_args,
-    beta=0.1,                     # temperature / strength of preference alignment; typical 0.1-0.5 :contentReference[oaicite:6]{index=6}
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    tokenizer=tokenizer,
+cfg = DPOConfig(
+    output_dir=OUTPUT_DIR,
+    run_name=WANDB_RUN_NAME,
+    report_to=["wandb"],
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=8,
+    learning_rate=5e-6,
+    num_train_epochs=1,
+    bf16=True,
+    fp16=False,
+    logging_steps=1,
+    save_steps=FULL_DUMP_EVERY,
+    save_total_limit=5,
+
+    # DPO-specific knobs now belong here:
+    beta=0.1,                 # temperature / ref deviation
     max_length=1024,
     max_prompt_length=512,
+    # (optional) sync ref model etc:
+    # sync_ref_model=True, ref_model_sync_steps=512, ref_model_mixup_alpha=0.6,
+)
+
+trainer = DPOTrainer(
+    model=model,                  # single policy model
+    args=cfg,                     # DPOConfig, not TrainingArguments
+    processing_class=tokenizer,   # replaces `tokenizer=` in the new API
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,    # optional
+    # callbacks= [...]            # you can still pass your callback list here
 )
 
 #######################################
