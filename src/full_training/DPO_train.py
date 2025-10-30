@@ -168,6 +168,7 @@ cfg = DPOConfig(
     logging_steps=1,
     save_steps=FULL_DUMP_EVERY,
     save_total_limit=5,
+    remove_unused_columns=False,
     # DPO knobs:
     beta=0.1,
     max_length=1024,
