@@ -10,6 +10,7 @@ from transformers import (
     TrainerCallback,
 )
 from trl import DPOTrainer, DPOConfig
+from trl.trainer.utils import DPODataCollatorWithPadding
 
 #######################################
 # 0. Config
@@ -33,24 +34,19 @@ WANDB_RUN_NAME = "gemma3-270m-it_lightR1_subset"
 raw_ds = load_dataset("qihoo360/Light-R1-DPOData", split="train")
 
 def msg_to_text(x):
-    # x can be str, dict {"from","value"}, or list[dict]
     if isinstance(x, str):
         return x
     if isinstance(x, dict):
         return x.get("value", "")
     if isinstance(x, list):
-        # concatenate message values; if you want only user/system in prompt,
-        # filter by role for prompt later.
         return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
     return str(x)
 
 def normalize_record(rec):
-    # Light-R1 examples often store conversation turns; we derive plain strings
     prompt_raw   = rec.get("prompt", "")
     chosen_raw   = rec.get("chosen", "")
     rejected_raw = rec.get("rejected", "")
 
-    # If prompt is a list of turns, prefer only non-assistant content for the prompt string.
     if isinstance(prompt_raw, list):
         prompt_text = "\n".join(
             m.get("value","") for m in prompt_raw
@@ -62,17 +58,9 @@ def normalize_record(rec):
     chosen_text   = msg_to_text(chosen_raw).strip()
     rejected_text = msg_to_text(rejected_raw).strip()
 
-    return {
-        "prompt": prompt_text,
-        "chosen": chosen_text,
-        "rejected": rejected_text,
-    }
+    return {"prompt": prompt_text, "chosen": chosen_text, "rejected": rejected_text}
 
-# Keep only the normalized columns so TRL doesn't try to "maybe_extract_prompt"
-norm_ds = raw_ds.map(
-    normalize_record,
-    remove_columns=raw_ds.column_names
-)
+raw_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
 
 # (Optional) take a subset to iterate quickly
 if SUBSET_SIZE is not None:
@@ -81,6 +69,12 @@ if SUBSET_SIZE is not None:
 train_dataset = norm_ds
 eval_dataset = None
 
+data_collator = DPODataCollatorWithPadding(
+    tokenizer=tokenizer,
+    max_length=1024,
+    max_prompt_length=512,
+    pad_to_multiple_of=8,   # optional, helps Tensor Cores
+)
 
 #######################################
 # 2. Load tokenizer
@@ -126,9 +120,6 @@ training_args = TrainingArguments(
 # 5. Create the DPOTrainer
 #######################################
 
-# IMPORTANT:
-# We pass (policy_model, ref_model) POSITIONALLY.
-
 cfg = DPOConfig(
     output_dir=OUTPUT_DIR,
     run_name=WANDB_RUN_NAME,
@@ -137,27 +128,23 @@ cfg = DPOConfig(
     gradient_accumulation_steps=8,
     learning_rate=5e-6,
     num_train_epochs=1,
-    bf16=True,
-    fp16=False,
+    bf16=True, fp16=False,
     logging_steps=1,
     save_steps=FULL_DUMP_EVERY,
     save_total_limit=5,
-
-    # DPO-specific knobs now belong here:
-    beta=0.1,                 # temperature / ref deviation
+    # DPO knobs:
+    beta=0.1,
     max_length=1024,
     max_prompt_length=512,
-    # (optional) sync ref model etc:
-    # sync_ref_model=True, ref_model_sync_steps=512, ref_model_mixup_alpha=0.6,
 )
 
 trainer = DPOTrainer(
-    model=model,                  # single policy model
-    args=cfg,                     # DPOConfig, not TrainingArguments
-    processing_class=tokenizer,   # replaces `tokenizer=` in the new API
+    model=model,
+    args=cfg,
+    processing_class=tokenizer,   # ok to keep; collator will do the heavy lifting
     train_dataset=train_dataset,
-    eval_dataset=eval_dataset,    # optional
-    # callbacks= [...]            # you can still pass your callback list here
+    eval_dataset=eval_dataset,
+    data_collator=data_collator,  # <<< THIS ensures int64 input_ids
 )
 
 #######################################
