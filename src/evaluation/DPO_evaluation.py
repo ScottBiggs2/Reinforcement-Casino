@@ -268,3 +268,4 @@ if __name__ == "__main__":
     main(args)
 
     # python src/evaluation/DPO_evaluation.py
+    # git push <remote-name> <local-branch-name>:<remote-branch-name>
