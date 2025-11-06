@@ -23,26 +23,31 @@ def find_and_aggregate_deltas(run_dir):
         print(f"No .pt files found in {step_dirs[0]}")
         return {}
 
-    param_names = [os.path.basename(f).replace('_', '.')[:-3] for f in first_step_files]
+    # Extract param names from filenames (which have dots replaced with underscores)
+    # The files are saved as: name.replace(".", "_") + ".pt"
+    # So we need to keep the underscore format for now
+    param_names_with_underscores = [os.path.basename(f)[:-3] for f in first_step_files]
 
     # Initialize aggregated_deltas with zero tensors
-    for param_name in param_names:
+    # Keep keys in underscore format to match the saved files
+    for param_name_underscore in param_names_with_underscores:
         try:
-            delta_tensor = torch.load(os.path.join(step_dirs[0], param_name.replace('.', '_') + ".pt"))
-            aggregated_deltas[param_name] = torch.zeros_like(delta_tensor)
+            file_path = os.path.join(step_dirs[0], param_name_underscore + ".pt")
+            delta_tensor = torch.load(file_path)
+            aggregated_deltas[param_name_underscore] = torch.zeros_like(delta_tensor)
         except Exception as e:
-            print(f"Could not load tensor for {param_name}: {e}")
+            print(f"Could not load tensor for {param_name_underscore}: {e}")
             continue
 
     # Aggregate deltas
     for step_dir in step_dirs:
-        for param_name in param_names:
-            file_path = os.path.join(step_dir, param_name.replace('.', '_') + ".pt")
+        for param_name_underscore in param_names_with_underscores:
+            file_path = os.path.join(step_dir, param_name_underscore + ".pt")
             if os.path.exists(file_path):
                 try:
                     delta_tensor = torch.load(file_path)
-                    if aggregated_deltas[param_name] is not None:
-                        aggregated_deltas[param_name] += delta_tensor.abs()
+                    if aggregated_deltas[param_name_underscore] is not None:
+                        aggregated_deltas[param_name_underscore] += delta_tensor.abs()
                 except Exception as e:
                     print(f"Could not load or aggregate tensor {file_path}: {e}")
                     continue
@@ -79,10 +84,16 @@ def create_masks(aggregated_deltas, top_k_percent):
 def save_masks(masks, output_file):
     """
     Saves the generated masks to a .pt file.
+    Note: Keys are kept in underscore format (matching the delta files).
     """
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    # Ensure the directory exists
+    output_dir = os.path.dirname(output_file)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
     torch.save(masks, output_file)
     print(f"Masks saved to {output_file}")
+    print(f"Mask keys are in underscore format (e.g., 'model_norm_weight')")
 
 def verify_deltas(run_dir):
     """
@@ -102,12 +113,13 @@ def verify_deltas(run_dir):
     if not first_step_files:
         print(f"Verification failed: No .pt files in {step_dirs[0]}")
         return False
+    
     for f in first_step_files:
-        param_name = os.path.basename(f).replace('_', '.')[:-3]
-        all_params.add(param_name)
+        param_name_underscore = os.path.basename(f)[:-3]
+        all_params.add(param_name_underscore)
         try:
             tensor = torch.load(f)
-            param_shapes[param_name] = tensor.shape
+            param_shapes[param_name_underscore] = tensor.shape
         except Exception as e:
             print(f"Verification failed: Error loading {f}: {e}")
             return False
@@ -117,15 +129,15 @@ def verify_deltas(run_dir):
         current_params = set()
         delta_files = glob.glob(os.path.join(step_dir, "*.pt"))
         for f in delta_files:
-            param_name = os.path.basename(f).replace('_', '.')[:-3]
-            current_params.add(param_name)
-            if param_name not in param_shapes:
-                print(f"Verification failed: New parameter {param_name} found in {step_dir}")
+            param_name_underscore = os.path.basename(f)[:-3]
+            current_params.add(param_name_underscore)
+            if param_name_underscore not in param_shapes:
+                print(f"Verification failed: New parameter {param_name_underscore} found in {step_dir}")
                 return False
             try:
                 tensor = torch.load(f)
-                if param_shapes[param_name] != tensor.shape:
-                    print(f"Verification failed: Shape mismatch for {param_name} in {step_dir}")
+                if param_shapes[param_name_underscore] != tensor.shape:
+                    print(f"Verification failed: Shape mismatch for {param_name_underscore} in {step_dir}")
                     return False
             except Exception as e:
                 print(f"Verification failed: Error loading {f}: {e}")
@@ -165,9 +177,9 @@ def verify_masks(mask_file, run_dir, top_k_percent):
 
     param_shapes = {}
     for f in first_step_files:
-        param_name = os.path.basename(f).replace('_', '.')[:-3]
+        param_name_underscore = os.path.basename(f)[:-3]
         tensor = torch.load(f)
-        param_shapes[param_name] = tensor.shape
+        param_shapes[param_name_underscore] = tensor.shape
 
     # Check shapes and sparsity
     total_params = 0
@@ -185,7 +197,6 @@ def verify_masks(mask_file, run_dir, top_k_percent):
         
         if total_elements > 0:
             sparsity = num_masked / total_elements * 100
-            print(f"Mask for {name}: sparsity = {sparsity:.2f}% (target ~{top_k_percent}%)")
             total_params += total_elements
             total_masked_params += num_masked
 
@@ -214,7 +225,7 @@ def main(args):
     save_masks(masks, output_file)
 
     # Verification of masks
-    verify_masks(output_file, run_dir, args.top_k_percent)
+    verify_masks(mask_file=output_file, run_dir=run_dir, top_k_percent=args.top_k_percent)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Find top-k% changing weights and create a mask.")
@@ -224,3 +235,5 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     main(args)
+    
+    #  python src/warm_start/mask_finder.py --run_name gemma_dpo_training --top_k_percent 10.0
