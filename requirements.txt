@@ -61,3 +61,4 @@ urllib3==2.5.0
 wandb==0.22.2
 xxhash==3.6.0
 yarl==1.22.0
+triton
