@@ -1,5 +1,16 @@
 # src/sandbox/Triton_DPO_train.py
 
+"""
+Notes & To-Dos:
+* Check that this actually works
+* Check that we aren't spamming torch.synchronize (bc it's slow af)
+* Add auto cuda mgmt, need to keep everything on GPU when possible. 
+* Look carefully into the optimizer(s) and how they are stepping. Maybe there's additional work to do there. 
+* get a script going to compare the evolution of the masked weights here vs the weights of the full run
+* Adapt all of the above to GRPO
+* Consider designing new loss objective with these sparse masks in mind? 
+"""
+
 import os
 import json
 import time
@@ -141,7 +152,12 @@ def triton_sparse_update(weights, gradient, mask, lr, block_size=32):
 # ============================================================================
 
 class SparseMaskManager:
-    """Manages loading and applying sparse masks to model parameters."""
+    """
+    Manages loading and applying sparse masks to model parameters.
+    
+    To-Do: 
+    * Add automatic CUDA to GPU/TPU support for Triton
+    """
     
     def __init__(self, mask_path, device='cuda'):
         """
