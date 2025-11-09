@@ -71,9 +71,9 @@ def sparse_adam_kernel(
     # Update biased second raw moment estimate
     v_new = beta2 * v + (1.0 - beta2) * g * g
     
-    # Compute bias correction
-    bias_correction1 = 1.0 - tl.math.pow(beta1, step)
-    bias_correction2 = 1.0 - tl.math.pow(beta2, step)
+    # Compute bias correction using exp(step * log(beta)) = beta^step
+    bias_correction1 = 1.0 - tl.exp(step * tl.log(beta1))
+    bias_correction2 = 1.0 - tl.exp(step * tl.log(beta2))
     
     # Compute bias-corrected moments
     m_hat = m_new / bias_correction1
@@ -150,9 +150,9 @@ def sparse_adam_coo_kernel(
     m_new = beta1 * m + (1.0 - beta1) * g
     v_new = beta2 * v + (1.0 - beta2) * g * g
     
-    # Bias correction
-    bias_correction1 = 1.0 - tl.math.pow(beta1, step)
-    bias_correction2 = 1.0 - tl.math.pow(beta2, step)
+    # Bias correction using exp(step * log(beta)) = beta^step
+    bias_correction1 = 1.0 - tl.exp(step * tl.log(beta1))
+    bias_correction2 = 1.0 - tl.exp(step * tl.log(beta2))
     
     m_hat = m_new / bias_correction1
     v_hat = v_new / bias_correction2
