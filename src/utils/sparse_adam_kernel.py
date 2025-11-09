@@ -179,9 +179,9 @@ class SparseAdam(torch.optim.Optimizer):
     """Sparse Adam/AdamW optimizer using Triton kernels."""
     
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, 
-                 weight_decay=0.0, adamw=False):
+                 weight_decay=0.0, adamw=False, use_coo=True):
         defaults = dict(lr=lr, betas=betas, eps=eps, 
-                       weight_decay=weight_decay, adamw=adamw)
+                       weight_decay=weight_decay, adamw=adamw, use_coo=use_coo)
         super().__init__(params, defaults)
     
     @torch.no_grad()
@@ -210,36 +210,60 @@ class SparseAdam(torch.optim.Optimizer):
                     state['exp_avg'] = torch.zeros_like(p)
                     state['exp_avg_sq'] = torch.zeros_like(p)
                     
-                    # Create mask for non-zero weights
-                    state['mask'] = (p != 0).float()
+                    if group['use_coo']:
+                        # Store indices of non-zero elements for COO format
+                        state['indices'] = torch.nonzero(p != 0, as_tuple=False).flatten()
+                    else:
+                        # Create mask for non-zero weights
+                        state['mask'] = (p != 0).float()
                 
                 state['step'] += 1
                 
                 exp_avg = state['exp_avg']
                 exp_avg_sq = state['exp_avg_sq']
-                mask = state['mask']
                 
                 # Flatten tensors for processing
                 p_flat = p.flatten()
                 grad_flat = grad.flatten()
                 exp_avg_flat = exp_avg.flatten()
                 exp_avg_sq_flat = exp_avg_sq.flatten()
-                mask_flat = mask.flatten()
                 
-                n_elements = p_flat.numel()
-                
-                # Launch kernel
-                BLOCK_SIZE = 1024
-                grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-                
-                sparse_adam_kernel[grid](
-                    p_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat, mask_flat,
-                    group['lr'], beta1, beta2, group['eps'],
-                    group['weight_decay'], float(state['step']),
-                    group['adamw'],
-                    n_elements,
-                    BLOCK_SIZE=BLOCK_SIZE,
-                )
+                if group['use_coo']:
+                    # True sparse optimization: only process non-zero elements
+                    indices = state['indices']
+                    nnz = indices.numel()
+                    
+                    if nnz == 0:
+                        continue
+                    
+                    # Launch kernel for non-zero elements only
+                    BLOCK_SIZE = 1024
+                    grid = lambda meta: (triton.cdiv(nnz, meta['BLOCK_SIZE']),)
+                    
+                    sparse_adam_coo_kernel[grid](
+                        p_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat, indices,
+                        group['lr'], beta1, beta2, group['eps'],
+                        group['weight_decay'], float(state['step']),
+                        group['adamw'],
+                        nnz,
+                        BLOCK_SIZE=BLOCK_SIZE,
+                    )
+                else:
+                    # Masked sparse optimization: process all elements but skip updates
+                    mask_flat = state['mask'].flatten()
+                    n_elements = p_flat.numel()
+                    
+                    BLOCK_SIZE = 1024
+                    grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
+                    
+                    sparse_adam_kernel[grid](
+                        p_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat, mask_flat,
+                        group['lr'], beta1, beta2, group['eps'],
+                        group['weight_decay'], float(state['step']),
+                        group['adamw'],
+                        n_elements,
+                        BLOCK_SIZE=BLOCK_SIZE,
+                    )
         
         return loss
 
@@ -257,6 +281,7 @@ if __name__ == "__main__":
         {'size': (1000, 1000), 'sparsity': 0.9, 'name': '1M params, 90% sparse'},
         {'size': (2000, 2000), 'sparsity': 0.95, 'name': '4M params, 95% sparse'},
         {'size': (4000, 4000), 'sparsity': 0.99, 'name': '16M params, 99% sparse'},
+        {'size': (4000, 4000), 'sparsity': 0.9, 'name': '16M params, 90% sparse'},
         {'size': (4000, 4000), 'sparsity': 0.8, 'name': '16M params, 80% sparse'},
         {'size': (4000, 4000), 'sparsity': 0.7, 'name': '16M params, 70% sparse'},
     ]
@@ -283,48 +308,71 @@ if __name__ == "__main__":
         print(f"Non-zeros: {nnz:,} ({100 * (1-actual_sparsity):.2f}%)")
         print(f"Actual sparsity: {100 * actual_sparsity:.2f}%")
         
-        # Clone for comparison
-        weights_triton = weights.clone().requires_grad_(True)
+        # Clone for comparison (3 versions)
+        weights_triton_coo = weights.clone().requires_grad_(True)
+        weights_triton_mask = weights.clone().requires_grad_(True)
         weights_torch = weights.clone().requires_grad_(True)
         
         # Create optimizers
-        opt_triton = SparseAdam([weights_triton], lr=0.001, adamw=True)
+        opt_triton_coo = SparseAdam([weights_triton_coo], lr=0.001, adamw=True, use_coo=True)
+        opt_triton_mask = SparseAdam([weights_triton_mask], lr=0.001, adamw=True, use_coo=False)
         opt_torch = torch.optim.AdamW([weights_torch], lr=0.001)
         
         # Warmup runs
         print("\nWarming up...")
         for _ in range(10):
-            # Triton warmup
-            loss_triton = (weights_triton ** 2).sum()
-            loss_triton.backward()
-            opt_triton.step()
-            opt_triton.zero_grad()
+            # Triton COO warmup
+            loss = (weights_triton_coo ** 2).sum()
+            loss.backward()
+            opt_triton_coo.step()
+            opt_triton_coo.zero_grad()
+            
+            # Triton mask warmup
+            loss = (weights_triton_mask ** 2).sum()
+            loss.backward()
+            opt_triton_mask.step()
+            opt_triton_mask.zero_grad()
             
             # PyTorch warmup
-            loss_torch = (weights_torch ** 2).sum()
-            loss_torch.backward()
+            loss = (weights_torch ** 2).sum()
+            loss.backward()
             opt_torch.step()
             opt_torch.zero_grad()
         
         torch.cuda.synchronize()
         
-        # Benchmark Triton
-        print("\nBenchmarking Triton kernel...")
+        # Benchmark iterations
         n_iters = 100
         
+        # Benchmark Triton COO (True sparse)
+        print("\nBenchmarking Triton COO kernel (true sparse)...")
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         
         start_event.record()
         for _ in range(n_iters):
-            loss_triton = (weights_triton ** 2).sum()
-            loss_triton.backward()
-            opt_triton.step()
-            opt_triton.zero_grad()
+            loss = (weights_triton_coo ** 2).sum()
+            loss.backward()
+            opt_triton_coo.step()
+            opt_triton_coo.zero_grad()
         end_event.record()
-        
         torch.cuda.synchronize()
-        triton_time = start_event.elapsed_time(end_event) / n_iters
+        triton_coo_time = start_event.elapsed_time(end_event) / n_iters
+        
+        # Benchmark Triton Mask
+        print("Benchmarking Triton mask kernel (masked sparse)...")
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        
+        start_event.record()
+        for _ in range(n_iters):
+            loss = (weights_triton_mask ** 2).sum()
+            loss.backward()
+            opt_triton_mask.step()
+            opt_triton_mask.zero_grad()
+        end_event.record()
+        torch.cuda.synchronize()
+        triton_mask_time = start_event.elapsed_time(end_event) / n_iters
         
         # Benchmark PyTorch
         print("Benchmarking PyTorch optimizer...")
@@ -334,8 +382,8 @@ if __name__ == "__main__":
         
         start_event.record()
         for _ in range(n_iters):
-            loss_torch = (weights_torch ** 2).sum()
-            loss_torch.backward()
+            loss = (weights_torch ** 2).sum()
+            loss.backward()
             opt_torch.step()
             opt_torch.zero_grad()
         end_event.record()
@@ -343,31 +391,35 @@ if __name__ == "__main__":
         torch.cuda.synchronize()
         torch_time = start_event.elapsed_time(end_event) / n_iters
         
-        # Calculate speedup
-        speedup = torch_time / triton_time
+        # Calculate speedups
+        speedup_coo = torch_time / triton_coo_time
+        speedup_mask = torch_time / triton_mask_time
         
         # Print results
         print(f"\n{'Results':^70}")
         print("-" * 70)
-        print(f"{'Optimizer':<20} {'Time (ms)':<15} {'Speedup':<15}")
+        print(f"{'Optimizer':<30} {'Time (ms)':<15} {'Speedup':<15}")
         print("-" * 70)
-        print(f"{'PyTorch AdamW':<20} {torch_time:>10.4f} ms   {'1.00x':<15}")
-        print(f"{'Triton Sparse Adam':<20} {triton_time:>10.4f} ms   {speedup:.2f}x")
+        print(f"{'PyTorch AdamW (dense)':<30} {torch_time:>10.4f} ms   {'1.00x':<15}")
+        print(f"{'Triton Masked (fake sparse)':<30} {triton_mask_time:>10.4f} ms   {speedup_mask:.2f}x")
+        print(f"{'Triton COO (true sparse)':<30} {triton_coo_time:>10.4f} ms   {speedup_coo:.2f}x")
         print("-" * 70)
         
-        if speedup > 1:
-            print(f"✓ Triton is {speedup:.2f}x FASTER")
+        # Highlight the best
+        if speedup_coo > speedup_mask:
+            print(f"✓ True sparse (COO) is {speedup_coo:.2f}x faster than PyTorch")
+            print(f"  ({speedup_coo/speedup_mask:.2f}x faster than masked approach)")
         else:
-            print(f"✗ Triton is {1/speedup:.2f}x SLOWER")
+            print(f"Note: Masked approach is {speedup_mask/speedup_coo:.2f}x faster than COO")
+            print(f"  (COO overhead may dominate at low sparsity)")
         
         # Verify correctness - compare only the masked (non-zero) weights
-        # PyTorch updates all weights, but Triton only updates masked ones
         initial_mask = (mask != 0)
-        masked_triton = weights_triton[initial_mask]
+        masked_triton_coo = weights_triton_coo[initial_mask]
         masked_torch = weights_torch[initial_mask]
         
-        masked_diff_max = (masked_triton - masked_torch).abs().max().item()
-        masked_diff_mean = (masked_triton - masked_torch).abs().mean().item()
+        masked_diff_max = (masked_triton_coo - masked_torch).abs().max().item()
+        masked_diff_mean = (masked_triton_coo - masked_torch).abs().mean().item()
         relative_error = (masked_diff_max / masked_torch.abs().max().item()) * 100
         
         print(f"\nAccuracy check (masked weights only):")
@@ -384,14 +436,16 @@ if __name__ == "__main__":
             print(f"✗ Results differ significantly!")
         
         # Count non-zero weights in each
-        triton_nnz = (weights_triton != 0).sum().item()
+        triton_coo_nnz = (weights_triton_coo != 0).sum().item()
+        triton_mask_nnz = (weights_triton_mask != 0).sum().item()
         torch_nnz = (weights_torch != 0).sum().item()
-        print(f"\nNon-zero count:")
-        print(f"  Triton: {triton_nnz:,} (maintains sparsity)")
+        print(f"\nNon-zero count after optimization:")
+        print(f"  Triton COO: {triton_coo_nnz:,} (maintains sparsity)")
+        print(f"  Triton Mask: {triton_mask_nnz:,} (maintains sparsity)")
         print(f"  PyTorch: {torch_nnz:,} (updates all elements)")
         
-        if triton_nnz == nnz:
-            print("✓ Triton preserved sparsity structure")
+        if triton_coo_nnz == nnz and triton_mask_nnz == nnz:
+            print("✓ Both Triton kernels preserved sparsity structure")
     
     print(f"\n{'=' * 70}")
     print("Benchmark complete!")
