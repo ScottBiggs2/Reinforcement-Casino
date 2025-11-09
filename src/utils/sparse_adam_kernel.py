@@ -257,6 +257,8 @@ if __name__ == "__main__":
         {'size': (1000, 1000), 'sparsity': 0.9, 'name': '1M params, 90% sparse'},
         {'size': (2000, 2000), 'sparsity': 0.95, 'name': '4M params, 95% sparse'},
         {'size': (4000, 4000), 'sparsity': 0.99, 'name': '16M params, 99% sparse'},
+        {'size': (4000, 4000), 'sparsity': 0.8, 'name': '16M params, 80% sparse'},
+        {'size': (4000, 4000), 'sparsity': 0.7, 'name': '16M params, 70% sparse'},
     ]
     
     for config in configs:
