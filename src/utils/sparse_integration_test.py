@@ -407,7 +407,7 @@ def test_sparse_pipeline():
         beta2 = 0.999
         eps = 1e-8
         weight_decay = 0.01
-        n_steps = 5
+        n_steps = 1000
         
         print(f"\n{'Training for ' + str(n_steps) + ' steps':^80}")
         print("-" * 80)
