@@ -4,6 +4,106 @@ import triton.language as tl
 
 
 @triton.jit
+def block_sparse_adam_2d_kernel(
+    # Pointers to tensors
+    weights_ptr,
+    grads_ptr,
+    exp_avg_ptr,
+    exp_avg_sq_ptr,
+    mask_ptr,  # Binary mask (1 for non-zero blocks, 0 for zero blocks)
+    # Matrix dimensions
+    M, N,
+    stride_wm, stride_wn,
+    stride_gm, stride_gn,
+    stride_em, stride_en,
+    stride_vm, stride_vn,
+    stride_mm, stride_mn,
+    # Optimization parameters
+    lr,
+    beta1,
+    beta2,
+    eps,
+    weight_decay,
+    bias_correction1,
+    bias_correction2,
+    use_adamw: tl.constexpr,
+    use_sparse_storage: tl.constexpr,
+    # Block info
+    BLOCK_SIZE: tl.constexpr,
+):
+    """
+    2D Block-sparse Adam kernel compatible with sparse backward pass.
+    
+    Each program processes a BLOCK_SIZE × BLOCK_SIZE block.
+    Only processes blocks where mask indicates non-zero elements.
+    """
+    pid = tl.program_id(0)
+    
+    # Calculate block position
+    num_blocks_n = tl.cdiv(N, BLOCK_SIZE)
+    block_row = pid // num_blocks_n
+    block_col = pid % num_blocks_n
+    
+    # Calculate starting position
+    row_start = block_row * BLOCK_SIZE
+    col_start = block_col * BLOCK_SIZE
+    
+    # Create offset ranges
+    row_offsets = row_start + tl.arange(0, BLOCK_SIZE)
+    col_offsets = col_start + tl.arange(0, BLOCK_SIZE)
+    row_offsets = row_offsets[:, None]
+    col_offsets = col_offsets[None, :]
+    
+    # Create mask for valid elements
+    mask_valid = (row_offsets < M) & (col_offsets < N)
+    
+    # Check if this block should be processed (check center element of block)
+    center_row = row_start + BLOCK_SIZE // 2
+    center_col = col_start + BLOCK_SIZE // 2
+    if center_row < M and center_col < N:
+        block_mask = tl.load(mask_ptr + center_row * stride_mm + center_col * stride_mn)
+        if block_mask == 0.0:
+            return  # Skip this block entirely
+    
+    # Calculate memory offsets
+    w_offsets = row_offsets * stride_wm + col_offsets * stride_wn
+    g_offsets = row_offsets * stride_gm + col_offsets * stride_gn
+    e_offsets = row_offsets * stride_em + col_offsets * stride_en
+    v_offsets = row_offsets * stride_vm + col_offsets * stride_vn
+    
+    # Load data
+    w = tl.load(weights_ptr + w_offsets, mask=mask_valid, other=0.0)
+    g = tl.load(grads_ptr + g_offsets, mask=mask_valid, other=0.0)
+    m = tl.load(exp_avg_ptr + e_offsets, mask=mask_valid, other=0.0)
+    v = tl.load(exp_avg_sq_ptr + v_offsets, mask=mask_valid, other=0.0)
+    
+    # Update moments
+    m_new = beta1 * m + (1.0 - beta1) * g
+    v_new = beta2 * v + (1.0 - beta2) * g * g
+    
+    # Bias-corrected moments
+    m_hat = m_new / bias_correction1
+    v_hat = v_new / bias_correction2
+    
+    # Compute update
+    denom = tl.sqrt(v_hat) + eps
+    update = m_hat / denom
+    
+    # Apply weight decay
+    if use_adamw:
+        w_new = w * (1.0 - lr * weight_decay) - lr * update
+    else:
+        w_new = w - lr * update
+        if weight_decay != 0.0:
+            w_new = w_new - lr * weight_decay * w
+    
+    # Store updates
+    tl.store(weights_ptr + w_offsets, w_new, mask=mask_valid)
+    tl.store(exp_avg_ptr + e_offsets, m_new, mask=mask_valid)
+    tl.store(exp_avg_sq_ptr + v_offsets, v_new, mask=mask_valid)
+
+
+@triton.jit
 def block_sparse_adam_kernel(
     # Pointers to tensors
     weights_ptr,
@@ -291,6 +391,90 @@ class BlockSparseAdam(torch.optim.Optimizer):
         return stats
 
 
+def create_block_sparse_tensor(shape, block_size, block_sparsity, device='cuda'):
+    """
+    Create a block-sparse tensor.
+    
+    Args:
+        shape: Tensor shape
+        block_size: Size of each block
+        block_sparsity: Fraction of blocks to zero out (0.7 = 70% of blocks are zero)
+        device: Device to create tensor on
+    
+    Returns:
+        Block-sparse tensor
+    """
+    tensor = torch.randn(shape, device=device)
+    tensor_flat = tensor.flatten()
+    total_elements = tensor_flat.numel()
+    num_blocks = (total_elements + block_size - 1) // block_size
+    
+    # Randomly select blocks to zero out
+    num_zero_blocks = int(num_blocks * block_sparsity)
+    zero_block_indices = torch.randperm(num_blocks)[:num_zero_blocks]
+    
+    # Zero out selected blocks
+    for block_idx in zero_block_indices:
+        block_start = block_idx * block_size
+        block_end = min(block_start + block_size, total_elements)
+        tensor_flat[block_start:block_end] = 0
+    
+    return tensor.reshape(shape)
+
+
+def triton_sparse_adam_update(weights, gradient, mask, exp_avg, exp_avg_sq, 
+                               lr, beta1, beta2, eps, weight_decay, step, 
+                               adamw=True, block_size=32):
+    """
+    Apply sparse Adam/AdamW update using Triton kernel.
+    
+    Compatible with the sparse backward pass implementation.
+    
+    Args:
+        weights: Parameter tensor (M x N)
+        gradient: Gradient tensor (M x N) 
+        mask: Binary mask tensor (M x N) indicating non-zero blocks
+        exp_avg: First moment estimate (M x N)
+        exp_avg_sq: Second moment estimate (M x N)
+        lr: Learning rate
+        beta1, beta2: Adam betas
+        eps: Epsilon for numerical stability
+        weight_decay: Weight decay coefficient
+        step: Current optimization step
+        adamw: Whether to use AdamW or Adam
+        block_size: Block size for Triton kernel
+        
+    Returns:
+        None (updates weights, exp_avg, exp_avg_sq in-place)
+    """
+    M, N = weights.shape
+    
+    # Precompute bias corrections
+    bias_correction1 = 1.0 - beta1 ** step
+    bias_correction2 = 1.0 - beta2 ** step
+    
+    # Calculate grid size
+    num_blocks_m = triton.cdiv(M, block_size)
+    num_blocks_n = triton.cdiv(N, block_size)
+    grid = (num_blocks_m * num_blocks_n,)
+    
+    # Launch kernel
+    block_sparse_adam_2d_kernel[grid](
+        weights, gradient, exp_avg, exp_avg_sq, mask,
+        M, N,
+        weights.stride(0), weights.stride(1),
+        gradient.stride(0), gradient.stride(1),
+        exp_avg.stride(0), exp_avg.stride(1),
+        exp_avg_sq.stride(0), exp_avg_sq.stride(1),
+        mask.stride(0), mask.stride(1),
+        lr, beta1, beta2, eps, weight_decay,
+        bias_correction1, bias_correction2,
+        adamw,
+        False,  # use_sparse_storage (not used in this version)
+        BLOCK_SIZE=block_size,
+    )
+
+
 # Utility function to create block-sparse tensors
 def create_block_sparse_tensor(shape, block_size, block_sparsity, device='cuda'):
     """
@@ -498,28 +682,3 @@ if __name__ == "__main__":
             print("✓ Excellent agreement")
     
     print(f"\n{'=' * 80}")
-    print("Summary: Block-Sparse Optimization with GPU-Accelerated Sparse Storage")
-    print("=" * 80)
-    print("\nKey Achievement: Both memory AND compute savings at 70-90% sparsity!")
-    print("\nHow it works:")
-    print("  • Divides weights into blocks, skips zero blocks")
-    print("  • Processes contiguous dense blocks (excellent memory coalescing)")
-    print("  • Both storage modes use GPU Triton kernels (no Python loops!)")
-    print("\nStorage modes (both fast on GPU!):")
-    print("  • sparse: Only stores optimizer states for active blocks")
-    print("    → Memory: 2-10x savings")
-    print("    → Compute: 1.5-3x speedup")
-    print("  • dense: Stores optimizer states for all elements")
-    print("    → Memory: Same as PyTorch")
-    print("    → Compute: 1.5-3x speedup (slightly faster than sparse)")
-    print("\nTypical results at 70-90% block sparsity:")
-    print("  • Sparse mode: 1.5-2.5x speedup + 3-10x memory savings")
-    print("  • Dense mode: 1.5-3x speedup + no memory savings")
-    print("\nBlock size recommendations:")
-    print("  • 70-80% sparsity: Use 256-512 (fewer kernel launches)")
-    print("  • 85-95% sparsity: Use 128-256 (balanced)")
-    print("\nResult: Your research partner's vision achieved!")
-    print("  ✓ 'Mask out 90% of optimizer states' → Memory savings")
-    print("  ✓ 'Save a lot of compute' → Compute speedup at 70-90% sparsity")
-    print("  ✓ Block structure enables both benefits simultaneously")
-    print("=" * 80)
