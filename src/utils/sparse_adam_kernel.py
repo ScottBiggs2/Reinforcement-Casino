@@ -118,16 +118,20 @@ class BlockSparseAdam(torch.optim.Optimizer):
     """
     
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-             weight_decay=0.0, adamw=False, block_size=128, storage='sparse'):
+                 weight_decay=0.0, adamw=False, block_size=128, storage='sparse'):
         """
         Args:
             block_size: Size of each block (64, 128, 256, or 512 recommended)
+            storage: 'sparse' (memory efficient) or 'dense' (same memory as PyTorch)
         """
         if block_size not in [32, 64, 128, 256, 512]:
             print(f"Warning: block_size={block_size} may not be optimal. Recommended: 64, 128, 256, or 512")
         
+        if storage not in ['sparse', 'dense']:
+            raise ValueError(f"storage must be 'sparse' or 'dense', got {storage}")
+        
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
-                       adamw=adamw, block_size=block_size)
+                       adamw=adamw, block_size=block_size, storage=storage)
         super().__init__(params, defaults)
     
     @torch.no_grad()
