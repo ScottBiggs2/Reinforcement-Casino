@@ -340,11 +340,7 @@ if __name__ == "__main__":
         opt_triton_mask = SparseAdam([weights_triton_mask], lr=0.001, adamw=True, use_coo=False)
         opt_torch = torch.optim.AdamW([weights_torch], lr=0.001)
         
-        # Check which method was auto-selected
-        auto_method = opt_triton_auto.state[weights_triton_auto]['method']
-        print(f"Auto-selected method: {auto_method}")
-        
-        # Warmup runs
+        # Warmup runs (also initializes the state)
         print("\nWarming up...")
         for _ in range(10):
             for opt, w in [(opt_triton_auto, weights_triton_auto),
@@ -357,6 +353,10 @@ if __name__ == "__main__":
                 opt.zero_grad()
         
         torch.cuda.synchronize()
+        
+        # Check which method was auto-selected (state is now initialized)
+        auto_method = opt_triton_auto.state[weights_triton_auto]['method']
+        print(f"Auto-selected method: {auto_method}")
         
         # Benchmark iterations
         n_iters = 100
