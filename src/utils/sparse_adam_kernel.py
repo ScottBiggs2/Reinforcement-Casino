@@ -118,7 +118,7 @@ class BlockSparseAdam(torch.optim.Optimizer):
     """
     
     def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8,
-                 weight_decay=0.0, adamw=False, block_size=128):
+             weight_decay=0.0, adamw=False, block_size=128, storage='sparse'):
         """
         Args:
             block_size: Size of each block (64, 128, 256, or 512 recommended)
