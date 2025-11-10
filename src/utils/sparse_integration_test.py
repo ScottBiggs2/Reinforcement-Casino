@@ -351,7 +351,7 @@ def apply_sparse_backward_and_adam(weights, gradient, mask, exp_avg, exp_avg_sq,
 # ============================================================================
 
 def test_sparse_pipeline():
-    """Test the complete sparse training pipeline."""
+    """Test the complete sparse training pipeline with detailed profiling."""
     
     print("=" * 80)
     print("Testing: Normal Backward+AdamW vs Sparse Backward+AdamW")
@@ -359,9 +359,7 @@ def test_sparse_pipeline():
     
     # Configuration
     configs = [
-        {'M': 1024, 'N': 1024, 'block_size': 32, 'sparsity': 0.7, 'name': '1M params, 70% sparse, BS=32'},
         {'M': 1024, 'N': 1024, 'block_size': 32, 'sparsity': 0.9, 'name': '1M params, 90% sparse, BS=32'},
-        {'M': 2048, 'N': 2048, 'block_size': 64, 'sparsity': 0.8, 'name': '4M params, 80% sparse, BS=64'},
     ]
     
     for config in configs:
@@ -407,46 +405,158 @@ def test_sparse_pipeline():
         beta2 = 0.999
         eps = 1e-8
         weight_decay = 0.01
-        n_steps = 1000
+        n_steps = 100
         
-        print(f"\n{'Training for ' + str(n_steps) + ' steps':^80}")
+        print(f"\n{'Detailed Profiling':^80}")
         print("-" * 80)
         
         # Warmup
-        print("Warming up...")
-        for step in range(1, 4):
-            # Sparse pipeline warmup
+        for step in range(1, 11):
             grad, _ = dummy_forward_backward(weights_sparse, mask, target)
             apply_sparse_backward_and_adam(weights_sparse, grad, mask, 
                                            exp_avg_sparse, exp_avg_sq_sparse,
                                            lr, beta1, beta2, eps, weight_decay, 
                                            step, adamw=True, block_size=block_size)
             
-            # Normal pipeline warmup
             _, _ = dummy_forward_backward(weights_normal, mask, target)
             optimizer_normal.step()
             optimizer_normal.zero_grad()
         
         torch.cuda.synchronize()
         
-        # Benchmark SPARSE pipeline (Triton backward + Triton Adam)
-        print("Benchmarking Triton sparse backward + Triton sparse Adam...")
+        # Profile SPARSE pipeline components
+        print("\nProfiling SPARSE pipeline components...")
+        
+        # 1. Just backward pass
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(n_steps):
+            grad, _ = dummy_forward_backward(weights_sparse, mask, target)
+        end.record()
+        torch.cuda.synchronize()
+        sparse_backward_time = start.elapsed_time(end) / n_steps
         
+        # 2. Just gradient masking (PyTorch)
+        grad, _ = dummy_forward_backward(weights_sparse, mask, target)
+        start.record()
+        for _ in range(n_steps):
+            masked = grad * mask
+        end.record()
+        torch.cuda.synchronize()
+        pytorch_mask_time = start.elapsed_time(end) / n_steps
+        
+        # 3. Just gradient masking (Triton)
+        start.record()
+        for _ in range(n_steps):
+            masked = triton_sparse_backward(grad, mask, block_size=block_size)
+        end.record()
+        torch.cuda.synchronize()
+        triton_mask_time = start.elapsed_time(end) / n_steps
+        
+        # 4. Just sparse Adam update
+        masked_grad = grad * mask
         start.record()
         for step in range(1, n_steps + 1):
-            grad, loss = dummy_forward_backward(weights_sparse, mask, target)
+            sparse_adam_update(weights_sparse, masked_grad, mask, exp_avg_sparse, exp_avg_sq_sparse,
+                             lr, beta1, beta2, eps, weight_decay, step, adamw=True, block_size=block_size)
+        end.record()
+        torch.cuda.synchronize()
+        sparse_adam_time = start.elapsed_time(end) / n_steps
+        
+        print(f"  Backward pass:              {sparse_backward_time:>8.4f} ms")
+        print(f"  Gradient masking (PyTorch): {pytorch_mask_time:>8.4f} ms")
+        print(f"  Gradient masking (Triton):  {triton_mask_time:>8.4f} ms")
+        print(f"  Sparse Adam update:         {sparse_adam_time:>8.4f} ms")
+        print(f"  TOTAL (estimated):          {sparse_backward_time + pytorch_mask_time + sparse_adam_time:>8.4f} ms")
+        
+        # Profile NORMAL pipeline components
+        print("\nProfiling NORMAL pipeline components...")
+        
+        # 1. Just backward pass
+        start.record()
+        for _ in range(n_steps):
+            grad, _ = dummy_forward_backward(weights_normal, mask, target)
+        end.record()
+        torch.cuda.synchronize()
+        normal_backward_time = start.elapsed_time(end) / n_steps
+        
+        # 2. Just PyTorch AdamW update
+        weights_normal.grad = grad
+        start.record()
+        for _ in range(n_steps):
+            optimizer_normal.step()
+            optimizer_normal.zero_grad()
+        end.record()
+        torch.cuda.synchronize()
+        pytorch_adam_time = start.elapsed_time(end) / n_steps
+        
+        print(f"  Backward pass:              {normal_backward_time:>8.4f} ms")
+        print(f"  PyTorch AdamW update:       {pytorch_adam_time:>8.4f} ms")
+        print(f"  TOTAL (estimated):          {normal_backward_time + pytorch_adam_time:>8.4f} ms")
+        
+        print(f"\n{'Component Comparison':^80}")
+        print("-" * 80)
+        print(f"Gradient masking: PyTorch {pytorch_mask_time:.4f} ms vs Triton {triton_mask_time:.4f} ms")
+        print(f"  → Triton is {pytorch_mask_time/triton_mask_time:.2f}x vs PyTorch masking")
+        print(f"Optimizer: PyTorch AdamW {pytorch_adam_time:.4f} ms vs Sparse Adam {sparse_adam_time:.4f} ms")
+        print(f"  → Sparse Adam is {pytorch_adam_time/sparse_adam_time:.2f}x vs PyTorch AdamW")
+        
+        # Full pipeline benchmark
+        print(f"\n{'Full Pipeline Benchmark':^80}")
+        print("-" * 80)
+        
+        # Reset weights
+        weights_sparse = initial_weights.clone().requires_grad_(True)
+        weights_normal = initial_weights.clone().requires_grad_(True)
+        exp_avg_sparse = torch.zeros_like(weights_sparse)
+        exp_avg_sq_sparse = torch.zeros_like(weights_sparse)
+        optimizer_normal = torch.optim.AdamW([weights_normal], lr=0.001, weight_decay=0.01)
+        
+        # Sparse pipeline
+        start.record()
+        for step in range(1, n_steps + 1):
+            grad, _ = dummy_forward_backward(weights_sparse, mask, target)
             apply_sparse_backward_and_adam(weights_sparse, grad, mask,
                                            exp_avg_sparse, exp_avg_sq_sparse,
                                            lr, beta1, beta2, eps, weight_decay,
                                            step, adamw=True, block_size=block_size)
         end.record()
         torch.cuda.synchronize()
-        sparse_time = start.elapsed_time(end) / n_steps
+        sparse_total_time = start.elapsed_time(end) / n_steps
         
-        # Benchmark NORMAL pipeline (normal backward + normal AdamW)
-        print("Benchmarking PyTorch backward + PyTorch AdamW...")
+        # Normal pipeline
+        start.record()
+        for step in range(1, n_steps + 1):
+            _, _ = dummy_forward_backward(weights_normal, mask, target)
+            optimizer_normal.step()
+            optimizer_normal.zero_grad()
+        end.record()
+        torch.cuda.synchronize()
+        normal_total_time = start.elapsed_time(end) / n_steps
+        
+        speedup = normal_total_time / sparse_total_time
+        
+        print(f"PyTorch pipeline:           {normal_total_time:>8.4f} ms")
+        print(f"Sparse Triton pipeline:     {sparse_total_time:>8.4f} ms")
+        print(f"Speedup:                    {speedup:>8.2f}x")
+        print("-" * 80)
+        
+        if speedup < 1.0:
+            print(f"\n⚠ WARNING: Sparse pipeline is SLOWER by {1/speedup:.2f}x")
+            print("\nPossible reasons:")
+            print("  1. Kernel launch overhead is too high")
+            print("  2. Sparsity level ({:.0f}%) not high enough".format(100 * actual_sparsity))
+            print("  3. Block size ({}) not optimal".format(block_size))
+            print("  4. PyTorch operators are already highly optimized")
+            print("\nTry:")
+            print("  • Increase sparsity to 95%+")
+            print("  • Increase block size to 64 or 128")
+            print("  • Use sparse storage mode for memory savings")
+        elif speedup < 1.1:
+            print(f"\n~ Minimal speedup: {speedup:.2f}x (overhead ~= savings)")
+        else:
+            print(f"\n✓ Sparse pipeline is {speedup:.2f}x faster!")
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         
