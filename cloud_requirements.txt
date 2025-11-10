@@ -1,0 +1,26 @@
+# requirements_py39_working.txt
+
+# Core ML
+torch==2.0.1
+triton==2.0.0
+transformers==4.40.0  # Supports tokenizers 0.19.x
+datasets==2.14.6
+trl==0.7.11
+accelerate==0.24.1
+
+# HuggingFace
+huggingface-hub==0.21.0
+tokenizers==0.19.1
+safetensors==0.4.1
+
+# Data
+numpy==1.24.4
+pandas==2.0.3
+pyarrow==14.0.1
+
+# Utils
+wandb==0.16.0
+pydantic>=2.5.0
+tqdm>=4.66.0
+PyYAML>=6.0
+requests>=2.31.0
