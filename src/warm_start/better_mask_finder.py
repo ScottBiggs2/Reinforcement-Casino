@@ -258,11 +258,17 @@ def save_masks(masks, output_file, metadata=None):
     """Saves masks with optional metadata."""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     
-    save_dict = {"masks": masks}
-    if metadata:
-        save_dict["metadata"] = metadata
+    # Save in the format expected by Triton_DPO_train.py
+    # Just the masks dict directly (not wrapped in a dict with 'masks' key)
+    torch.save(masks, output_file)
     
-    torch.save(save_dict, output_file)
+    # Also save metadata separately if provided
+    if metadata:
+        metadata_file = output_file.replace('.pt', '_metadata.json')
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Metadata saved to: {metadata_file}")
+    
     print(f"\nMasks saved to: {output_file}")
     print(f"Total parameters: {sum(m.numel() for m in masks.values())}")
     print(f"Masked parameters: {sum(m.sum().item() for m in masks.values())}")
