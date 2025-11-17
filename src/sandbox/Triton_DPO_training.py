@@ -33,7 +33,9 @@ MODEL_NAME = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w5_step25.pt"
-CHECKPOINT_PATH = "checkpoints_gemma3_dpo"  # Path to your DPO checkpoint
+# Use the base model - we'll load it fresh and apply sparse training
+# If you have a specific checkpoint you want to use, update this path
+CHECKPOINT_PATH = "google/gemma-3-270m-it"  # Base model from HuggingFace
 BLOCK_SIZE = 32
 
 
