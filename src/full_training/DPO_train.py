@@ -19,22 +19,31 @@ from typing import List, Dict, Any
 #######################################
 
 MODEL_NAME = "google/gemma-3-270m-it"
-DATASET_NAME = "qihoo360/Light-R1-DPOData"  # preference dataset (prompt/chosen/rejected) :contentReference[oaicite:4]{index=4}
+DATASET_NAME = "qihoo360/Light-R1-DPOData"
 OUTPUT_DIR = "./checkpoints_gemma3_dpo"
 DELTA_LOG_DIR = "./delta_logs"
-FULL_DUMP_EVERY = 25
+
+# Flexible checkpoint schedule
+# Save every 5 steps for first 25 steps, then every 25 steps after
+CHECKPOINT_SCHEDULE = (
+    list(range(5, 26, 5)) +  # [5, 10, 15, 20, 25]
+    list(range(50, 101, 25))  # [50, 75, 100]
+)
+
 THRESHOLD = 1e-3
 NUM_STEPS = 100
 SUBSET_SIZE = None  # reduce for faster bring-up
 
 WANDB_PROJECT = "gemma3-dpo-subnetwork-emergence"
-WANDB_RUN_NAME = "gemma3-270m-it_lightR1_subset"
+WANDB_RUN_NAME = "gemma3-270m-it_lightR1_flexible_checkpoints"
+
+print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 
 #######################################
 # 1. Load dataset
 #######################################
 
-raw_ds = load_dataset("qihoo360/Light-R1-DPOData", split="train")
+raw_ds = load_dataset(DATASET_NAME, split="train")
 
 def msg_to_text(x):
     if isinstance(x, str):
@@ -133,10 +142,9 @@ def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     }
 
 #######################################
-# 3. Load policy model (trainable) + ref model (frozen)
+# 3. Load policy model (trainable)
 #######################################
 
-# policy model: this one will get updated
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16,
@@ -145,26 +153,7 @@ model = AutoModelForCausalLM.from_pretrained(
 model.config.use_cache = False  # Trainer compat
 
 #######################################
-# 4. TrainingArguments
-#######################################
-
-training_args = TrainingArguments(
-    output_dir=OUTPUT_DIR,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=8,
-    learning_rate=5e-6,
-    num_train_epochs=1,
-    bf16=True,
-    fp16=False,
-    logging_steps=1,
-    report_to=["wandb"],
-    run_name=WANDB_RUN_NAME,
-    save_steps=FULL_DUMP_EVERY,
-    save_total_limit=5,
-)
-
-#######################################
-# 5. Create the DPOTrainer
+# 4. DPOConfig
 #######################################
 
 cfg = DPOConfig(
@@ -176,10 +165,11 @@ cfg = DPOConfig(
     learning_rate=5e-6,
     max_steps=NUM_STEPS,
     num_train_epochs=1,
-    bf16=True, fp16=False,
+    bf16=True, 
+    fp16=False,
     logging_steps=1,
-    save_steps=FULL_DUMP_EVERY,
-    save_total_limit=5,
+    save_steps=999999,  # Disabled - we'll handle saving in callback
+    save_total_limit=None,
     remove_unused_columns=False,
     # DPO knobs:
     beta=0.1,
@@ -192,11 +182,11 @@ trainer = DPOTrainer(
     args=cfg,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    data_collator=dpo_collator_fn,  # <<< THIS ensures int64 input_ids
+    data_collator=dpo_collator_fn,
 )
 
 #######################################
-# 6. Snapshot initial params θ(0)
+# 5. Snapshot initial params θ(0)
 #######################################
 
 base_state = {}
@@ -208,20 +198,25 @@ os.makedirs(DELTA_LOG_DIR, exist_ok=True)
 torch.save(base_state, os.path.join(DELTA_LOG_DIR, "base_state.pt"))
 
 #######################################
-# 7. Callback: wandb stats + periodic full deltas
+# 6. Flexible Checkpoint Callback
 #######################################
 
-class DeltaTrackingCallback(TrainerCallback):
-    def __init__(self, base_state, delta_log_dir, full_dump_every, threshold):
+class FlexibleCheckpointCallback(TrainerCallback):
+    """
+    Callback that saves deltas on a flexible schedule and tracks statistics.
+    
+    Schedule: Every 5 steps for first 25 steps, then every 25 steps after.
+    """
+    
+    def __init__(self, base_state, delta_log_dir, checkpoint_schedule, threshold):
         self.base_state = base_state
         self.delta_log_dir = delta_log_dir
-        self.full_dump_every = full_dump_every
+        self.checkpoint_schedule = set(checkpoint_schedule)  # Use set for O(1) lookup
         self.threshold = threshold
         os.makedirs(self.delta_log_dir, exist_ok=True)
         self.wandb_initialized = False
 
     def on_train_begin(self, args, state, control, **kwargs):
-        # initialize wandb run manually for custom logging
         if not self.wandb_initialized:
             wandb.init(
                 project=WANDB_PROJECT,
@@ -233,6 +228,7 @@ class DeltaTrackingCallback(TrainerCallback):
                     "learning_rate": args.learning_rate,
                     "batch_size_per_device": args.per_device_train_batch_size,
                     "grad_accum": args.gradient_accumulation_steps,
+                    "checkpoint_schedule": sorted(list(self.checkpoint_schedule)),
                 },
             )
             self.wandb_initialized = True
@@ -257,16 +253,16 @@ class DeltaTrackingCallback(TrainerCallback):
                     "frac_big_from_init": frac_big,
                 }
 
-                # collect full deltas for periodic artifact dumps
-                if step % self.full_dump_every == 0 and step > 0:
+                # Check if this step is in our checkpoint schedule
+                if step in self.checkpoint_schedule:
                     full_deltas_to_save[name] = diff.clone()
 
-        # write a local JSON backup of stats
+        # Always save stats (cheap JSON file)
         stats_path = os.path.join(self.delta_log_dir, f"stats_step_{step}.json")
         with open(stats_path, "w") as f:
             json.dump(layer_stats, f)
 
-        # aggregate a few nice summaries for wandb
+        # Aggregate summaries for wandb
         all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
         all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
         mean_l2 = sum(all_l2) / len(all_l2)
@@ -289,11 +285,13 @@ class DeltaTrackingCallback(TrainerCallback):
             "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
         }, step=step)
 
-        # every N steps, dump full deltas and upload artifact
-        if step % self.full_dump_every == 0 and step > 0:
+        # Save full deltas on checkpoint schedule
+        if step in self.checkpoint_schedule:
             delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
             torch.save(full_deltas_to_save, delta_file)
+            print(f"  ✓ Saved checkpoint at step {step}")
 
+            # Upload to wandb
             artifact = wandb.Artifact(
                 name=f"deltas_step_{step}",
                 type="model-deltas",
@@ -309,16 +307,30 @@ class DeltaTrackingCallback(TrainerCallback):
             wandb.finish()
 
 #######################################
-# 8. Register callback and train
+# 7. Register callback and train
 #######################################
 
 trainer.add_callback(
-    DeltaTrackingCallback(
+    FlexibleCheckpointCallback(
         base_state=base_state,
         delta_log_dir=DELTA_LOG_DIR,
-        full_dump_every=FULL_DUMP_EVERY,
+        checkpoint_schedule=CHECKPOINT_SCHEDULE,
         threshold=THRESHOLD,
     )
 )
 
+print(f"\n{'='*60}")
+print(f"Starting DPO training with flexible checkpoint schedule")
+print(f"{'='*60}")
+print(f"Checkpoints will be saved at steps: {CHECKPOINT_SCHEDULE}")
+print(f"Total steps: {NUM_STEPS}")
+print(f"{'='*60}\n")
+
 trainer.train()
+
+print(f"\n{'='*60}")
+print(f"Training complete!")
+print(f"{'='*60}")
+print(f"Deltas saved to: {DELTA_LOG_DIR}")
+print(f"Model checkpoints saved to: {OUTPUT_DIR}")
+print(f"{'='*60}\n")
