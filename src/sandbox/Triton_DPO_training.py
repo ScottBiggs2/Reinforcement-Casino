@@ -27,10 +27,20 @@ from transformers import TrainerCallback
 from typing import Dict, Optional
 
 # Add the project root to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from data.load_openr1 import load_openr1_subset
-from utils.logging_utils import make_run_dir
+# Now we can import from project modules
+try:
+    from data.load_openr1 import load_openr1_subset
+    from utils.logging_utils import make_run_dir
+except ImportError as e:
+    print(f"Import error: {e}")
+    print(f"Python path: {sys.path}")
+    print(f"Current directory: {os.getcwd()}")
+    print(f"Script directory: {os.path.dirname(__file__)}")
+    raise
 
 WANDB_PROJECT = "rl-casino-triton"
 MODEL_NAME = "google/gemma-3-270m-it"
