@@ -1,584 +1,414 @@
-# src/sandbox/Triton_DPO_train.py
-
-"""
-Notes & To-Dos:
-* Check that this actually works
-* Check that we aren't spamming torch.synchronize (bc it's slow af)
-* Add auto cuda mgmt, need to keep everything on GPU when possible. 
-* Look carefully into the optimizer(s) and how they are stepping. Maybe there's additional work to do there. 
-* get a script going to compare the evolution of the masked weights here vs the weights of the full run
-* Adapt all of the above to GRPO
-* Consider designing new loss objective with these sparse masks in mind? 
-"""
-
-import os
-import json
-import time
 import torch
-import triton
-import triton.language as tl
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-from trl import DPOTrainer, DPOConfig
-from datasets import Dataset
-import sys
-import wandb
-from transformers import TrainerCallback
+import os
+import argparse
+from collections import defaultdict
+import json
 
-# Add the project root to the Python path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
-from data.load_openr1 import load_openr1_subset
-from utils.logging_utils import make_run_dir
-
-WANDB_PROJECT = "rl-casino-triton"
-MODEL_NAME = "google/gemma-3-270m-it"
-DATASET_NAME = "Light-R1"
-SUBSET_SIZE = 10
-MASK_PATH = "masks/top_10.0_percent_mask.pt"
-CHECKPOINT_PATH = "results/gemma_dpo_training/final_model"
-BLOCK_SIZE = 32
-
-
-# ============================================================================
-# TRITON KERNEL (from working notebook)
-# ============================================================================
-
-@triton.jit
-def sparse_update_kernel(
-    # Input pointers
-    weights_ptr,      # Pointer to weight matrix
-    grad_ptr,         # Pointer to gradient matrix
-    mask_ptr,         # Pointer to mask
-    output_ptr,       # Pointer to output matrix
-    # Matrix dimensions
-    M, N,             # Matrix is M×N
-    stride_wm, stride_wn,  # Strides for weights
-    stride_gm, stride_gn,  # Strides for gradients
-    stride_mm, stride_mn,  # Strides for mask
-    stride_om, stride_on,  # Strides for output
-    # Learning rate
-    lr,
-    # Block size (compile-time constant)
-    BLOCK_SIZE: tl.constexpr,
-):
+def load_deltas_from_log_dir(delta_log_dir, target_step=None):
     """
-    Triton kernel for sparse weight updates.
+    Loads delta files from the new delta_logs format.
+    If target_step is specified, loads only up to that step.
     
-    Each program instance processes a BLOCK_SIZE × BLOCK_SIZE block.
-    """
-    # Get this program's block ID
-    pid = tl.program_id(0)  # 0 because we have a 1D grid
-    
-    # Calculate which row and column block this program handles
-    num_blocks_n = tl.cdiv(N, BLOCK_SIZE)  # Number of block columns
-    block_row = pid // num_blocks_n
-    block_col = pid % num_blocks_n
-    
-    # Calculate starting position in the matrix
-    row_start = block_row * BLOCK_SIZE
-    col_start = block_col * BLOCK_SIZE
-    
-    # Create offset ranges for this block
-    row_offsets = row_start + tl.arange(0, BLOCK_SIZE)
-    col_offsets = col_start + tl.arange(0, BLOCK_SIZE)
-    
-    # Create 2D offset grid (BLOCK_SIZE × BLOCK_SIZE)
-    row_offsets = row_offsets[:, None]  # Shape: [BLOCK_SIZE, 1]
-    col_offsets = col_offsets[None, :]  # Shape: [1, BLOCK_SIZE]
-    
-    # Calculate memory offsets
-    w_offsets = row_offsets * stride_wm + col_offsets * stride_wn
-    g_offsets = row_offsets * stride_gm + col_offsets * stride_gn
-    m_offsets = row_offsets * stride_mm + col_offsets * stride_mn
-    o_offsets = row_offsets * stride_om + col_offsets * stride_on
-    
-    # Create mask for valid elements (handle edge cases)
-    mask_valid = (row_offsets < M) & (col_offsets < N)
-    
-    # Load data from global memory
-    w_block = tl.load(weights_ptr + w_offsets, mask=mask_valid, other=0.0)
-    g_block = tl.load(grad_ptr + g_offsets, mask=mask_valid, other=0.0)
-    m_block = tl.load(mask_ptr + m_offsets, mask=mask_valid, other=0.0)
-    
-    # Compute update: W_new = W_old + lr * (grad * mask)
-    masked_grad = g_block * m_block
-    w_new = w_block + lr * masked_grad
-    
-    # Store result back to global memory
-    tl.store(output_ptr + o_offsets, w_new, mask=mask_valid)
-
-
-def triton_sparse_update(weights, gradient, mask, lr, block_size=32):
-    """
-    Apply sparse gradient update using Triton kernel.
-    
-    Args:
-        weights: Parameter tensor (M x N)
-        gradient: Gradient tensor (M x N)
-        mask: Binary mask tensor (M x N)
-        lr: Learning rate
-        block_size: Block size for Triton kernel
-        
     Returns:
-        Updated weights tensor
+        dict: {step: {param_name: delta_tensor}}
     """
-    M, N = weights.shape
+    print(f"Loading deltas from: {delta_log_dir}")
     
-    # Allocate output tensor
-    output = torch.empty_like(weights)
+    deltas_by_step = {}
     
-    # Calculate grid size (how many blocks to process)
-    num_blocks_m = triton.cdiv(M, block_size)
-    num_blocks_n = triton.cdiv(N, block_size)
-    grid = (num_blocks_m * num_blocks_n,)
+    # Find all delta files
+    delta_files = sorted([f for f in os.listdir(delta_log_dir) if f.startswith("deltas_step_") and f.endswith(".pt")])
     
-    # Launch kernel
-    sparse_update_kernel[grid](
-        weights, gradient, mask, output,
-        M, N,
-        weights.stride(0), weights.stride(1),
-        gradient.stride(0), gradient.stride(1),
-        mask.stride(0), mask.stride(1),
-        output.stride(0), output.stride(1),
-        lr,
-        BLOCK_SIZE=block_size,
-    )
-    
-    return output
-
-
-# ============================================================================
-# SPARSE MASK MANAGER
-# ============================================================================
-
-class SparseMaskManager:
-    """
-    Manages loading and applying sparse masks to model parameters.
-    
-    To-Do: 
-    * Add automatic CUDA to GPU/TPU support for Triton
-    """
-    
-    def __init__(self, mask_path, device='cuda'):
-        """
-        Load masks from disk.
+    for delta_file in delta_files:
+        # Extract step number
+        step = int(delta_file.split("_")[-1].replace(".pt", ""))
         
-        Args:
-            mask_path: Path to mask file (e.g., 'masks/top_10.0_percent_mask.pt')
-            device: Device to load masks onto
-        """
-        print(f"Loading masks from {mask_path}...")
-        self.masks = torch.load(mask_path, map_location='cpu')
-        self.device = device
-        
-        # Move masks to device and compute statistics
-        self.mask_stats = {}
-        for name, mask in self.masks.items():
-            self.masks[name] = mask.to(device)
-            sparsity = (mask == 1.0).sum().item() / mask.numel()
-            self.mask_stats[name] = {
-                'shape': tuple(mask.shape),
-                'sparsity': sparsity,
-                'nonzero': (mask == 1.0).sum().item()
-            }
-        
-        print(f"✓ Loaded {len(self.masks)} masks")
-        self._print_mask_summary()
-    
-    def _print_mask_summary(self):
-        """Print summary statistics of loaded masks."""
-        total_params = sum(stats['shape'][0] * stats['shape'][1] 
-                          for stats in self.mask_stats.values() 
-                          if len(stats['shape']) == 2)
-        total_active = sum(stats['nonzero'] 
-                          for stats in self.mask_stats.values())
-        
-        print(f"  Total parameters covered: {total_params:,}")
-        print(f"  Total active parameters: {total_active:,}")
-        print(f"  Overall sparsity: {total_active/total_params*100:.2f}%")
-    
-    def get_mask(self, param_name):
-        """
-        Get mask for a parameter, converting naming convention.
-        
-        Args:
-            param_name: PyTorch parameter name (with dots)
+        # Skip if beyond target step
+        if target_step is not None and step > target_step:
+            continue
             
-        Returns:
-            Mask tensor or None if no mask exists
-        """
-        # Convert dots to underscores to match mask file format
-        mask_key = param_name.replace('.', '_')
-        return self.masks.get(mask_key, None)
+        file_path = os.path.join(delta_log_dir, delta_file)
+        try:
+            deltas = torch.load(file_path, map_location='cpu')
+            deltas_by_step[step] = deltas
+            print(f"Loaded deltas for step {step} ({len(deltas)} parameters)")
+        except Exception as e:
+            print(f"Warning: Could not load {delta_file}: {e}")
+            continue
     
-    def is_mlp_layer(self, param_name):
-        """Check if parameter belongs to an MLP layer."""
-        return 'mlp' in param_name.lower()
-    
-    def has_mask(self, param_name):
-        """Check if a mask exists for this parameter."""
-        mask_key = param_name.replace('.', '_')
-        return mask_key in self.masks
+    if not deltas_by_step:
+        print("No delta files found!")
+        return None
+        
+    return deltas_by_step
 
 
-# ============================================================================
-# TRITON-ACCELERATED OPTIMIZER HOOK
-# ============================================================================
-
-class TritonSparseGradientHook:
+def compute_absolute_magnitude_mask(deltas_by_step, top_k_percent):
     """
-    Hooks into the optimizer to apply sparse updates via Triton kernels.
+    Original approach: Sum of absolute deltas across all steps.
+    Simple but effective baseline.
     """
+    print(f"\n=== Computing Absolute Magnitude Mask (top {top_k_percent}%) ===")
     
-    def __init__(self, model, mask_manager, learning_rate, block_size=32, mlp_only=True):
-        """
-        Args:
-            model: The model to optimize
-            mask_manager: SparseMaskManager instance
-            learning_rate: Learning rate for updates
-            block_size: Block size for Triton kernels
-            mlp_only: If True, only apply to MLP layers
-        """
-        self.model = model
-        self.mask_manager = mask_manager
-        self.lr = learning_rate
-        self.block_size = block_size
-        self.mlp_only = mlp_only
-        
-        # Statistics tracking
-        self.stats = {
-            'total_updates': 0,
-            'sparse_updates': 0,
-            'dense_updates': 0,
-            'time_sparse': 0.0,
-            'time_dense': 0.0,
-        }
-        
-        self._register_hooks()
-        print(f"✓ Triton sparse gradient hooks registered")
-        print(f"  MLP-only mode: {mlp_only}")
-        print(f"  Block size: {block_size}")
+    aggregated = defaultdict(lambda: None)
     
-    def _register_hooks(self):
-        """Register backward hooks on model parameters."""
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                param.register_hook(lambda grad, name=name: self._gradient_hook(grad, name))
+    # Aggregate absolute changes
+    for step, deltas in deltas_by_step.items():
+        for name, delta in deltas.items():
+            if aggregated[name] is None:
+                aggregated[name] = torch.zeros_like(delta)
+            aggregated[name] += delta.abs()
     
-    def _gradient_hook(self, grad, param_name):
-        """
-        Hook called after gradient computation for each parameter.
-        
-        Args:
-            grad: Gradient tensor
-            param_name: Name of the parameter
-            
-        Returns:
-            Modified gradient (or original if not applying sparse update)
-        """
-        # Check if we should apply sparse update
-        should_apply = (
-            self.mask_manager.has_mask(param_name) and
-            len(grad.shape) == 2 and  # Only 2D tensors (weight matrices)
-            (not self.mlp_only or self.mask_manager.is_mlp_layer(param_name))
-        )
-        
-        if not should_apply:
-            self.stats['dense_updates'] += 1
-            return grad
-        
-        # Get mask
-        mask = self.mask_manager.get_mask(param_name)
-        
-        # Apply sparse mask to gradient
-        # Note: We're masking the gradient, not applying the update here
-        # The optimizer will then apply: W_new = W_old - lr * masked_grad
-        masked_grad = grad * mask
-        
-        self.stats['sparse_updates'] += 1
-        self.stats['total_updates'] += 1
-        
-        return masked_grad
+    # Create masks
+    masks = {}
+    total_params = 0
+    total_masked = 0
     
-    def print_stats(self):
-        """Print statistics about sparse vs dense updates."""
-        total = self.stats['total_updates']
-        sparse = self.stats['sparse_updates']
-        dense = self.stats['dense_updates']
+    for name, total_change in aggregated.items():
+        flat_changes = total_change.flatten()
+        k = max(1, int(top_k_percent / 100.0 * flat_changes.numel()))
         
-        print(f"\n{'='*60}")
-        print(f"TRITON SPARSE UPDATE STATISTICS")
-        print(f"{'='*60}")
-        print(f"Total updates:  {total:,}")
-        print(f"Sparse updates: {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
-        print(f"Dense updates:  {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
-        print(f"{'='*60}\n")
-
-
-# ============================================================================
-# WEIGHT DELTA CALLBACK (unchanged from original)
-# ============================================================================
-
-class WeightDeltaCallback(TrainerCallback):
-    def __init__(self, run_dir):
-        self.run_dir = run_dir
-        self.previous_state_dict = None
-        self.step_times = []
-
-    def on_train_begin(self, args, state, control, **kwargs):
-        # Capture initial weights
-        model = kwargs["model"]
-        self.previous_state_dict = {name: p.clone().detach().cpu() 
-                                    for name, p in model.named_parameters()}
-        self.train_start_time = time.time()
-
-    def on_step_begin(self, args, state, control, **kwargs):
-        self.step_start_time = time.time()
-
-    def on_step_end(self, args, state, control, **kwargs):
-        step_time = time.time() - self.step_start_time
-        self.step_times.append(step_time)
+        if k >= flat_changes.numel():
+            threshold = 0.0
+        else:
+            threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
         
-        model = kwargs["model"]
-        current_state_dict = {name: p.clone().detach().cpu() 
-                             for name, p in model.named_parameters()}
+        mask = (total_change > threshold).float()
+        masks[name] = mask
         
-        weight_deltas = {name: current_state_dict[name] - self.previous_state_dict[name] 
-                        for name in current_state_dict}
-
-        step_dir = os.path.join(self.run_dir, f"step_{int(state.global_step)}")
-        os.makedirs(step_dir, exist_ok=True)
-        
-        # Save deltas to disk
-        num_saved = 0
-        for name, delta in weight_deltas.items():
-            if torch.all(delta == 0):
-                continue
-            safe_name = name.replace(".", "_")
-            torch.save(delta, os.path.join(step_dir, f"{safe_name}.pt"))
-            num_saved += 1
-        
-        # Update previous state
-        self.previous_state_dict = current_state_dict
-        
-        # Log timing
-        print(f"  Step {state.global_step}: {step_time:.2f}s, saved {num_saved} deltas")
-
-    def on_train_end(self, args, state, control, **kwargs):
-        total_time = time.time() - self.train_start_time
-        avg_step_time = sum(self.step_times) / len(self.step_times) if self.step_times else 0
-        
-        print(f"\n{'='*60}")
-        print(f"TRAINING TIME STATISTICS")
-        print(f"{'='*60}")
-        print(f"Total training time: {total_time:.2f}s")
-        print(f"Average step time:   {avg_step_time:.2f}s")
-        print(f"Total steps:         {len(self.step_times)}")
-        print(f"{'='*60}\n")
+        total_params += mask.numel()
+        total_masked += mask.sum().item()
+    
+    actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
+    print(f"Actual sparsity: {actual_sparsity:.2f}%")
+    
+    return masks
 
 
-# ============================================================================
-# DATASET PREPARATION (unchanged from original)
-# ============================================================================
-
-def prepare_dpo_dataset(original_dataset, tokenizer, model):
+def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5):
     """
-    Prepare a synthetic DPO dataset from a standard dataset.
-    'chosen' is the ground truth, 'rejected' is generated by the base model.
-    """
-    dpo_data = []
-    print("Preparing DPO dataset...")
-    for i, item in enumerate(original_dataset):
-        prompt = item['prompt']
-        chosen = item['label']
-
-        # Generate a 'rejected' response from the base model
-        inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
-        input_ids = inputs.input_ids.to(model.device)
-        attention_mask = inputs.attention_mask.to(model.device)
-        
-        generated_ids = model.generate(
-            input_ids, 
-            attention_mask=attention_mask,
-            max_new_tokens=20,
-            pad_token_id=tokenizer.eos_token_id,
-            do_sample=True,
-            temperature=0.8
-        )
-        rejected = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
-
-        dpo_data.append({
-            "prompt": prompt,
-            "chosen": chosen,
-            "rejected": rejected
-        })
-        
-        if (i + 1) % 5 == 0:
-            print(f"  Generated {i + 1}/{len(original_dataset)} DPO pairs")
+    Momentum-based approach: Identifies weights with consistent change direction.
     
-    return Dataset.from_list(dpo_data)
-
-
-# ============================================================================
-# MAIN TRAINING FUNCTION
-# ============================================================================
-
-def train(
-    model_name=MODEL_NAME,
-    checkpoint_path=CHECKPOINT_PATH,
-    mask_path=MASK_PATH,
-    n_steps=5,
-    batch_size=1, 
-    learning_rate=5e-5,
-    subset_size=10,
-    run_name="triton_dpo_test",
-    mlp_only=True,
-    block_size=BLOCK_SIZE
-):
-    """
-    Train a Gemma model using DPOTrainer with Triton-accelerated sparse updates.
+    Computes a momentum score for each weight based on:
+    - Direction consistency (are changes in the same direction?)
+    - Magnitude of recent changes
     
     Args:
-        model_name: Base model name (for tokenizer)
-        checkpoint_path: Path to fine-tuned checkpoint to load
-        mask_path: Path to sparse mask file
-        n_steps: Number of training steps
-        batch_size: Training batch size
-        learning_rate: Learning rate
-        subset_size: Dataset subset size
-        run_name: Name for this run
-        mlp_only: If True, only apply sparse updates to MLP layers
-        block_size: Block size for Triton kernels
+        deltas_by_step: Dictionary of deltas by step
+        top_k_percent: Percentage of weights to keep
+        window_size: Number of recent steps to consider for momentum
     """
+    print(f"\n=== Computing Momentum-Based Mask (top {top_k_percent}%, window={window_size}) ===")
+    
+    sorted_steps = sorted(deltas_by_step.keys())
+    
+    if len(sorted_steps) < 2:
+        print("Warning: Need at least 2 steps for momentum calculation. Falling back to magnitude.")
+        return compute_absolute_magnitude_mask(deltas_by_step, top_k_percent)
+    
+    # Compute velocity (change between consecutive steps)
+    velocities_by_step = {}
+    for i in range(1, len(sorted_steps)):
+        prev_step = sorted_steps[i-1]
+        curr_step = sorted_steps[i]
+        
+        velocities = {}
+        for name in deltas_by_step[curr_step].keys():
+            if name in deltas_by_step[prev_step]:
+                # Velocity = current delta - previous delta
+                velocities[name] = deltas_by_step[curr_step][name] - deltas_by_step[prev_step][name]
+        
+        velocities_by_step[curr_step] = velocities
+    
+    # Compute momentum scores
+    momentum_scores = {}
+    
+    for name in deltas_by_step[sorted_steps[-1]].keys():
+        # Get recent velocities
+        recent_velocities = []
+        for step in sorted_steps[-window_size:]:
+            if step in velocities_by_step and name in velocities_by_step[step]:
+                recent_velocities.append(velocities_by_step[step][name])
+        
+        if len(recent_velocities) < 2:
+            # Not enough history, use absolute magnitude
+            momentum_scores[name] = deltas_by_step[sorted_steps[-1]][name].abs()
+            continue
+        
+        # Stack velocities
+        vel_stack = torch.stack(recent_velocities)  # [steps, *param_shape]
+        
+        # Compute momentum: magnitude of mean velocity weighted by consistency
+        mean_velocity = vel_stack.mean(dim=0)
+        std_velocity = vel_stack.std(dim=0) + 1e-8
+        
+        # Momentum score: high if changes are large and consistent
+        # consistency = magnitude / variability
+        consistency = mean_velocity.abs() / std_velocity
+        magnitude = mean_velocity.abs()
+        
+        # Combined score (you can tune this)
+        momentum_scores[name] = magnitude * (1 + consistency)
+    
+    # Create masks based on momentum scores
+    masks = {}
+    total_params = 0
+    total_masked = 0
+    
+    for name, score in momentum_scores.items():
+        flat_scores = score.flatten()
+        k = max(1, int(top_k_percent / 100.0 * flat_scores.numel()))
+        
+        if k >= flat_scores.numel():
+            threshold = 0.0
+        else:
+            threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
+        
+        mask = (score > threshold).float()
+        masks[name] = mask
+        
+        total_params += mask.numel()
+        total_masked += mask.sum().item()
+    
+    actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
+    print(f"Actual sparsity: {actual_sparsity:.2f}%")
+    
+    return masks
+
+
+def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_step=None):
+    """
+    Fisher Information-based approach: Identifies weights that are most sensitive
+    to the loss (i.e., where small changes have large effects on the loss).
+    
+    Note: True Fisher requires gradients, which we don't have in the delta files.
+    This approximates Fisher using the squared gradient proxy from delta magnitudes
+    and assumes the deltas are proportional to gradients.
+    
+    For a better Fisher approximation, you'd need to save gradients during training.
+    """
+    print(f"\n=== Computing Fisher-Approximation Mask (top {top_k_percent}%) ===")
+    print("Note: This is an approximation since we don't have true gradients.")
+    
+    # Load base state
+    if not os.path.exists(base_state_path):
+        print(f"Error: Base state not found at {base_state_path}")
+        return None
+    
+    base_state = torch.load(base_state_path, map_location='cpu')
+    print(f"Loaded base state with {len(base_state)} parameters")
+    
+    # Load deltas
+    deltas_by_step = load_deltas_from_log_dir(delta_log_dir, target_step)
+    if not deltas_by_step:
+        return None
+    
+    # Approximate Fisher: F ≈ E[g²] where g is gradient
+    # We approximate gradient as delta / learning_rate
+    # Since we don't have LR easily, we use normalized deltas
+    
+    fisher_scores = {}
+    
+    for name in base_state.keys():
+        # Collect all deltas for this parameter
+        deltas = []
+        for step, step_deltas in deltas_by_step.items():
+            if name in step_deltas:
+                deltas.append(step_deltas[name])
+        
+        if not deltas:
+            fisher_scores[name] = torch.zeros_like(base_state[name])
+            continue
+        
+        # Stack deltas and compute variance (proxy for Fisher)
+        delta_stack = torch.stack(deltas)
+        
+        # Fisher ≈ variance of pseudo-gradients
+        fisher_approx = delta_stack.var(dim=0) + delta_stack.mean(dim=0).abs()
+        
+        fisher_scores[name] = fisher_approx
+    
+    # Create masks
+    masks = {}
+    total_params = 0
+    total_masked = 0
+    
+    for name, score in fisher_scores.items():
+        flat_scores = score.flatten()
+        k = max(1, int(top_k_percent / 100.0 * flat_scores.numel()))
+        
+        if k >= flat_scores.numel():
+            threshold = 0.0
+        else:
+            threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
+        
+        mask = (score > threshold).float()
+        masks[name] = mask
+        
+        total_params += mask.numel()
+        total_masked += mask.sum().item()
+    
+    actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
+    print(f"Actual sparsity: {actual_sparsity:.2f}%")
+    
+    return masks
+
+
+def save_masks(masks, output_file, metadata=None):
+    """Saves masks with optional metadata."""
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
+    # Save in the format expected by Triton_DPO_train.py
+    # Just the masks dict directly (not wrapped in a dict with 'masks' key)
+    torch.save(masks, output_file)
+    
+    # Also save metadata separately if provided
+    if metadata:
+        metadata_file = output_file.replace('.pt', '_metadata.json')
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Metadata saved to: {metadata_file}")
+    
+    print(f"\nMasks saved to: {output_file}")
+    print(f"Total parameters: {sum(m.numel() for m in masks.values())}")
+    print(f"Masked parameters: {sum(m.sum().item() for m in masks.values())}")
+
+
+def verify_masks(masks, delta_log_dir):
+    """Verify mask shapes match delta shapes."""
+    print("\n=== Verifying Masks ===")
+    
+    # Load one set of deltas to check shapes
+    delta_files = [f for f in os.listdir(delta_log_dir) if f.startswith("deltas_step_")]
+    if not delta_files:
+        print("No delta files found for verification")
+        return False
+    
+    first_deltas = torch.load(os.path.join(delta_log_dir, delta_files[0]), map_location='cpu')
+    
+    for name, mask in masks.items():
+        if name not in first_deltas:
+            print(f"Warning: Mask for {name} not in deltas")
+            continue
+        
+        if mask.shape != first_deltas[name].shape:
+            print(f"ERROR: Shape mismatch for {name}")
+            print(f"  Mask shape: {mask.shape}")
+            print(f"  Delta shape: {first_deltas[name].shape}")
+            return False
+    
+    print("✓ All mask shapes verified")
+    return True
+
+
+def main(args):
+    delta_log_dir = args.delta_log_dir or "./delta_logs"
+    base_state_path = os.path.join(delta_log_dir, "base_state.pt")
+    
     # Create output directory
-    run_dir = make_run_dir(base_dir="results", run_name=run_name)
-    print(f"\n{'='*60}")
-    print(f"TRITON-ACCELERATED DPO TRAINING")
-    print(f"{'='*60}")
-    print(f"Run directory: {run_dir}")
-    print(f"Checkpoint: {checkpoint_path}")
-    print(f"Mask path: {mask_path}")
-    print(f"Steps: {n_steps}")
-    print(f"Learning rate: {learning_rate}")
-    print(f"{'='*60}\n")
-
-    # Load dataset and tokenizer
-    original_dataset, tokenizer = load_openr1_subset(
-        tokenizer_name=model_name,
-        subset_size=subset_size
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # Load model from checkpoint
-    print(f"Loading model from checkpoint: {checkpoint_path}")
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
-    )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    print(f"✓ Model loaded on {device}")
-
-    # Load sparse masks
-    mask_manager = SparseMaskManager(mask_path, device=device)
-
-    # Prepare DPO dataset
-    print("\nPreparing DPO dataset...")
-    dpo_dataset = prepare_dpo_dataset(original_dataset, tokenizer, model)
-    print(f"✓ DPO dataset prepared with {len(dpo_dataset)} examples\n")
-
-    # Set up DPOConfig
-    dpo_config = DPOConfig(
-        output_dir=os.path.join(run_dir, "checkpoints"),
-        per_device_train_batch_size=batch_size,
-        learning_rate=learning_rate,
-        max_steps=n_steps,
-        logging_steps=1,
-        report_to="wandb",
-        remove_unused_columns=False,
-        run_name=run_name,
-        gradient_accumulation_steps=1,
-    )
-
-    # Initialize wandb
-    wandb.init(
-        project=WANDB_PROJECT, 
-        name=run_name, 
-        config={
-            "model_name": model_name,
-            "checkpoint": checkpoint_path,
-            "mask_path": mask_path,
-            "dataset": DATASET_NAME,
-            "n_steps": n_steps,
-            "batch_size": batch_size,
-            "learning_rate": learning_rate,
-            "subset_size": subset_size,
-            "mlp_only": mlp_only,
-            "block_size": block_size,
-            "triton_enabled": True
-        }
-    )
-
-    # Set up Triton sparse gradient hooks
-    sparse_hook = TritonSparseGradientHook(
-        model=model,
-        mask_manager=mask_manager,
-        learning_rate=learning_rate,
-        block_size=block_size,
-        mlp_only=mlp_only
-    )
-
-    # Set up DPOTrainer
-    print("Initializing DPOTrainer...")
-    dpo_trainer = DPOTrainer(
-        model=model,
-        ref_model=None,
-        args=dpo_config,
-        train_dataset=dpo_dataset,
-        processing_class=tokenizer,
-        callbacks=[WeightDeltaCallback(run_dir=run_dir)]
-    )
-
-    # Train
-    print(f"\n{'='*60}")
-    print("STARTING TRAINING")
-    print(f"{'='*60}\n")
+    os.makedirs("masks", exist_ok=True)
     
-    training_start = time.time()
-    dpo_trainer.train()
-    training_time = time.time() - training_start
+    # Load deltas
+    deltas_by_step = load_deltas_from_log_dir(delta_log_dir, args.target_step)
+    if not deltas_by_step:
+        print("Failed to load deltas. Exiting.")
+        return
     
-    print(f"\n{'='*60}")
-    print("TRAINING COMPLETE")
-    print(f"{'='*60}")
-    print(f"Total time: {training_time:.2f}s")
-    print(f"Time per step: {training_time/n_steps:.2f}s")
-    print(f"{'='*60}\n")
+    print(f"\nLoaded deltas for steps: {sorted(deltas_by_step.keys())}")
     
-    # Print sparse update statistics
-    sparse_hook.print_stats()
+    # Compute masks based on method
+    if args.method == "magnitude":
+        masks = compute_absolute_magnitude_mask(deltas_by_step, args.top_k_percent)
+        method_suffix = "magnitude"
     
-    # Save final model
-    final_model_path = os.path.join(run_dir, "final_model")
-    model.save_pretrained(final_model_path)
-    tokenizer.save_pretrained(final_model_path)
-    print(f"✓ Final model saved to {final_model_path}")
+    elif args.method == "momentum":
+        masks = compute_momentum_mask(deltas_by_step, args.top_k_percent, args.momentum_window)
+        method_suffix = f"momentum_w{args.momentum_window}"
     
-    # Save timing info
-    timing_info = {
-        'total_training_time': training_time,
-        'time_per_step': training_time / n_steps,
-        'n_steps': n_steps,
-        'sparse_stats': sparse_hook.stats
+    elif args.method == "fisher":
+        masks = compute_fisher_mask(delta_log_dir, base_state_path, args.top_k_percent, args.target_step)
+        method_suffix = "fisher"
+    
+    else:
+        print(f"Unknown method: {args.method}")
+        return
+    
+    if masks is None:
+        print("Failed to compute masks. Exiting.")
+        return
+    
+    # Verify masks
+    if not verify_masks(masks, delta_log_dir):
+        print("Mask verification failed!")
+        return
+    
+    # Save masks
+    step_suffix = f"_step{args.target_step}" if args.target_step else ""
+    output_file = args.output_file or f"masks/top_{args.top_k_percent}pct_{method_suffix}{step_suffix}.pt"
+    
+    metadata = {
+        "method": args.method,
+        "top_k_percent": args.top_k_percent,
+        "target_step": args.target_step,
+        "num_steps_used": len(deltas_by_step),
+        "steps": sorted(deltas_by_step.keys()),
     }
-    with open(os.path.join(run_dir, 'timing_info.json'), 'w') as f:
-        json.dump(timing_info, f, indent=2)
-    print(f"✓ Timing info saved to {run_dir}/timing_info.json")
     
-    wandb.finish()
-    print("\n✓ All done!")
+    if args.method == "momentum":
+        metadata["momentum_window"] = args.momentum_window
+    
+    save_masks(masks, output_file, metadata)
+    
+    print("\n✓ Mask generation complete!")
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(
+        description="Generate sparse training masks using various methods"
+    )
+    parser.add_argument(
+        "--delta_log_dir",
+        type=str,
+        default="./delta_logs",
+        help="Directory containing delta_logs (with base_state.pt and deltas_step_*.pt files)"
+    )
+    parser.add_argument(
+        "--method",
+        type=str,
+        choices=["magnitude", "momentum", "fisher"],
+        default="magnitude",
+        help="Method for mask generation"
+    )
+    parser.add_argument(
+        "--top_k_percent",
+        type=float,
+        default=10.0,
+        help="Percentage of weights to include in mask"
+    )
+    parser.add_argument(
+        "--target_step",
+        type=int,
+        default=25,
+        help="Generate mask using deltas up to this step (default: 25)"
+    )
+    parser.add_argument(
+        "--momentum_window",
+        type=int,
+        default=5,
+        help="Window size for momentum calculation (only used with --method momentum)"
+    )
+    parser.add_argument(
+        "--output_file",
+        type=str,
+        default=None,
+        help="Output file path (default: auto-generated in masks/ directory)"
+    )
+    
+    args = parser.parse_args()
+    main(args)
+
+
+# Example usage:
+# python mask_finder_advanced.py --method magnitude --top_k_percent 10.0 --target_step 25
+# python mask_finder_advanced.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 5
+# python mask_finder_advanced.py --method fisher --top_k_percent 10.0 --target_step 25
