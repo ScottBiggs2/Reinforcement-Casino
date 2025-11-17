@@ -22,9 +22,9 @@ MODEL_NAME = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"  # preference dataset (prompt/chosen/rejected) :contentReference[oaicite:4]{index=4}
 OUTPUT_DIR = "./checkpoints_gemma3_dpo"
 DELTA_LOG_DIR = "./delta_logs"
-FULL_DUMP_EVERY = 200
-THRESHOLD = 1e-4
-NUM_STEPS = 20000
+FULL_DUMP_EVERY = 25
+THRESHOLD = 1e-3
+NUM_STEPS = 100
 SUBSET_SIZE = None  # reduce for faster bring-up
 
 WANDB_PROJECT = "gemma3-dpo-subnetwork-emergence"
