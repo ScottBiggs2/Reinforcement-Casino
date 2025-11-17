@@ -33,7 +33,7 @@ MODEL_NAME = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w5_step25.pt"
-CHECKPOINT_PATH = "results/gemma_dpo_training/final_model"
+CHECKPOINT_PATH = "checkpoints_gemma3_dpo"  # Path to your DPO checkpoint
 BLOCK_SIZE = 32
 
 
@@ -745,17 +745,17 @@ def train(
     # Load model
     print(f"Loading model from checkpoint: {checkpoint_path}")
     
-    # Check if checkpoint exists locally
+    # Check if checkpoint exists
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(
             f"Checkpoint not found at {checkpoint_path}\n"
-            f"Make sure you've run the initial DPO training first to create this checkpoint."
+            f"Available directories: {os.listdir('.')}\n"
+            f"Looking for checkpoint in: checkpoints_gemma3_dpo"
         )
     
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        local_files_only=True,  # Force loading from local path, not HuggingFace Hub
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
