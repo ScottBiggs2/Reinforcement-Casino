@@ -9,6 +9,7 @@ Complete standalone implementation with:
 4. Full DPO training pipeline
 
 Run: python src/sandbox/triton_sparse_dpo_standalone.py
+Or:  python src/sandbox/triton_sparse_dpo_standalone.py --checkpoint checkpoints_gemma3_dpo/checkpoint-100
 """
 
 import os
@@ -21,6 +22,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import DPOTrainer, DPOConfig
 from datasets import load_dataset
 import wandb
+import argparse
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -33,9 +35,8 @@ MODEL_NAME = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w5_step25.pt"
-# Use the base model - we'll load it fresh and apply sparse training
-# If you have a specific checkpoint you want to use, update this path
-CHECKPOINT_PATH = "google/gemma-3-270m-it"  # Base model from HuggingFace
+# Default: use base model. Override with --checkpoint flag
+DEFAULT_CHECKPOINT = "google/gemma-3-270m-it"
 BLOCK_SIZE = 32
 
 
@@ -700,7 +701,7 @@ def make_run_dir(base_dir="results", run_name=None):
 
 def train(
     model_name=MODEL_NAME,
-    checkpoint_path=CHECKPOINT_PATH,
+    checkpoint_path=None,
     mask_path=MASK_PATH,
     n_steps=5,
     batch_size=1, 
@@ -718,7 +719,15 @@ def train(
     2. Fused sparse AdamW updates
     
     Expected speedup: 2-3x over dense training with 90% sparsity.
+    
+    Args:
+        checkpoint_path: Path to checkpoint (default: use base model)
     """
+    
+    # Use default checkpoint if none provided
+    if checkpoint_path is None:
+        checkpoint_path = DEFAULT_CHECKPOINT
+        print(f"No checkpoint specified, using base model: {checkpoint_path}")
     
     run_dir = make_run_dir(base_dir="results", run_name=run_name)
     print(f"\n{'='*60}")
@@ -745,15 +754,7 @@ def train(
         return dpo_collator_fn(examples, tokenizer)
 
     # Load model
-    print(f"Loading model from checkpoint: {checkpoint_path}")
-    
-    # Check if checkpoint exists
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(
-            f"Checkpoint not found at {checkpoint_path}\n"
-            f"Available directories: {os.listdir('.')}\n"
-            f"Looking for checkpoint in: checkpoints_gemma3_dpo"
-        )
+    print(f"Loading model from: {checkpoint_path}")
     
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,
@@ -869,4 +870,92 @@ def train(
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser(
+        description="Triton-accelerated sparse DPO training",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Train from base model with sparse mask
+  python src/sandbox/triton_sparse_dpo_standalone.py
+  
+  # Train from your DPO checkpoint (recommended for testing sparse continuation)
+  python src/sandbox/triton_sparse_dpo_standalone.py --checkpoint checkpoints_gemma3_dpo/checkpoint-100
+  
+  # Custom configuration
+  python src/sandbox/triton_sparse_dpo_standalone.py \\
+    --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \\
+    --mask masks/top_10.0pct_momentum_w5_step25.pt \\
+    --n_steps 10 \\
+    --learning_rate 1e-5 \\
+    --run_name triton_test_v1
+        """
+    )
+    
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help=f"Path to model checkpoint (default: {DEFAULT_CHECKPOINT})"
+    )
+    parser.add_argument(
+        "--mask",
+        type=str,
+        default=MASK_PATH,
+        help=f"Path to sparse mask file (default: {MASK_PATH})"
+    )
+    parser.add_argument(
+        "--n_steps",
+        type=int,
+        default=5,
+        help="Number of training steps (default: 5)"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Training batch size (default: 1)"
+    )
+    parser.add_argument(
+        "--learning_rate",
+        type=float,
+        default=5e-5,
+        help="Learning rate (default: 5e-5)"
+    )
+    parser.add_argument(
+        "--subset_size",
+        type=int,
+        default=10,
+        help="Dataset subset size (default: 10)"
+    )
+    parser.add_argument(
+        "--run_name",
+        type=str,
+        default="triton_sparse_dpo",
+        help="Run name for wandb and output directory (default: triton_sparse_dpo)"
+    )
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=True,
+        help="Only apply sparse training to MLP layers (default: True)"
+    )
+    parser.add_argument(
+        "--block_size",
+        type=int,
+        default=BLOCK_SIZE,
+        help=f"Triton kernel block size (default: {BLOCK_SIZE})"
+    )
+    
+    args = parser.parse_args()
+    
+    train(
+        checkpoint_path=args.checkpoint,
+        mask_path=args.mask,
+        n_steps=args.n_steps,
+        batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        subset_size=args.subset_size,
+        run_name=args.run_name,
+        mlp_only=args.mlp_only,
+        block_size=args.block_size,
+    )
