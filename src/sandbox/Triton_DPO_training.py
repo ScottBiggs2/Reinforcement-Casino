@@ -744,9 +744,18 @@ def train(
 
     # Load model
     print(f"Loading model from checkpoint: {checkpoint_path}")
+    
+    # Check if checkpoint exists locally
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(
+            f"Checkpoint not found at {checkpoint_path}\n"
+            f"Make sure you've run the initial DPO training first to create this checkpoint."
+        )
+    
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        local_files_only=True,  # Force loading from local path, not HuggingFace Hub
     )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
