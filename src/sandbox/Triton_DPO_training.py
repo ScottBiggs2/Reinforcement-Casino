@@ -20,35 +20,126 @@ import triton
 import triton.language as tl
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
-from datasets import Dataset
-import sys
+from datasets import load_dataset, Dataset
 import wandb
 from transformers import TrainerCallback
-from typing import Dict, Optional
-
-# Add the project root to the Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# Now we can import from project modules
-try:
-    from data.load_openr1 import load_openr1_subset
-    from utils.logging_utils import make_run_dir
-except ImportError as e:
-    print(f"Import error: {e}")
-    print(f"Python path: {sys.path}")
-    print(f"Current directory: {os.getcwd()}")
-    print(f"Script directory: {os.path.dirname(__file__)}")
-    raise
+from typing import Dict, Optional, List, Any
+from datetime import datetime
 
 WANDB_PROJECT = "rl-casino-triton"
 MODEL_NAME = "google/gemma-3-270m-it"
-DATASET_NAME = "Light-R1"
+DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w5_step25.pt"
 CHECKPOINT_PATH = "results/gemma_dpo_training/final_model"
 BLOCK_SIZE = 32
+
+
+# ============================================================================
+# DATASET LOADING (ripped from working script)
+# ============================================================================
+
+def load_dpo_dataset(subset_size=None):
+    """Load and normalize DPO dataset."""
+    print(f"Loading dataset: {DATASET_NAME}")
+    raw_ds = load_dataset(DATASET_NAME, split="train")
+    
+    def msg_to_text(x):
+        if isinstance(x, str):
+            return x
+        if isinstance(x, dict):
+            return x.get("value", "")
+        if isinstance(x, list):
+            return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
+        return str(x)
+
+    def normalize_record(rec):
+        prompt_raw   = rec.get("prompt", "")
+        chosen_raw   = rec.get("chosen", "")
+        rejected_raw = rec.get("rejected", "")
+
+        if isinstance(prompt_raw, list):
+            prompt_text = "\n".join(
+                m.get("value","") for m in prompt_raw
+                if isinstance(m, dict) and m.get("from","").lower() != "assistant"
+            ).strip()
+        else:
+            prompt_text = msg_to_text(prompt_raw).strip()
+
+        chosen_text   = msg_to_text(chosen_raw).strip()
+        rejected_text = msg_to_text(rejected_raw).strip()
+
+        return {"prompt": prompt_text, "chosen": chosen_text, "rejected": rejected_text}
+
+    norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
+    
+    if subset_size is not None:
+        norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
+    
+    print(f"✓ Loaded {len(norm_ds)} examples")
+    return norm_ds
+
+
+def dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torch.Tensor]:
+    """Data collator for DPO training."""
+    # If already preprocessed
+    if "prompt_input_ids" in examples[0]:
+        def pad_stack(key):
+            seqs = [torch.tensor(ex[key]) if not torch.is_tensor(ex[key]) else ex[key] for ex in examples]
+            lens = [s.size(-1) for s in seqs]
+            maxlen = max(lens)
+            out = torch.full((len(seqs), maxlen), fill_value=0, dtype=torch.long)
+            mask = torch.zeros((len(seqs), maxlen), dtype=torch.long)
+            for i, s in enumerate(seqs):
+                out[i, : s.size(-1)] = s.to(torch.long)
+                mask[i, : s.size(-1)] = 1
+            return out, mask
+
+        p_ids, p_mask = pad_stack("prompt_input_ids")
+        c_ids, c_mask = pad_stack("chosen_input_ids")
+        r_ids, r_mask = pad_stack("rejected_input_ids")
+        return {
+            "prompt_input_ids": p_ids, "prompt_attention_mask": p_mask,
+            "chosen_input_ids": c_ids, "chosen_attention_mask": c_mask,
+            "rejected_input_ids": r_ids, "rejected_attention_mask": r_mask,
+        }
+
+    # Otherwise, tokenize raw strings
+    prompts  = [ex.get("prompt", "")   for ex in examples]
+    chosens  = [ex.get("chosen", "")   for ex in examples]
+    rejects  = [ex.get("rejected", "") for ex in examples]
+
+    enc_prompt = [tokenizer(p, truncation=True, max_length=512,  return_tensors="pt") for p in prompts]
+    enc_chosen = [tokenizer(c, truncation=True, max_length=1024, return_tensors="pt") for c in chosens]
+    enc_reject = [tokenizer(r, truncation=True, max_length=1024, return_tensors="pt") for r in rejects]
+
+    batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+    batch_chosen = tokenizer.pad(enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+    batch_reject = tokenizer.pad(enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+
+    for k in ("input_ids", "attention_mask"):
+        batch_prompt[k] = batch_prompt[k].to(torch.long)
+        batch_chosen[k] = batch_chosen[k].to(torch.long)
+        batch_reject[k] = batch_reject[k].to(torch.long)
+
+    return {
+        "prompt_input_ids":        batch_prompt["input_ids"],
+        "prompt_attention_mask":   batch_prompt["attention_mask"],
+        "chosen_input_ids":        batch_chosen["input_ids"],
+        "chosen_attention_mask":   batch_chosen["attention_mask"],
+        "rejected_input_ids":      batch_reject["input_ids"],
+        "rejected_attention_mask": batch_reject["attention_mask"],
+    }
+
+
+def make_run_dir(base_dir="results", run_name=None):
+    """Create a timestamped run directory."""
+    if run_name is None:
+        run_name = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    run_dir = os.path.join(base_dir, run_name)
+    os.makedirs(run_dir, exist_ok=True)
+    return run_dir
 
 
 # ============================================================================
