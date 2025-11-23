@@ -26,7 +26,7 @@ DELTA_LOG_DIR = "./delta_logs"
 # Flexible checkpoint schedule
 # Save every 5 steps for first 25 steps, then every 25 steps after
 CHECKPOINT_SCHEDULE = (
-    list(range(5, 26, 5)) +  # [5, 10, 15, 20, 25]
+    list(range(5, 25, 5)) +  # [5, 10, 15, 20, 25]
     list(range(50, 101, 25))  # [50, 75, 100]
 )
 

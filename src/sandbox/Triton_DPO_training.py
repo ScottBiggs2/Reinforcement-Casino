@@ -959,3 +959,7 @@ Examples:
         mlp_only=args.mlp_only,
         block_size=args.block_size,
     )
+
+#     python src/sandbox/Triton_DPO_training.py \
+#   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
+#   --n_steps 10
