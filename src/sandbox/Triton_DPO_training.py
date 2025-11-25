@@ -493,6 +493,44 @@ class SparseAdamW(torch.optim.Optimizer):
             
             self.stats['dense_steps'] += 1
             self.stats['time_dense'] += time.time() - start
+    
+    def _dense_step(self, param, group):
+        """Standard dense AdamW update (fallback for non-masked params)."""
+        start = time.time()
+        
+        grad = param.grad
+        state = self.state[param]
+        
+        if len(state) == 0:
+            state['step'] = 0
+            state['exp_avg'] = torch.zeros_like(param)
+            state['exp_avg_sq'] = torch.zeros_like(param)
+        
+        state['step'] += 1
+        
+        beta1, beta2 = group['betas']
+        
+        # Weight decay
+        param.mul_(1 - group['lr'] * group['weight_decay'])
+        
+        # Update biased first moment estimate
+        state['exp_avg'].mul_(beta1).add_(grad, alpha=1 - beta1)
+        
+        # Update biased second raw moment estimate
+        state['exp_avg_sq'].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        
+        # Bias correction
+        bias_correction1 = 1 - beta1 ** state['step']
+        bias_correction2 = 1 - beta2 ** state['step']
+        
+        step_size = group['lr'] / bias_correction1
+        
+        denom = (state['exp_avg_sq'].sqrt() / bias_correction2 ** 0.5).add_(group['eps'])
+        
+        param.addcdiv_(state['exp_avg'], denom, value=-step_size)
+        
+        self.stats['dense_steps'] += 1
+        self.stats['time_dense'] += time.time() - start
         
     def print_stats(self):
         """Print optimizer statistics."""
