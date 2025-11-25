@@ -145,7 +145,7 @@ def fused_sparse_adamw_kernel(
 
 
 
-    
+
 def triton_sparse_gradient_mask(grad, mask, block_size=32):
     """
     Apply sparse mask to gradient using Triton kernel.
@@ -403,6 +403,20 @@ class SparseAdamW(torch.optim.Optimizer):
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         
+        # SAFETY CHECK
+        if mask.shape != param.shape:
+            print(f"WARNING: Shape mismatch for {param_name}")
+            print(f"  Param: {param.shape}, Mask: {mask.shape}")
+            print(f"  Falling back to dense update")
+            self._dense_step(param, group)
+            return
+        
+        # Check for NaN/Inf in gradients
+        if torch.isnan(grad).any() or torch.isinf(grad).any():
+            print(f"WARNING: NaN/Inf detected in gradient for {param_name}")
+            print(f"  NaN count: {torch.isnan(grad).sum().item()}")
+            print(f"  Inf count: {torch.isinf(grad).sum().item()}")
+        
         state = self.state[param]
         
         # Initialize state if needed
@@ -414,63 +428,72 @@ class SparseAdamW(torch.optim.Optimizer):
         state['step'] += 1
         
         # Apply fused sparse AdamW kernel
-        # This single kernel call does: masking + momentum + parameter update
-        triton_fused_sparse_adamw_step(
-            param=param,
-            grad=grad,
-            mask=mask,
-            exp_avg=state['exp_avg'],
-            exp_avg_sq=state['exp_avg_sq'],
-            lr=group['lr'],
-            beta1=group['betas'][0],
-            beta2=group['betas'][1],
-            eps=group['eps'],
-            weight_decay=group['weight_decay'],
-            step=state['step'],
-            block_size=self.block_size,
-        )
+        try:
+            triton_fused_sparse_adamw_step(
+                param=param,
+                grad=grad,
+                mask=mask,
+                exp_avg=state['exp_avg'],
+                exp_avg_sq=state['exp_avg_sq'],
+                lr=group['lr'],
+                beta1=group['betas'][0],
+                beta2=group['betas'][1],
+                eps=group['eps'],
+                weight_decay=group['weight_decay'],
+                step=state['step'],
+                block_size=self.block_size,
+            )
+        except Exception as e:
+            print(f"ERROR in Triton kernel for {param_name}: {e}")
+            print(f"  Falling back to dense update")
+            self._dense_step(param, group)
+            return
+        
+        # Check for NaN/Inf in updated params
+        if torch.isnan(param).any() or torch.isinf(param).any():
+            print(f"WARNING: NaN/Inf detected in param AFTER update for {param_name}")
         
         self.stats['sparse_steps'] += 1
         self.stats['time_sparse'] += time.time() - start
-    
-    def _dense_step(self, param, group):
-        """Standard dense AdamW update (fallback for non-masked params)."""
-        start = time.time()
         
-        grad = param.grad
-        state = self.state[param]
+        def _dense_step(self, param, group):
+            """Standard dense AdamW update (fallback for non-masked params)."""
+            start = time.time()
+            
+            grad = param.grad
+            state = self.state[param]
+            
+            if len(state) == 0:
+                state['step'] = 0
+                state['exp_avg'] = torch.zeros_like(param)
+                state['exp_avg_sq'] = torch.zeros_like(param)
+            
+            state['step'] += 1
+            
+            beta1, beta2 = group['betas']
+            
+            # Weight decay
+            param.mul_(1 - group['lr'] * group['weight_decay'])
+            
+            # Update biased first moment estimate
+            state['exp_avg'].mul_(beta1).add_(grad, alpha=1 - beta1)
+            
+            # Update biased second raw moment estimate
+            state['exp_avg_sq'].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+            
+            # Bias correction
+            bias_correction1 = 1 - beta1 ** state['step']
+            bias_correction2 = 1 - beta2 ** state['step']
+            
+            step_size = group['lr'] / bias_correction1
+            
+            denom = (state['exp_avg_sq'].sqrt() / bias_correction2 ** 0.5).add_(group['eps'])
+            
+            param.addcdiv_(state['exp_avg'], denom, value=-step_size)
+            
+            self.stats['dense_steps'] += 1
+            self.stats['time_dense'] += time.time() - start
         
-        if len(state) == 0:
-            state['step'] = 0
-            state['exp_avg'] = torch.zeros_like(param)
-            state['exp_avg_sq'] = torch.zeros_like(param)
-        
-        state['step'] += 1
-        
-        beta1, beta2 = group['betas']
-        
-        # Weight decay
-        param.mul_(1 - group['lr'] * group['weight_decay'])
-        
-        # Update biased first moment estimate
-        state['exp_avg'].mul_(beta1).add_(grad, alpha=1 - beta1)
-        
-        # Update biased second raw moment estimate
-        state['exp_avg_sq'].mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
-        
-        # Bias correction
-        bias_correction1 = 1 - beta1 ** state['step']
-        bias_correction2 = 1 - beta2 ** state['step']
-        
-        step_size = group['lr'] / bias_correction1
-        
-        denom = (state['exp_avg_sq'].sqrt() / bias_correction2 ** 0.5).add_(group['eps'])
-        
-        param.addcdiv_(state['exp_avg'], denom, value=-step_size)
-        
-        self.stats['dense_steps'] += 1
-        self.stats['time_dense'] += time.time() - start
-    
     def print_stats(self):
         """Print optimizer statistics."""
         total = self.stats['sparse_steps'] + self.stats['dense_steps']
@@ -739,6 +762,26 @@ def train(
     # Load masks
     mask_manager = SparseMaskManager(mask_path, device=device)
 
+    # DEBUG: Check parameter name matching
+    print("\n" + "="*60)
+    print("PARAMETER NAME MATCHING DEBUG")
+    print("="*60)
+    model_mlp_params = [(name, p.shape) for name, p in model.named_parameters() 
+                        if len(p.shape) == 2 and 'mlp' in name.lower()]
+    print(f"\nModel MLP parameters (first 5):")
+    for name, shape in model_mlp_params[:5]:
+        has_it = mask_manager.has_mask(name)
+        mask = mask_manager.get_mask(name) if has_it else None
+        mask_shape = mask.shape if mask is not None else "N/A"
+        match = "✓ MATCH" if (mask is not None and mask.shape == shape) else "✗ MISMATCH"
+        print(f"  {name}")
+        print(f"    Param shape: {shape}, Mask shape: {mask_shape} - {match}")
+
+    print(f"\nTotal model MLP params: {len(model_mlp_params)}")
+    matches = sum(1 for name, _ in model_mlp_params if mask_manager.has_mask(name))
+    print(f"Matching masks: {matches}/{len(model_mlp_params)}")
+    print("="*60 + "\n")
+
     # Set up DPOConfig
     dpo_config = DPOConfig(
         output_dir=os.path.join(run_dir, "checkpoints"),
@@ -796,7 +839,8 @@ def train(
         train_dataset=dpo_dataset,
         processing_class=tokenizer,
         data_collator=collator,
-        callbacks=[WeightDeltaCallback(run_dir=run_dir)],
+        # commented out for speed and memory
+        # callbacks=[WeightDeltaCallback(run_dir=run_dir)],
         optimizers=(sparse_optimizer, None),  # Inject our custom optimizer
     )
 
@@ -820,10 +864,11 @@ def train(
     sparse_optimizer.print_stats()
     
     # Save final model
-    final_model_path = os.path.join(run_dir, "final_model")
-    model.save_pretrained(final_model_path)
-    tokenizer.save_pretrained(final_model_path)
-    print(f"✓ Final model saved to {final_model_path}")
+    # final_model_path = os.path.join(run_dir, "final_model")
+    # model.save_pretrained(final_model_path)
+    # tokenizer.save_pretrained(final_model_path)
+    # print(f"✓ Final model saved to {final_model_path}")
+    print(f"Skipping final model save to save time and space.")
     
     # Save timing info
     timing_info = {
@@ -931,6 +976,7 @@ Examples:
         block_size=args.block_size,
     )
 
-#     python src/sandbox/Triton_DPO_training.py \
+# python src/sandbox/Triton_DPO_training.py \
 #   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
+#   --mask masks/top_10.0pct_momentum_w25_step25.pt \
 #   --n_steps 10
