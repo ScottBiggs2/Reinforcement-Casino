@@ -275,7 +275,6 @@ def triton_fused_sparse_adamw_step(
 # ============================================================================
 # SPARSE MASK MANAGER
 # ============================================================================
-
 class SparseMaskManager:
     """Manages loading and applying sparse masks to model parameters."""
     
@@ -291,6 +290,11 @@ class SparseMaskManager:
         # Handle case where masks might be wrapped
         if isinstance(self.masks, dict) and 'masks' in self.masks:
             self.masks = self.masks['masks']
+        
+        # DEBUG: Print first few mask keys to understand naming
+        print(f"\nDEBUG - First 3 mask keys:")
+        for i, key in enumerate(list(self.masks.keys())[:3]):
+            print(f"  {key}")
         
         # Move masks to device and compute statistics
         self.mask_stats = {}
@@ -319,9 +323,22 @@ class SparseMaskManager:
         print(f"  Overall sparsity: {total_active/total_params*100:.2f}%")
     
     def get_mask(self, param_name):
-        """Get mask for a parameter, converting naming convention."""
+        """Get mask for a parameter - try direct match first, then with conversions."""
+        # Try direct match (masks may have dots)
+        if param_name in self.masks:
+            return self.masks[param_name]
+        
+        # Try with dots converted to underscores
         mask_key = param_name.replace('.', '_')
-        return self.masks.get(mask_key, None)
+        if mask_key in self.masks:
+            return self.masks[mask_key]
+        
+        # Try with underscores converted to dots (in case param has underscores)
+        mask_key_dots = param_name.replace('_', '.')
+        if mask_key_dots in self.masks:
+            return self.masks[mask_key_dots]
+        
+        return None
     
     def is_mlp_layer(self, param_name):
         """Check if parameter belongs to an MLP layer."""
@@ -329,9 +346,12 @@ class SparseMaskManager:
     
     def has_mask(self, param_name):
         """Check if a mask exists for this parameter."""
-        mask_key = param_name.replace('.', '_')
-        return mask_key in self.masks
-
+        # Try all possible naming conventions
+        return (
+            param_name in self.masks or
+            param_name.replace('.', '_') in self.masks or
+            param_name.replace('_', '.') in self.masks
+        )
 
 # ============================================================================
 # SPARSE ADAMW OPTIMIZER WITH TRITON KERNELS

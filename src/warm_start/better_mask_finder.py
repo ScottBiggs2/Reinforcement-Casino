@@ -410,5 +410,5 @@ if __name__ == "__main__":
 
 # Example usage:
 # python mask_finder_advanced.py --method magnitude --top_k_percent 10.0 --target_step 25
-# python mask_finder_advanced.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 5
+# python src/warm_start/better_mask_finder.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 25
 # python mask_finder_advanced.py --method fisher --top_k_percent 10.0 --target_step 25
