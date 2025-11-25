@@ -43,60 +43,6 @@ BLOCK_SIZE = 32
 # ============================================================================
 # TRITON KERNELS
 # ============================================================================
-
-@triton.jit
-def sparse_gradient_mask_kernel(
-    # Pointers
-    grad_ptr,         # Input: gradient
-    mask_ptr,         # Input: sparse mask
-    output_ptr,       # Output: masked gradient
-    # Dimensions
-    M, N,
-    stride_gm, stride_gn,
-    stride_mm, stride_mn,
-    stride_om, stride_on,
-    # Block size
-    BLOCK_SIZE: tl.constexpr,
-):
-    """
-    Triton kernel for sparse gradient masking.
-    Computes: masked_grad = grad * mask
-    
-    This is faster than PyTorch's elementwise multiplication due to:
-    - Fused memory access patterns
-    - Better cache utilization
-    - Reduced kernel launch overhead
-    """
-    pid = tl.program_id(0)
-    
-    num_blocks_n = tl.cdiv(N, BLOCK_SIZE)
-    block_row = pid // num_blocks_n
-    block_col = pid % num_blocks_n
-    
-    row_start = block_row * BLOCK_SIZE
-    col_start = block_col * BLOCK_SIZE
-    
-    row_offsets = row_start + tl.arange(0, BLOCK_SIZE)
-    col_offsets = col_start + tl.arange(0, BLOCK_SIZE)
-    
-    row_offsets = row_offsets[:, None]
-    col_offsets = col_offsets[None, :]
-    
-    g_offsets = row_offsets * stride_gm + col_offsets * stride_gn
-    m_offsets = row_offsets * stride_mm + col_offsets * stride_mn
-    o_offsets = row_offsets * stride_om + col_offsets * stride_on
-    
-    mask_valid = (row_offsets < M) & (col_offsets < N)
-    
-    g_block = tl.load(grad_ptr + g_offsets, mask=mask_valid, other=0.0)
-    m_block = tl.load(mask_ptr + m_offsets, mask=mask_valid, other=0.0)
-    
-    # Apply mask
-    masked_grad = g_block * m_block
-    
-    tl.store(output_ptr + o_offsets, masked_grad, mask=mask_valid)
-
-
 @triton.jit
 def fused_sparse_adamw_kernel(
     # Pointers
@@ -131,9 +77,6 @@ def fused_sparse_adamw_kernel(
     3. Bias correction
     4. Parameter updates
     5. Weight decay
-    
-    This fusion eliminates intermediate memory transfers and provides
-    significant speedup over separate operations.
     """
     pid = tl.program_id(0)
     
@@ -169,17 +112,22 @@ def fused_sparse_adamw_kernel(
     masked_grad = grad * sparse_mask
     
     # Step 2: AdamW weight decay (applied to all params, not just masked ones)
-    param_decayed = param * (1.0 - lr * weight_decay)
+    decay_factor = 1.0 - lr * weight_decay
+    param_decayed = param * decay_factor
     
     # Step 3: Update biased first moment estimate
-    exp_avg_new = beta1 * exp_avg + (1.0 - beta1) * masked_grad
+    beta1_complement = 1.0 - beta1
+    exp_avg_new = beta1 * exp_avg + beta1_complement * masked_grad
     
     # Step 4: Update biased second moment estimate
-    exp_avg_sq_new = beta2 * exp_avg_sq + (1.0 - beta2) * masked_grad * masked_grad
+    beta2_complement = 1.0 - beta2
+    grad_squared = masked_grad * masked_grad
+    exp_avg_sq_new = beta2 * exp_avg_sq + beta2_complement * grad_squared
     
     # Step 5: Bias correction
-    bias_correction1 = 1.0 - tl.math.pow(beta1, step)
-    bias_correction2 = 1.0 - tl.math.pow(beta2, step)
+    # Use ** operator instead of tl.math.pow
+    bias_correction1 = 1.0 - (beta1 ** step)
+    bias_correction2 = 1.0 - (beta2 ** step)
     
     exp_avg_corrected = exp_avg_new / bias_correction1
     exp_avg_sq_corrected = exp_avg_sq_new / bias_correction2
@@ -195,6 +143,9 @@ def fused_sparse_adamw_kernel(
     tl.store(exp_avg_sq_ptr + m2_offsets, exp_avg_sq_new, mask=mask_valid)
 
 
+
+
+    
 def triton_sparse_gradient_mask(grad, mask, block_size=32):
     """
     Apply sparse mask to gradient using Triton kernel.
