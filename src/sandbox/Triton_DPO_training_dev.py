@@ -707,7 +707,8 @@ def train(
         beta=0.1,
         max_length=1024,
         max_prompt_length=512,
-        bf16=True,  # Match model dtype
+        bf16=True, 
+        fp16=False,
         gradient_checkpointing=True,  # FIX: Enable gradient checkpointing to reduce memory
         dataloader_pin_memory=False,  # FIX: Disable pin_memory to reduce CPU RAM usage
     )
