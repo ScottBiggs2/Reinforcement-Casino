@@ -94,78 +94,162 @@ def compute_absolute_magnitude_mask(delta_log_dir, top_k_percent, target_step=No
     return masks, steps_processed
 
 
+# def compute_momentum_mask(delta_log_dir, top_k_percent, target_step=None, window_size=5):
+#     """
+#     Memory-efficient momentum calculation with streaming.
+#     Keeps only a sliding window of recent deltas in memory.
+#     """
+#     print(f"\n=== Computing Momentum-Based Mask (top {top_k_percent}%, window={window_size}) ===")
+    
+#     # We need to keep a window of recent deltas for momentum calculation
+#     delta_window = []  # List of (step, deltas_dict)
+#     steps_processed = []
+    
+#     for step, deltas in load_deltas_streaming(delta_log_dir, target_step):
+#         steps_processed.append(step)
+#         delta_window.append((step, deltas))
+        
+#         # Keep only the window size
+#         if len(delta_window) > window_size + 1:  # +1 for velocity calculation
+#             del delta_window[0]
+    
+#     if len(steps_processed) < 2:
+#         print("Warning: Need at least 2 steps for momentum calculation. Falling back to magnitude.")
+#         return compute_absolute_magnitude_mask(delta_log_dir, top_k_percent, target_step)
+    
+#     print(f"Computing momentum scores using {len(delta_window)} recent steps...")
+    
+#     # Get parameter names from the last deltas
+#     param_names = list(delta_window[-1][1].keys())
+    
+#     # Compute momentum scores
+#     momentum_scores = {}
+    
+#     for name in param_names:
+#         # Collect deltas for this parameter from the window
+#         param_deltas = []
+#         for step, deltas in delta_window:
+#             if name in deltas:
+#                 param_deltas.append(deltas[name])
+        
+#         if len(param_deltas) < 2:
+#             # Not enough history, use absolute magnitude from last step
+#             momentum_scores[name] = delta_window[-1][1][name].abs()
+#             continue
+        
+#         # Compute velocities (differences between consecutive deltas)
+#         velocities = []
+#         for i in range(1, len(param_deltas)):
+#             velocities.append(param_deltas[i] - param_deltas[i-1])
+        
+#         if len(velocities) < 1:
+#             momentum_scores[name] = param_deltas[-1].abs()
+#             continue
+        
+#         # Stack velocities
+#         vel_stack = torch.stack(velocities)  # [steps, *param_shape]
+        
+#         # Compute momentum: magnitude of mean velocity weighted by consistency
+#         mean_velocity = vel_stack.mean(dim=0)
+#         std_velocity = vel_stack.std(dim=0) + 1e-8
+        
+#         # Momentum score: high if changes are large and consistent
+#         consistency = mean_velocity.abs() / std_velocity
+#         magnitude = mean_velocity.abs()
+        
+#         # Combined score
+#         momentum_scores[name] = magnitude * (1 + consistency)
+    
+#     # Create masks based on momentum scores
+#     masks = {}
+#     total_params = 0
+#     total_masked = 0
+    
+#     for name, score in momentum_scores.items():
+#         flat_scores = score.flatten()
+#         k = max(1, int(top_k_percent / 100.0 * flat_scores.numel()))
+        
+#         if k >= flat_scores.numel():
+#             threshold = 0.0
+#         else:
+#             threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
+        
+#         mask = (score > threshold).float()
+#         masks[name] = mask
+        
+#         total_params += mask.numel()
+#         total_masked += mask.sum().item()
+    
+#     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
+#     print(f"Actual sparsity: {actual_sparsity:.2f}%")
+    
+#     return masks, steps_processed
+
 def compute_momentum_mask(delta_log_dir, top_k_percent, target_step=None, window_size=5):
     """
-    Memory-efficient momentum calculation with streaming.
-    Keeps only a sliding window of recent deltas in memory.
+    Ultra memory-efficient momentum calculation.
+    Processes parameters one at a time instead of all at once.
     """
     print(f"\n=== Computing Momentum-Based Mask (top {top_k_percent}%, window={window_size}) ===")
     
-    # We need to keep a window of recent deltas for momentum calculation
-    delta_window = []  # List of (step, deltas_dict)
-    steps_processed = []
+    # First pass: collect all steps and parameter names
+    steps_and_files = []
+    param_names = None
     
     for step, deltas in load_deltas_streaming(delta_log_dir, target_step):
-        steps_processed.append(step)
-        delta_window.append((step, deltas))
-        
-        # Keep only the window size
-        if len(delta_window) > window_size + 1:  # +1 for velocity calculation
-            del delta_window[0]
+        if param_names is None:
+            param_names = list(deltas.keys())
+        steps_and_files.append(step)
+        del deltas  # Don't keep in memory
     
-    if len(steps_processed) < 2:
-        print("Warning: Need at least 2 steps for momentum calculation. Falling back to magnitude.")
+    if len(steps_and_files) < 2:
+        print("Warning: Need at least 2 steps for momentum. Falling back to magnitude.")
         return compute_absolute_magnitude_mask(delta_log_dir, top_k_percent, target_step)
     
-    print(f"Computing momentum scores using {len(delta_window)} recent steps...")
+    print(f"Found {len(steps_and_files)} steps, processing {len(param_names)} parameters...")
     
-    # Get parameter names from the last deltas
-    param_names = list(delta_window[-1][1].keys())
-    
-    # Compute momentum scores
-    momentum_scores = {}
-    
-    for name in param_names:
-        # Collect deltas for this parameter from the window
-        param_deltas = []
-        for step, deltas in delta_window:
-            if name in deltas:
-                param_deltas.append(deltas[name])
-        
-        if len(param_deltas) < 2:
-            # Not enough history, use absolute magnitude from last step
-            momentum_scores[name] = delta_window[-1][1][name].abs()
-            continue
-        
-        # Compute velocities (differences between consecutive deltas)
-        velocities = []
-        for i in range(1, len(param_deltas)):
-            velocities.append(param_deltas[i] - param_deltas[i-1])
-        
-        if len(velocities) < 1:
-            momentum_scores[name] = param_deltas[-1].abs()
-            continue
-        
-        # Stack velocities
-        vel_stack = torch.stack(velocities)  # [steps, *param_shape]
-        
-        # Compute momentum: magnitude of mean velocity weighted by consistency
-        mean_velocity = vel_stack.mean(dim=0)
-        std_velocity = vel_stack.std(dim=0) + 1e-8
-        
-        # Momentum score: high if changes are large and consistent
-        consistency = mean_velocity.abs() / std_velocity
-        magnitude = mean_velocity.abs()
-        
-        # Combined score
-        momentum_scores[name] = magnitude * (1 + consistency)
-    
-    # Create masks based on momentum scores
+    # Process each parameter separately
     masks = {}
     total_params = 0
     total_masked = 0
     
-    for name, score in momentum_scores.items():
+    for param_idx, param_name in enumerate(param_names):
+        if param_idx % 10 == 0:
+            print(f"Processing parameter {param_idx+1}/{len(param_names)}: {param_name}")
+        
+        # Load just this parameter's deltas from all steps
+        param_deltas = []
+        for step in steps_and_files:
+            delta_file = os.path.join(delta_log_dir, f"deltas_step_{step}.pt")
+            deltas = torch.load(delta_file, map_location='cpu')
+            if param_name in deltas:
+                param_deltas.append(deltas[param_name])
+            del deltas  # Free immediately
+        
+        if len(param_deltas) < 2:
+            # Use magnitude from last available delta
+            score = param_deltas[-1].abs() if param_deltas else torch.zeros(1)
+        else:
+            # Use only recent window
+            recent_deltas = param_deltas[-window_size-1:]
+            
+            # Compute velocities
+            velocities = []
+            for i in range(1, len(recent_deltas)):
+                velocities.append(recent_deltas[i] - recent_deltas[i-1])
+            
+            if velocities:
+                vel_stack = torch.stack(velocities)
+                mean_velocity = vel_stack.mean(dim=0)
+                std_velocity = vel_stack.std(dim=0) + 1e-8
+                
+                consistency = mean_velocity.abs() / std_velocity
+                magnitude = mean_velocity.abs()
+                score = magnitude * (1 + consistency)
+            else:
+                score = recent_deltas[-1].abs()
+        
+        # Create mask for this parameter
         flat_scores = score.flatten()
         k = max(1, int(top_k_percent / 100.0 * flat_scores.numel()))
         
@@ -175,15 +259,18 @@ def compute_momentum_mask(delta_log_dir, top_k_percent, target_step=None, window
             threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
         
         mask = (score > threshold).float()
-        masks[name] = mask
+        masks[param_name] = mask
         
         total_params += mask.numel()
         total_masked += mask.sum().item()
+        
+        # Clean up
+        del param_deltas, score, mask
     
     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
     print(f"Actual sparsity: {actual_sparsity:.2f}%")
     
-    return masks, steps_processed
+    return masks, steps_and_files
 
 
 def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_step=None):
