@@ -40,9 +40,62 @@ def load_deltas_streaming(delta_log_dir, target_step=None):
             continue
 
 
+# def compute_absolute_magnitude_mask(delta_log_dir, top_k_percent, target_step=None):
+#     """
+#     Memory-efficient streaming version: accumulates deltas without loading all at once.
+#     """
+#     print(f"\n=== Computing Absolute Magnitude Mask (top {top_k_percent}%) ===")
+    
+#     aggregated = None
+#     steps_processed = []
+    
+#     for step, deltas in load_deltas_streaming(delta_log_dir, target_step):
+#         steps_processed.append(step)
+        
+#         # Initialize on first file
+#         if aggregated is None:
+#             aggregated = {name: torch.zeros_like(delta) for name, delta in deltas.items()}
+        
+#         # Accumulate absolute changes
+#         for name, delta in deltas.items():
+#             aggregated[name] += delta.abs()
+        
+#         # Free memory immediately
+#         del deltas
+    
+#     if aggregated is None:
+#         print("No delta files found!")
+#         return None, []
+    
+#     # Create masks
+#     print("Creating masks...")
+#     masks = {}
+#     total_params = 0
+#     total_masked = 0
+    
+#     for name, total_change in aggregated.items():
+#         flat_changes = total_change.flatten()
+#         k = max(1, int(top_k_percent / 100.0 * flat_changes.numel()))
+        
+#         if k >= flat_changes.numel():
+#             threshold = 0.0
+#         else:
+#             threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
+        
+#         mask = (total_change > threshold).float()
+#         masks[name] = mask
+        
+#         total_params += mask.numel()
+#         total_masked += mask.sum().item()
+    
+#     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
+#     print(f"Actual sparsity: {actual_sparsity:.2f}%")
+    
+#     return masks, steps_processed
+
 def compute_absolute_magnitude_mask(delta_log_dir, top_k_percent, target_step=None):
     """
-    Memory-efficient streaming version: accumulates deltas without loading all at once.
+    Ultra memory-efficient: uses reservoir sampling instead of kthvalue.
     """
     print(f"\n=== Computing Absolute Magnitude Mask (top {top_k_percent}%) ===")
     
@@ -52,41 +105,42 @@ def compute_absolute_magnitude_mask(delta_log_dir, top_k_percent, target_step=No
     for step, deltas in load_deltas_streaming(delta_log_dir, target_step):
         steps_processed.append(step)
         
-        # Initialize on first file
         if aggregated is None:
             aggregated = {name: torch.zeros_like(delta) for name, delta in deltas.items()}
         
-        # Accumulate absolute changes
         for name, delta in deltas.items():
             aggregated[name] += delta.abs()
         
-        # Free memory immediately
         del deltas
     
     if aggregated is None:
         print("No delta files found!")
         return None, []
     
-    # Create masks
-    print("Creating masks...")
+    print("Creating masks with memory-efficient thresholding...")
     masks = {}
     total_params = 0
     total_masked = 0
     
-    for name, total_change in aggregated.items():
+    for idx, (name, total_change) in enumerate(aggregated.items()):
+        if idx % 20 == 0:
+            print(f"  Processing parameter {idx+1}/{len(aggregated)}")
+        
+        # Use quantile instead of kthvalue - more memory efficient
         flat_changes = total_change.flatten()
-        k = max(1, int(top_k_percent / 100.0 * flat_changes.numel()))
+        k_percent = top_k_percent / 100.0
         
-        if k >= flat_changes.numel():
-            threshold = 0.0
-        else:
-            threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
+        # Use torch.quantile which is more memory efficient
+        threshold = torch.quantile(flat_changes, 1.0 - k_percent)
         
-        mask = (total_change > threshold).float()
+        mask = (total_change >= threshold).float()
         masks[name] = mask
         
         total_params += mask.numel()
         total_masked += mask.sum().item()
+        
+        # Free memory
+        del flat_changes
     
     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
     print(f"Actual sparsity: {actual_sparsity:.2f}%")

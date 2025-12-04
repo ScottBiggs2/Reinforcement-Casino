@@ -24,8 +24,15 @@ python src/full_training/DPO_train.py
 ```
 
 Mask finding (example kwargs): 
+
+Momentum (broken for now)
 ```bash
 python src/warm_start/better_mask_finder.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 25
+```
+
+Magnitude: 
+```bash 
+python src/warm_start/better_mask_finder.py --method magnitude --top_k_percent 10.0 --target_step 25
 ```
 
 Triton Acceleration (example kwargs): 
