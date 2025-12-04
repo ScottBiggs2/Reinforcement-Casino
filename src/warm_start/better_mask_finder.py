@@ -7,6 +7,7 @@ import json
 def load_deltas_streaming(delta_log_dir, target_step=None):
     """
     Generator that yields deltas one at a time to save memory.
+    IN CHRONOLOGICAL ORDER by step number.
     
     Yields:
         tuple: (step, deltas_dict)
@@ -14,11 +15,16 @@ def load_deltas_streaming(delta_log_dir, target_step=None):
     print(f"Streaming deltas from: {delta_log_dir}")
     
     # Find all delta files
-    delta_files = sorted([f for f in os.listdir(delta_log_dir) if f.startswith("deltas_step_") and f.endswith(".pt")])
+    delta_files = [f for f in os.listdir(delta_log_dir) if f.startswith("deltas_step_") and f.endswith(".pt")]
+    
+    # Sort by step number, not filename
+    def extract_step(filename):
+        return int(filename.split("_")[-1].replace(".pt", ""))
+    
+    delta_files = sorted(delta_files, key=extract_step)
     
     for delta_file in delta_files:
-        # Extract step number
-        step = int(delta_file.split("_")[-1].replace(".pt", ""))
+        step = extract_step(delta_file)
         
         # Skip if beyond target step
         if target_step is not None and step > target_step:
