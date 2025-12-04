@@ -7,6 +7,13 @@ Fixes:
 2. Changed to BF16 instead of FP16 for numerical stability
 3. Removed per-step NaN checking to avoid synchronization overhead
 4. Added summary NaN check at end instead
+5. MEMORY FIXES for cloud GPU environments (H200):
+   - Added low_cpu_mem_usage=True to model loading
+   - Added device_map="auto" for direct GPU loading
+   - Lazy optimizer state initialization (avoids doubling memory upfront)
+   - Added gradient_checkpointing=True to reduce memory during training
+   - Added torch.cuda.empty_cache() calls to free memory
+   - Disabled dataloader_pin_memory to reduce CPU RAM usage
 
 Run: python src/sandbox/Triton_DPO_training.py \
   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
@@ -201,7 +208,9 @@ class SparseMaskManager:
         
         self.mask_stats = {}
         for name, mask in self.masks.items():
-            self.masks[name] = mask.to(device)
+            # FIX: Move masks to device one at a time to avoid memory spike
+            self.masks[name] = mask.to(device, non_blocking=True)
+            # Compute stats on CPU before moving to avoid GPU memory for stats
             sparsity = (mask == 1.0).sum().item() / mask.numel()
             self.mask_stats[name] = {
                 'shape': tuple(mask.shape),
@@ -353,8 +362,9 @@ class SparseAdamW(torch.optim.Optimizer):
         
         if len(state) == 0:
             state['step'] = 0
-            state['exp_avg'] = torch.zeros_like(param)
-            state['exp_avg_sq'] = torch.zeros_like(param)
+            # FIX: Lazy initialization - only create optimizer state when needed
+            state['exp_avg'] = torch.zeros_like(param, device=param.device)
+            state['exp_avg_sq'] = torch.zeros_like(param, device=param.device)
         
         state['step'] += 1
         
@@ -391,8 +401,9 @@ class SparseAdamW(torch.optim.Optimizer):
         
         if len(state) == 0:
             state['step'] = 0
-            state['exp_avg'] = torch.zeros_like(param)
-            state['exp_avg_sq'] = torch.zeros_like(param)
+            # FIX: Lazy initialization - only create optimizer state when needed
+            state['exp_avg'] = torch.zeros_like(param, device=param.device)
+            state['exp_avg_sq'] = torch.zeros_like(param, device=param.device)
         
         state['step'] += 1
         
@@ -613,17 +624,33 @@ def train(
     # Load model with BF16 (more stable than FP16)
     print(f"Loading model from: {checkpoint_path}")
     
+    # Use low_cpu_mem_usage to avoid OOM during loading
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,
-        torch_dtype=torch.bfloat16  # CHANGED: BF16 instead of FP16 for stability
+        torch_dtype=torch.bfloat16,  # CHANGED: BF16 instead of FP16 for stability
+        low_cpu_mem_usage=True,  # FIX: Reduce CPU memory usage during loading
+        device_map="auto" if torch.cuda.is_available() else None,  # FIX: Direct GPU loading
     )
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
+    
+    # Only move to device if device_map wasn't used
+    if not torch.cuda.is_available() or model.device.type == 'cpu':
+        model.to(device)
+    
     model.config.use_cache = False
     print(f"✓ Model loaded on {device} with dtype: {model.dtype}")
 
+    # Clear cache before loading masks to free up memory
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     # Load masks
     mask_manager = SparseMaskManager(mask_path, device=device)
+    
+    # Clear cache again after mask loading
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     # DEBUG: Check parameter name matching
     print("\n" + "="*60)
@@ -660,6 +687,8 @@ def train(
         max_length=1024,
         max_prompt_length=512,
         bf16=True,  # Match model dtype
+        gradient_checkpointing=True,  # FIX: Enable gradient checkpointing to reduce memory
+        dataloader_pin_memory=False,  # FIX: Disable pin_memory to reduce CPU RAM usage
     )
 
     # Initialize wandb

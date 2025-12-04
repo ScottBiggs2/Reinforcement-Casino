@@ -16,12 +16,17 @@ def load_deltas_from_log_dir(delta_log_dir, target_step=None):
     
     deltas_by_step = {}
     
-    # Find all delta files
-    delta_files = sorted([f for f in os.listdir(delta_log_dir) if f.startswith("deltas_step_") and f.endswith(".pt")])
+    # Find all delta files and sort by step number
+    delta_files = [f for f in os.listdir(delta_log_dir) if f.startswith("deltas_step_") and f.endswith(".pt")]
+    
+    # Sort by step number, not filename
+    def extract_step(filename):
+        return int(filename.split("_")[-1].replace(".pt", ""))
+    
+    delta_files = sorted(delta_files, key=extract_step)
     
     for delta_file in delta_files:
-        # Extract step number
-        step = int(delta_file.split("_")[-1].replace(".pt", ""))
+        step = extract_step(delta_file)
         
         # Skip if beyond target step
         if target_step is not None and step > target_step:
@@ -43,41 +48,53 @@ def load_deltas_from_log_dir(delta_log_dir, target_step=None):
     return deltas_by_step
 
 
-def compute_absolute_magnitude_mask(deltas_by_step, top_k_percent):
+def compute_absolute_magnitude_mask(deltas_by_step, top_k_percent, device='cuda'):
     """
-    Original approach: Sum of absolute deltas across all steps.
-    Simple but effective baseline.
+    GPU-accelerated magnitude mask computation.
     """
-    print(f"\n=== Computing Absolute Magnitude Mask (top {top_k_percent}%) ===")
+    print(f"\n=== Computing Absolute Magnitude Mask (top {top_k_percent}%) on {device} ===")
     
     aggregated = defaultdict(lambda: None)
     
     # Aggregate absolute changes
     for step, deltas in deltas_by_step.items():
+        print(f"  Processing step {step}...")
         for name, delta in deltas.items():
             if aggregated[name] is None:
                 aggregated[name] = torch.zeros_like(delta)
             aggregated[name] += delta.abs()
     
-    # Create masks
+    # Create masks ON GPU
+    print("Creating masks on GPU...")
     masks = {}
     total_params = 0
     total_masked = 0
     
-    for name, total_change in aggregated.items():
-        flat_changes = total_change.flatten()
+    for idx, (name, total_change) in enumerate(aggregated.items()):
+        if idx % 20 == 0:
+            print(f"  Creating mask {idx+1}/{len(aggregated)}")
+        
+        # Move to GPU for fast sorting
+        total_change_gpu = total_change.to(device)
+        flat_changes = total_change_gpu.flatten()
+        
         k = max(1, int(top_k_percent / 100.0 * flat_changes.numel()))
         
         if k >= flat_changes.numel():
             threshold = 0.0
         else:
+            # kthvalue is FAST on GPU
             threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
         
-        mask = (total_change > threshold).float()
+        mask = (total_change_gpu >= threshold).float().cpu()  # Move back to CPU for storage
         masks[name] = mask
         
         total_params += mask.numel()
         total_masked += mask.sum().item()
+        
+        # Clean up GPU memory
+        del total_change_gpu, flat_changes
+        torch.cuda.empty_cache()
     
     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
     print(f"Actual sparsity: {actual_sparsity:.2f}%")
@@ -85,28 +102,20 @@ def compute_absolute_magnitude_mask(deltas_by_step, top_k_percent):
     return masks
 
 
-def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5):
+def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5, device='cuda'):
     """
-    Momentum-based approach: Identifies weights with consistent change direction.
-    
-    Computes a momentum score for each weight based on:
-    - Direction consistency (are changes in the same direction?)
-    - Magnitude of recent changes
-    
-    Args:
-        deltas_by_step: Dictionary of deltas by step
-        top_k_percent: Percentage of weights to keep
-        window_size: Number of recent steps to consider for momentum
+    GPU-accelerated momentum mask computation.
     """
-    print(f"\n=== Computing Momentum-Based Mask (top {top_k_percent}%, window={window_size}) ===")
+    print(f"\n=== Computing Momentum-Based Mask (top {top_k_percent}%, window={window_size}) on {device} ===")
     
     sorted_steps = sorted(deltas_by_step.keys())
     
     if len(sorted_steps) < 2:
         print("Warning: Need at least 2 steps for momentum calculation. Falling back to magnitude.")
-        return compute_absolute_magnitude_mask(deltas_by_step, top_k_percent)
+        return compute_absolute_magnitude_mask(deltas_by_step, top_k_percent, device)
     
     # Compute velocity (change between consecutive steps)
+    print("Computing velocities...")
     velocities_by_step = {}
     for i in range(1, len(sorted_steps)):
         prev_step = sorted_steps[i-1]
@@ -115,15 +124,18 @@ def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5):
         velocities = {}
         for name in deltas_by_step[curr_step].keys():
             if name in deltas_by_step[prev_step]:
-                # Velocity = current delta - previous delta
                 velocities[name] = deltas_by_step[curr_step][name] - deltas_by_step[prev_step][name]
         
         velocities_by_step[curr_step] = velocities
     
     # Compute momentum scores
+    print("Computing momentum scores on GPU...")
     momentum_scores = {}
     
-    for name in deltas_by_step[sorted_steps[-1]].keys():
+    for idx, name in enumerate(deltas_by_step[sorted_steps[-1]].keys()):
+        if idx % 20 == 0:
+            print(f"  Processing parameter {idx+1}/{len(deltas_by_step[sorted_steps[-1]])}")
+        
         # Get recent velocities
         recent_velocities = []
         for step in sorted_steps[-window_size:]:
@@ -131,32 +143,37 @@ def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5):
                 recent_velocities.append(velocities_by_step[step][name])
         
         if len(recent_velocities) < 2:
-            # Not enough history, use absolute magnitude
             momentum_scores[name] = deltas_by_step[sorted_steps[-1]][name].abs()
             continue
         
-        # Stack velocities
-        vel_stack = torch.stack(recent_velocities)  # [steps, *param_shape]
+        # Stack and compute ON GPU
+        vel_stack = torch.stack(recent_velocities).to(device)
         
-        # Compute momentum: magnitude of mean velocity weighted by consistency
         mean_velocity = vel_stack.mean(dim=0)
         std_velocity = vel_stack.std(dim=0) + 1e-8
         
-        # Momentum score: high if changes are large and consistent
-        # consistency = magnitude / variability
         consistency = mean_velocity.abs() / std_velocity
         magnitude = mean_velocity.abs()
         
-        # Combined score (you can tune this)
-        momentum_scores[name] = magnitude * (1 + consistency)
+        score = (magnitude * (1 + consistency)).cpu()  # Move back to CPU
+        momentum_scores[name] = score
+        
+        del vel_stack
+        torch.cuda.empty_cache()
     
-    # Create masks based on momentum scores
+    # Create masks ON GPU
+    print("Creating masks on GPU...")
     masks = {}
     total_params = 0
     total_masked = 0
     
-    for name, score in momentum_scores.items():
-        flat_scores = score.flatten()
+    for idx, (name, score) in enumerate(momentum_scores.items()):
+        if idx % 20 == 0:
+            print(f"  Creating mask {idx+1}/{len(momentum_scores)}")
+        
+        score_gpu = score.to(device)
+        flat_scores = score_gpu.flatten()
+        
         k = max(1, int(top_k_percent / 100.0 * flat_scores.numel()))
         
         if k >= flat_scores.numel():
@@ -164,11 +181,14 @@ def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5):
         else:
             threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
         
-        mask = (score > threshold).float()
+        mask = (score_gpu >= threshold).float().cpu()
         masks[name] = mask
         
         total_params += mask.numel()
         total_masked += mask.sum().item()
+        
+        del score_gpu, flat_scores
+        torch.cuda.empty_cache()
     
     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
     print(f"Actual sparsity: {actual_sparsity:.2f}%")
@@ -176,18 +196,11 @@ def compute_momentum_mask(deltas_by_step, top_k_percent, window_size=5):
     return masks
 
 
-def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_step=None):
+def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_step=None, device='cuda'):
     """
-    Fisher Information-based approach: Identifies weights that are most sensitive
-    to the loss (i.e., where small changes have large effects on the loss).
-    
-    Note: True Fisher requires gradients, which we don't have in the delta files.
-    This approximates Fisher using the squared gradient proxy from delta magnitudes
-    and assumes the deltas are proportional to gradients.
-    
-    For a better Fisher approximation, you'd need to save gradients during training.
+    GPU-accelerated Fisher approximation.
     """
-    print(f"\n=== Computing Fisher-Approximation Mask (top {top_k_percent}%) ===")
+    print(f"\n=== Computing Fisher-Approximation Mask (top {top_k_percent}%) on {device} ===")
     print("Note: This is an approximation since we don't have true gradients.")
     
     # Load base state
@@ -204,12 +217,13 @@ def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_st
         return None
     
     # Approximate Fisher: F ≈ E[g²] where g is gradient
-    # We approximate gradient as delta / learning_rate
-    # Since we don't have LR easily, we use normalized deltas
-    
+    print("Computing Fisher scores on GPU...")
     fisher_scores = {}
     
-    for name in base_state.keys():
+    for idx, name in enumerate(base_state.keys()):
+        if idx % 20 == 0:
+            print(f"  Processing parameter {idx+1}/{len(base_state)}")
+        
         # Collect all deltas for this parameter
         deltas = []
         for step, step_deltas in deltas_by_step.items():
@@ -220,21 +234,30 @@ def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_st
             fisher_scores[name] = torch.zeros_like(base_state[name])
             continue
         
-        # Stack deltas and compute variance (proxy for Fisher)
-        delta_stack = torch.stack(deltas)
+        # Stack deltas and compute variance ON GPU
+        delta_stack = torch.stack(deltas).to(device)
         
         # Fisher ≈ variance of pseudo-gradients
-        fisher_approx = delta_stack.var(dim=0) + delta_stack.mean(dim=0).abs()
+        fisher_approx = (delta_stack.var(dim=0) + delta_stack.mean(dim=0).abs()).cpu()
         
         fisher_scores[name] = fisher_approx
+        
+        del delta_stack
+        torch.cuda.empty_cache()
     
-    # Create masks
+    # Create masks ON GPU
+    print("Creating masks on GPU...")
     masks = {}
     total_params = 0
     total_masked = 0
     
-    for name, score in fisher_scores.items():
-        flat_scores = score.flatten()
+    for idx, (name, score) in enumerate(fisher_scores.items()):
+        if idx % 20 == 0:
+            print(f"  Creating mask {idx+1}/{len(fisher_scores)}")
+        
+        score_gpu = score.to(device)
+        flat_scores = score_gpu.flatten()
+        
         k = max(1, int(top_k_percent / 100.0 * flat_scores.numel()))
         
         if k >= flat_scores.numel():
@@ -242,11 +265,14 @@ def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_st
         else:
             threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
         
-        mask = (score > threshold).float()
+        mask = (score_gpu >= threshold).float().cpu()
         masks[name] = mask
         
         total_params += mask.numel()
         total_masked += mask.sum().item()
+        
+        del score_gpu, flat_scores
+        torch.cuda.empty_cache()
     
     actual_sparsity = (total_masked / total_params * 100) if total_params > 0 else 0
     print(f"Actual sparsity: {actual_sparsity:.2f}%")
@@ -302,6 +328,13 @@ def main(args):
     # Create output directory
     os.makedirs("masks", exist_ok=True)
     
+    # Check GPU availability
+    device = 'cuda' if torch.cuda.is_available() and not args.cpu else 'cpu'
+    print(f"\nUsing device: {device}")
+    if device == 'cuda':
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+    
     # Load deltas
     deltas_by_step = load_deltas_from_log_dir(delta_log_dir, args.target_step)
     if not deltas_by_step:
@@ -312,15 +345,15 @@ def main(args):
     
     # Compute masks based on method
     if args.method == "magnitude":
-        masks = compute_absolute_magnitude_mask(deltas_by_step, args.top_k_percent)
+        masks = compute_absolute_magnitude_mask(deltas_by_step, args.top_k_percent, device)
         method_suffix = "magnitude"
     
     elif args.method == "momentum":
-        masks = compute_momentum_mask(deltas_by_step, args.top_k_percent, args.momentum_window)
+        masks = compute_momentum_mask(deltas_by_step, args.top_k_percent, args.momentum_window, device)
         method_suffix = f"momentum_w{args.momentum_window}"
     
     elif args.method == "fisher":
-        masks = compute_fisher_mask(delta_log_dir, base_state_path, args.top_k_percent, args.target_step)
+        masks = compute_fisher_mask(delta_log_dir, base_state_path, args.top_k_percent, args.target_step, device)
         method_suffix = "fisher"
     
     else:
@@ -346,6 +379,7 @@ def main(args):
         "target_step": args.target_step,
         "num_steps_used": len(deltas_by_step),
         "steps": sorted(deltas_by_step.keys()),
+        "device": device,
     }
     
     if args.method == "momentum":
@@ -358,7 +392,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate sparse training masks using various methods"
+        description="Generate sparse training masks using various methods (GPU-accelerated)"
     )
     parser.add_argument(
         "--delta_log_dir",
@@ -397,12 +431,18 @@ if __name__ == "__main__":
         default=None,
         help="Output file path (default: auto-generated in masks/ directory)"
     )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU execution (default: use GPU if available)"
+    )
     
     args = parser.parse_args()
     main(args)
 
 
 # Example usage:
-# python mask_finder_advanced.py --method magnitude --top_k_percent 10.0 --target_step 25
-# python mask_finder_advanced.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 5
-# python mask_finder_advanced.py --method fisher --top_k_percent 10.0 --target_step 25
+# python better_mask_finder.py --method magnitude --top_k_percent 10.0 --target_step 25
+# python better_mask_finder.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 5
+# python better_mask_finder.py --method fisher --top_k_percent 10.0 --target_step 25
+# python better_mask_finder.py --method magnitude --top_k_percent 10.0 --target_step 25 --cpu  # Force CPU
