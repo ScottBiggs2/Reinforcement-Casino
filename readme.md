@@ -43,6 +43,7 @@ python src/sandbox/Triton_DPO_training_dev.py \
   --n_steps 10
 ```
 
+Dev
 ```bash
 python src/sandbox/Triton_DPO_training_dev.py \
   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
@@ -50,4 +51,11 @@ python src/sandbox/Triton_DPO_training_dev.py \
   --n_steps 10
 ```
 
+Main
+```bash
+python src/sandbox/Triton_DPO_training.py \
+  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
+  --mask masks/top_10.0pct_magnitude_step25.pt \
+  --n_steps 10
+```
 

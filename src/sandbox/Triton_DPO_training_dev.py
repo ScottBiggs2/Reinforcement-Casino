@@ -14,6 +14,11 @@ Fixes:
    - Added gradient_checkpointing=True to reduce memory during training
    - Added torch.cuda.empty_cache() calls to free memory
    - Disabled dataloader_pin_memory to reduce CPU RAM usage
+6. DPOTrainer initialization fixes (matching working baseline):
+   - Removed ref_model parameter (was causing internal copy)
+   - Removed processing_class parameter
+   - Set optimizer after trainer initialization
+   - Pre-load model, dataset, tokenizer to avoid re-loading
 
 Run: python src/sandbox/Triton_DPO_training.py \
   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
@@ -44,7 +49,6 @@ MODEL_NAME = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w25_step25.pt"
-DEFAULT_CHECKPOINT = "google/gemma-3-270m-it"
 BLOCK_SIZE = 32
 
 
@@ -590,56 +594,73 @@ def train(
     subset_size=10,
     run_name="triton_sparse_dpo",
     mlp_only=True,
-    block_size=BLOCK_SIZE
+    block_size=BLOCK_SIZE,
+    model=None,  # NEW: Allow passing pre-loaded model
+    dpo_dataset=None,  # NEW: Allow passing pre-loaded dataset
+    tokenizer=None,  # NEW: Allow passing pre-loaded tokenizer
 ):
     """Train with full Triton-accelerated sparse training."""
     
+    # Determine model source
     if checkpoint_path is None:
-        checkpoint_path = DEFAULT_CHECKPOINT
-        print(f"No checkpoint specified, using base model: {checkpoint_path}")
+        checkpoint_path = model_name  # Load from HuggingFace
+        print(f"No checkpoint specified, using base model from HF: {checkpoint_path}")
+    else:
+        print(f"Using checkpoint path: {checkpoint_path}")
     
     run_dir = make_run_dir(base_dir="results", run_name=run_name)
     print(f"\n{'='*60}")
     print(f"TRITON-ACCELERATED SPARSE DPO TRAINING")
     print(f"{'='*60}")
     print(f"Run directory: {run_dir}")
-    print(f"Checkpoint: {checkpoint_path}")
+    print(f"Model source: {checkpoint_path}")
     print(f"Mask path: {mask_path}")
     print(f"Steps: {n_steps}")
     print(f"Learning rate: {learning_rate}")
     print(f"{'='*60}\n")
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "right"
+    # Load or reuse tokenizer
+    if tokenizer is None:
+        print("Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.padding_side = "right"
+        print("✓ Tokenizer loaded")
+    else:
+        print("✓ Using pre-loaded tokenizer")
 
-    # Load dataset
-    dpo_dataset = load_dpo_dataset(subset_size=subset_size)
+    # Load or reuse dataset
+    if dpo_dataset is None:
+        print("Loading dataset...")
+        dpo_dataset = load_dpo_dataset(subset_size=subset_size)
+    else:
+        print(f"✓ Using pre-loaded dataset ({len(dpo_dataset)} examples)")
     
     def collator(examples):
         return dpo_collator_fn(examples, tokenizer)
 
-    # Load model with BF16 (more stable than FP16)
-    print(f"Loading model from: {checkpoint_path}")
-    
-    # Use low_cpu_mem_usage to avoid OOM during loading
+    # Load or reuse model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        torch_dtype=torch.bfloat16,  # CHANGED: BF16 instead of FP16 for stability
-        low_cpu_mem_usage=True,  # FIX: Reduce CPU memory usage during loading
-        device_map="auto" if torch.cuda.is_available() else None,  # FIX: Direct GPU loading
-    )
-    
-    # Only move to device if device_map wasn't used
-    if not torch.cuda.is_available() or model.device.type == 'cpu':
-        model.to(device)
+    if model is None:
+        print(f"Loading model from: {checkpoint_path}")
+        model = AutoModelForCausalLM.from_pretrained(
+            checkpoint_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            device_map="auto" if torch.cuda.is_available() else None,
+        )
+        
+        # Only move to device if device_map wasn't used
+        if not torch.cuda.is_available() or model.device.type == 'cpu':
+            model.to(device)
+        
+        print(f"✓ Model loaded on {device} with dtype: {model.dtype}")
+    else:
+        print(f"✓ Using pre-loaded model on {model.device} with dtype: {model.dtype}")
     
     model.config.use_cache = False
-    print(f"✓ Model loaded on {device} with dtype: {model.dtype}")
 
     # Clear cache before loading masks to free up memory
     if torch.cuda.is_available():
@@ -724,17 +745,21 @@ def train(
         mlp_only=mlp_only,
     )
 
-    # Set up DPOTrainer
+    # Set up DPOTrainer - MATCH BASELINE EXACTLY
     print("Initializing DPOTrainer with Triton-accelerated SparseAdamW...")
     dpo_trainer = DPOTrainer(
         model=model,
-        ref_model=None,
+        # DON'T specify ref_model - let it default (avoids copy)
         args=dpo_config,
         train_dataset=dpo_dataset,
-        processing_class=tokenizer,
+        eval_dataset=None,
         data_collator=collator,
-        optimizers=(sparse_optimizer, None),
+        # DON'T specify processing_class or optimizers here
     )
+    
+    # Set optimizer AFTER initialization to avoid memory spike
+    print("Attaching sparse optimizer to trainer...")
+    dpo_trainer.optimizer = sparse_optimizer
 
     # Train
     print(f"\n{'='*60}")
@@ -781,19 +806,66 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
-    parser.add_argument("--checkpoint", type=str, default=None, help=f"Path to model checkpoint (default: {DEFAULT_CHECKPOINT})")
-    parser.add_argument("--mask", type=str, default=MASK_PATH, help=f"Path to sparse mask file (default: {MASK_PATH})")
-    parser.add_argument("--n_steps", type=int, default=5, help="Number of training steps (default: 5)")
-    parser.add_argument("--batch_size", type=int, default=1, help="Training batch size (default: 1)")
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate (default: 5e-5)")
-    parser.add_argument("--subset_size", type=int, default=10, help="Dataset subset size (default: 10)")
-    parser.add_argument("--run_name", type=str, default="triton_sparse_dpo", help="Run name for wandb (default: triton_sparse_dpo)")
-    parser.add_argument("--mlp_only", action="store_true", default=True, help="Only apply sparse training to MLP layers (default: True)")
-    parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, help=f"Triton kernel block size (default: {BLOCK_SIZE})")
+    parser.add_argument("--checkpoint", type=str, default=None, 
+                       help=f"Path to model checkpoint or 'None' for HF model (default: None = use {MODEL_NAME})")
+    parser.add_argument("--mask", type=str, default=MASK_PATH, 
+                       help=f"Path to sparse mask file (default: {MASK_PATH})")
+    parser.add_argument("--n_steps", type=int, default=5, 
+                       help="Number of training steps (default: 5)")
+    parser.add_argument("--batch_size", type=int, default=1, 
+                       help="Training batch size (default: 1)")
+    parser.add_argument("--learning_rate", type=float, default=5e-5, 
+                       help="Learning rate (default: 5e-5)")
+    parser.add_argument("--subset_size", type=int, default=10, 
+                       help="Dataset subset size (default: 10)")
+    parser.add_argument("--run_name", type=str, default="triton_sparse_dpo", 
+                       help="Run name for wandb (default: triton_sparse_dpo)")
+    parser.add_argument("--mlp_only", action="store_true", default=True, 
+                       help="Only apply sparse training to MLP layers (default: True)")
+    parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
+                       help=f"Triton kernel block size (default: {BLOCK_SIZE})")
     
     args = parser.parse_args()
     
+    print(f"\n{'='*60}")
+    print("INITIALIZING SHARED RESOURCES")
+    print(f"{'='*60}\n")
+    
+    # Pre-load shared resources once
+    print("Step 1: Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right"
+    print("✓ Tokenizer loaded and ready\n")
+    
+    print("Step 2: Loading dataset...")
+    dataset = load_dpo_dataset(subset_size=args.subset_size)
+    print("✓ Dataset loaded and ready\n")
+    
+    print("Step 3: Loading model...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_path = args.checkpoint if args.checkpoint is not None else MODEL_NAME
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        device_map="auto" if torch.cuda.is_available() else None,
+    )
+    
+    if not torch.cuda.is_available() or model.device.type == 'cpu':
+        model.to(device)
+    
+    print(f"✓ Model loaded on {device} with dtype: {model.dtype}\n")
+    
+    print(f"{'='*60}")
+    print("STARTING TRAINING")
+    print(f"{'='*60}\n")
+    
+    # Now train with pre-loaded resources
     train(
+        model_name=MODEL_NAME,
         checkpoint_path=args.checkpoint,
         mask_path=args.mask,
         n_steps=args.n_steps,
@@ -803,6 +875,9 @@ if __name__ == "__main__":
         run_name=args.run_name,
         mlp_only=args.mlp_only,
         block_size=args.block_size,
+        model=model,  # Pass pre-loaded model
+        dpo_dataset=dataset,  # Pass pre-loaded dataset
+        tokenizer=tokenizer,  # Pass pre-loaded tokenizer
     )
 
 # python src/sandbox/Triton_DPO_training_dev.py \
