@@ -775,3 +775,8 @@ if __name__ == "__main__":
         mlp_only=args.mlp_only,
         block_size=args.block_size,
     )
+
+# python src/sandbox/Triton_DPO_training_dev.py \
+#   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
+#   --mask masks/top_10.0pct_momentum_w25_step25.pt \
+#   --n_steps 10

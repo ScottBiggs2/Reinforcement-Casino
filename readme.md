@@ -16,11 +16,24 @@ And for HuggingFace:
 hf auth login [KEY HERE]
 ```
 
-# So far, wont work on Explorer Tesla P100 GPUs... Ugh. 
+# Must use H200 GPU
 
-
-
+Full training run: 
 ```bash
 python src/full_training/DPO_train.py
 ```
+
+Mask finding (example kwargs): 
+```bash
+python src/warm_start/better_mask_finder.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 25
+```
+
+Triton Acceleration (example kwargs): 
+```bash 
+python src/sandbox/Triton_DPO_training_dev.py \
+  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
+  --mask masks/top_10.0pct_momentum_w25_step25.pt \
+  --n_steps 10
+```
+
 
