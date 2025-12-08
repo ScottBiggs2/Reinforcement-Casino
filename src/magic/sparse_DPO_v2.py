@@ -216,8 +216,9 @@ class SparseMaskManager:
         self.mask_stats = {}
         
         for name, mask in self.masks.items():
-            # Move mask to device
-            self.masks[name] = mask.to(device, non_blocking=True)
+            # Move mask to device FIRST
+            mask = mask.to(device, non_blocking=True)
+            self.masks[name] = mask
             
             # Compute statistics
             sparsity = (mask == 0.0).sum().item() / mask.numel()  # % of zeros
@@ -229,12 +230,14 @@ class SparseMaskManager:
                 'nonzero': nonzero_count,  # count of non-zeros
             }
             
-            # CRITICAL OPTIMIZATION: Pre-compute flattened indices of non-zero elements
-            # This enables gather/scatter operations in the kernel
+            # CRITICAL FIX: Pre-compute flattened indices of non-zero elements ON GPU
+            # The mask is already on device, so nonzero() will return GPU indices
             if nonzero_count > 0:
                 # nonzero() returns indices; we flatten and store as 1D tensor
                 flat_mask = mask.flatten()
-                self.nonzero_indices[name] = torch.nonzero(flat_mask, as_tuple=False).squeeze(-1).contiguous()
+                indices = torch.nonzero(flat_mask, as_tuple=False).squeeze(-1).contiguous()
+                # Ensure indices are on the correct device (should already be, but verify)
+                self.nonzero_indices[name] = indices.to(device, non_blocking=True)
             else:
                 # Edge case: completely sparse mask
                 self.nonzero_indices[name] = torch.empty(0, dtype=torch.long, device=device)
