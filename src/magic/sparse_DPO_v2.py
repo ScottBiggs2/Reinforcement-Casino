@@ -9,7 +9,7 @@ Key Optimizations:
 4. Indexed sparse kernel (only processes ~5% of elements vs 100%)
 5. Gradient masking with indexed updates (true sparse computation)
 
-Run: python src/magic/sparse_DPO_v2.py \
+Run: python src/sandbox/Triton_DPO_training_optimized.py \
   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
   --mask masks/top_10.0pct_momentum_w25_step25.pt \
   --n_steps 10
@@ -345,8 +345,6 @@ class SparseAdamW(torch.optim.Optimizer):
         self.stats = {
             'sparse_steps': 0,
             'dense_steps': 0,
-            'time_sparse': 0.0,
-            'time_dense': 0.0,
             'nan_warnings': [],
         }
         
@@ -408,9 +406,9 @@ class SparseAdamW(torch.optim.Optimizer):
         
         Key improvement: Uses pre-computed non-zero indices to only
         process active weights (gather/scatter operations).
-        """
-        start = time.time()
         
+        NOTE: Timing removed to avoid CPU-GPU synchronization overhead
+        """
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
@@ -459,16 +457,14 @@ class SparseAdamW(torch.optim.Optimizer):
             return
         
         self.stats['sparse_steps'] += 1
-        self.stats['time_sparse'] += time.time() - start
     
     def _dense_step(self, param, group):
         """
         Standard dense AdamW update (fallback for non-masked params).
         
         OPTIMIZATION: No more lazy init check - states pre-initialized.
+        NOTE: Timing removed to avoid CPU-GPU synchronization overhead
         """
-        start = time.time()
-        
         grad = param.grad
         state = self.state[param]
         
@@ -494,7 +490,6 @@ class SparseAdamW(torch.optim.Optimizer):
         param.addcdiv_(state['exp_avg'], denom, value=-step_size)
         
         self.stats['dense_steps'] += 1
-        self.stats['time_dense'] += time.time() - start
     
     def check_for_nans(self, model):
         """Check all parameters for NaN/Inf after training completes."""
@@ -528,15 +523,8 @@ class SparseAdamW(torch.optim.Optimizer):
         print(f"Total steps:      {total:,}")
         print(f"Sparse steps:     {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
         print(f"Dense steps:      {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
-        print(f"Time sparse:      {self.stats['time_sparse']:.3f}s")
-        print(f"Time dense:       {self.stats['time_dense']:.3f}s")
-        if sparse > 0:
-            print(f"Avg sparse step:  {self.stats['time_sparse']/sparse*1000:.2f}ms")
-        if dense > 0:
-            print(f"Avg dense step:   {self.stats['time_dense']/dense*1000:.2f}ms")
-        if sparse > 0 and dense > 0:
-            speedup = (self.stats['time_dense']/dense) / (self.stats['time_sparse']/sparse)
-            print(f"Sparse speedup:   {speedup:.2f}x")
+        print(f"\nNOTE: Per-step timing removed to avoid GPU synchronization overhead.")
+        print(f"      Use PyTorch profiler or nsys for accurate performance measurement.")
         print(f"{'='*60}\n")
 
 
@@ -838,15 +826,31 @@ def train(
     print("STARTING TRAINING")
     print(f"{'='*60}\n")
     
+    # Use CUDA events for accurate GPU timing (doesn't force synchronization)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()  # Sync once before starting
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+    
     training_start = time.time()
     dpo_trainer.train()
+    
+    if torch.cuda.is_available():
+        end_event.record()
+        torch.cuda.synchronize()  # Sync once at the end
+        training_time_gpu = start_event.elapsed_time(end_event) / 1000.0  # Convert ms to seconds
+    
     training_time = time.time() - training_start
     
     print(f"\n{'='*60}")
     print("TRAINING COMPLETE")
     print(f"{'='*60}")
-    print(f"Total time: {training_time:.2f}s")
-    print(f"Time per step: {training_time/n_steps:.2f}s")
+    print(f"Wall clock time: {training_time:.2f}s")
+    if torch.cuda.is_available():
+        print(f"GPU time: {training_time_gpu:.2f}s")
+        print(f"Time per step (GPU): {training_time_gpu/n_steps:.2f}s")
+    print(f"Time per step (wall): {training_time/n_steps:.2f}s")
     print(f"{'='*60}\n")
     
     # Check for NaNs after training
@@ -892,8 +896,8 @@ if __name__ == "__main__":
                        help="Dataset subset size (default: 10)")
     parser.add_argument("--run_name", type=str, default="triton_sparse_dpo_optimized", 
                        help="Run name for wandb (default: triton_sparse_dpo_optimized)")
-    parser.add_argument("--mlp_only", action="store_true", default=True, 
-                       help="Only apply sparse training to MLP layers (default: True)")
+    parser.add_argument("--mlp_only", action="store_true", default=False, 
+                       help="Only apply sparse training to MLP layers (default: False - use all masked layers)")
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
     
