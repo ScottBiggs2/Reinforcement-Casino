@@ -27,12 +27,24 @@ Mask finding (example kwargs):
 
 Momentum (broken for now)
 ```bash
-python src/warm_start/better_mask_finder.py --method momentum --top_k_percent 10.0 --target_step 25 --momentum_window 25
+python src/warm_start/better_mask_finder.py --method momentum --top_k_percent 5.0 --target_step 25 --momentum_window 10
 ```
 
 Magnitude: 
 ```bash 
 python src/warm_start/better_mask_finder.py --method magnitude --top_k_percent 10.0 --target_step 25
+```
+
+Improvement and Jaccard scoring for masks: 
+
+```bash
+# Generate momentum mask at step 25, targeting 90% sparsity, with Jaccard metrics
+python src/warm_start/even_better_mask_finder.py \
+    --method momentum \
+    --sparsity_percent 90.0 \
+    --target_step 25 \
+    --momentum_window 10 \
+    --compute_jaccard
 ```
 
 Triton Acceleration (example kwargs): 
