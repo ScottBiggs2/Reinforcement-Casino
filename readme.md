@@ -35,7 +35,7 @@ Magnitude:
 python src/warm_start/better_mask_finder.py --method magnitude --top_k_percent 10.0 --target_step 25
 ```
 
-Improvement and Jaccard scoring for masks: 
+Even Better Mask Finding:
 
 ```bash
 # Generate momentum mask at step 25, targeting 90% sparsity, with Jaccard metrics
@@ -46,6 +46,27 @@ python src/warm_start/even_better_mask_finder.py \
     --momentum_window 10 \
     --compute_jaccard
 ```
+
+
+```bash
+# Test with magnitude first (simplest method)
+python src/warm_start/even_better_mask_finder.py \
+    --method magnitude \
+    --sparsity_percent 90.0 \
+    --target_step 25 \
+    --compute_jaccard \
+    --debug
+
+# Or...
+python src/warm_start/even_better_mask_finder.py \
+    --method momentum \
+    --sparsity_percent 90.0 \
+    --target_step 20 \
+    --momentum_window 3 \
+    --compute_jaccard \
+    --debug
+```
+
 
 Triton Acceleration (example kwargs): 
 ```bash 

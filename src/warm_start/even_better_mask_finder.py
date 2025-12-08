@@ -48,15 +48,16 @@ def load_deltas_from_log_dir(delta_log_dir, target_step=None):
     return deltas_by_step
 
 
-def compute_ground_truth_mask(deltas_by_step, sparsity_percent, device='cuda'):
+def compute_ground_truth_mask(deltas_by_step, sparsity_percent, device='cuda', debug=False):
     """
     Computes the 'ground truth' mask using the final checkpoint's absolute changes.
-    This represents what we're trying to predict early in training.
+    Uses GLOBAL threshold across all parameters.
     
     Args:
         deltas_by_step: Dictionary of deltas
         sparsity_percent: Target sparsity (% of weights to mask OUT)
         device: Device for computation
+        debug: If True, print detailed diagnostics
     
     Returns:
         dict: Ground truth masks (1 = keep, 0 = mask out)
@@ -69,38 +70,45 @@ def compute_ground_truth_mask(deltas_by_step, sparsity_percent, device='cuda'):
     
     print(f"Using final checkpoint at step {final_step}")
     
+    # Global threshold approach
+    print("Computing global threshold across all parameters...")
+    all_changes = []
+    
+    for name, delta in final_deltas.items():
+        all_changes.append(delta.abs().flatten())
+    
+    # Concatenate all changes
+    all_changes_flat = torch.cat(all_changes).to(device)
+    total_params = all_changes_flat.numel()
+    keep_count = max(1, int((100.0 - sparsity_percent) / 100.0 * total_params))
+    
+    print(f"Total parameters: {total_params:,}")
+    print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
+    
+    # Find global threshold
+    if keep_count >= total_params:
+        global_threshold = 0.0
+    else:
+        global_threshold = torch.kthvalue(all_changes_flat, total_params - keep_count).values.item()
+    
+    print(f"Global threshold: {global_threshold:.6f}")
+    print(f"Change range: [{all_changes_flat.min().item():.6f}, {all_changes_flat.max().item():.6f}]")
+    
+    del all_changes_flat
+    torch.cuda.empty_cache()
+    
+    # Create masks using global threshold
     masks = {}
-    total_params = 0
     total_kept = 0
     
-    keep_percent = 100.0 - sparsity_percent  # If 90% sparsity, keep 10%
-    
     for idx, (name, delta) in enumerate(final_deltas.items()):
-        if idx % 20 == 0:
-            print(f"  Processing parameter {idx+1}/{len(final_deltas)}")
-        
-        # Move to GPU for fast sorting
-        delta_gpu = delta.abs().to(device)
-        flat_changes = delta_gpu.flatten()
-        
-        # Calculate how many to keep
-        k = max(1, int(keep_percent / 100.0 * flat_changes.numel()))
-        
-        if k >= flat_changes.numel():
-            threshold = 0.0
-        else:
-            # Get the k-th largest value
-            threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
+        if idx % 50 == 0:
+            print(f"  Creating mask {idx+1}/{len(final_deltas)}")
         
         # Mask: 1 = keep, 0 = mask out
-        mask = (delta_gpu >= threshold).float().cpu()
+        mask = (delta.abs() >= global_threshold).float()
         masks[name] = mask
-        
-        total_params += mask.numel()
         total_kept += mask.sum().item()
-        
-        del delta_gpu, flat_changes
-        torch.cuda.empty_cache()
     
     actual_sparsity = 100.0 - (total_kept / total_params * 100) if total_params > 0 else 0
     print(f"Ground truth - Total params: {total_params:,}, Kept: {total_kept:,}")
@@ -157,12 +165,13 @@ def compute_jaccard_similarity(pred_masks, true_masks):
     }
 
 
-def compute_absolute_magnitude_mask(deltas_by_step, sparsity_percent, device='cuda'):
+def compute_absolute_magnitude_mask(deltas_by_step, sparsity_percent, device='cuda', debug=False):
     """
-    GPU-accelerated magnitude mask computation.
+    GPU-accelerated magnitude mask computation using GLOBAL threshold.
     
     Args:
         sparsity_percent: Target sparsity (% of weights to MASK OUT)
+        debug: If True, print detailed diagnostics
     """
     print(f"\n=== Computing Absolute Magnitude Mask (target sparsity: {sparsity_percent}%) ===")
     
@@ -176,54 +185,75 @@ def compute_absolute_magnitude_mask(deltas_by_step, sparsity_percent, device='cu
                 aggregated[name] = torch.zeros_like(delta)
             aggregated[name] += delta.abs()
     
-    # Create masks ON GPU
-    print("Creating masks on GPU...")
+    # Global threshold approach
+    print("\nComputing global threshold across all parameters...")
+    all_changes = []
+    
+    for name, total_change in aggregated.items():
+        all_changes.append(total_change.flatten())
+    
+    # Concatenate all changes
+    all_changes_flat = torch.cat(all_changes).to(device)
+    total_params = all_changes_flat.numel()
+    keep_count = max(1, int((100.0 - sparsity_percent) / 100.0 * total_params))
+    
+    print(f"Total parameters: {total_params:,}")
+    print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
+    
+    # Find global threshold
+    if keep_count >= total_params:
+        global_threshold = 0.0
+    else:
+        global_threshold = torch.kthvalue(all_changes_flat, total_params - keep_count).values.item()
+    
+    print(f"Global threshold: {global_threshold:.6f}")
+    print(f"Change range: [{all_changes_flat.min().item():.6f}, {all_changes_flat.max().item():.6f}]")
+    
+    if debug:
+        # Show distribution
+        percentiles = [10, 25, 50, 75, 90, 95, 99]
+        print("\nChange distribution (percentiles):")
+        for p in percentiles:
+            idx = int(p / 100.0 * total_params)
+            val = torch.kthvalue(all_changes_flat, idx).values.item()
+            print(f"  {p}th percentile: {val:.6f}")
+    
+    del all_changes_flat
+    torch.cuda.empty_cache()
+    
+    # Create masks using global threshold
+    print("\nCreating masks with global threshold...")
     masks = {}
-    total_params = 0
     total_kept = 0
     
-    keep_percent = 100.0 - sparsity_percent  # If 90% sparsity, keep 10%
-    
     for idx, (name, total_change) in enumerate(aggregated.items()):
-        if idx % 20 == 0:
+        if idx % 50 == 0:
             print(f"  Creating mask {idx+1}/{len(aggregated)}")
         
-        # Move to GPU for fast sorting
-        total_change_gpu = total_change.to(device)
-        flat_changes = total_change_gpu.flatten()
-        
-        k = max(1, int(keep_percent / 100.0 * flat_changes.numel()))
-        
-        if k >= flat_changes.numel():
-            threshold = 0.0
-        else:
-            # kthvalue is FAST on GPU
-            threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
-        
-        mask = (total_change_gpu >= threshold).float().cpu()  # Move back to CPU for storage
+        mask = (total_change >= global_threshold).float()
         masks[name] = mask
-        
-        total_params += mask.numel()
         total_kept += mask.sum().item()
         
-        # Clean up GPU memory
-        del total_change_gpu, flat_changes
-        torch.cuda.empty_cache()
+        if debug and idx < 5:
+            layer_kept = mask.sum().item()
+            layer_total = mask.numel()
+            print(f"  {name}: kept {layer_kept}/{layer_total} ({100*layer_kept/layer_total:.2f}%)")
     
     actual_sparsity = 100.0 - (total_kept / total_params * 100) if total_params > 0 else 0
-    print(f"Total params: {total_params:,}, Kept: {total_kept:,}")
+    print(f"\nTotal params: {total_params:,}, Kept: {total_kept:,}")
     print(f"Actual sparsity: {actual_sparsity:.2f}% (target: {sparsity_percent}%)")
     
     return masks
 
 
-def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, device='cuda'):
+def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, device='cuda', debug=False):
     """
     GPU-accelerated momentum mask computation.
     Uses recent velocity consistency to identify important weights.
     
     Args:
         sparsity_percent: Target sparsity (% of weights to MASK OUT)
+        debug: If True, print detailed diagnostics
     """
     print(f"\n=== Computing Momentum-Based Mask (target sparsity: {sparsity_percent}%, window={window_size}) ===")
     
@@ -247,6 +277,8 @@ def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, devic
         
         velocities_by_step[curr_step] = velocities
     
+    print(f"Computed velocities for {len(velocities_by_step)} steps: {sorted(velocities_by_step.keys())}")
+    
     # Compute momentum scores
     print("Computing momentum scores on GPU...")
     momentum_scores = {}
@@ -264,6 +296,8 @@ def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, devic
         if len(recent_velocities) < 2:
             # Fallback to magnitude if insufficient velocity data
             momentum_scores[name] = deltas_by_step[sorted_steps[-1]][name].abs()
+            if debug and idx < 5:
+                print(f"  {name}: Using magnitude fallback (only {len(recent_velocities)} velocities)")
             continue
         
         # Stack and compute ON GPU
@@ -280,42 +314,65 @@ def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, devic
         score = (magnitude * (1 + consistency)).cpu()
         momentum_scores[name] = score
         
+        if debug and idx < 5:
+            print(f"  {name}: velocities={len(recent_velocities)}, "
+                  f"mean_mag={magnitude.mean().item():.6f}, "
+                  f"consistency={consistency.mean().item():.6f}, "
+                  f"score_range=[{score.min().item():.6f}, {score.max().item():.6f}]")
+        
         del vel_stack
         torch.cuda.empty_cache()
     
-    # Create masks ON GPU
-    print("Creating masks on GPU...")
+    # Global threshold approach instead of per-layer
+    print("\nComputing global threshold across all parameters...")
+    all_scores = []
+    score_ranges = {}
+    
+    for name, score in momentum_scores.items():
+        flat = score.flatten()
+        all_scores.append(flat)
+        score_ranges[name] = (flat.min().item(), flat.max().item(), flat.mean().item())
+    
+    if debug:
+        print("\nScore statistics per layer (first 5):")
+        for i, (name, (min_s, max_s, mean_s)) in enumerate(list(score_ranges.items())[:5]):
+            print(f"  {name}: min={min_s:.6f}, max={max_s:.6f}, mean={mean_s:.6f}")
+    
+    # Concatenate all scores
+    all_scores_flat = torch.cat(all_scores).to(device)
+    total_params = all_scores_flat.numel()
+    keep_count = max(1, int((100.0 - sparsity_percent) / 100.0 * total_params))
+    
+    print(f"Total parameters: {total_params:,}")
+    print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
+    
+    # Find global threshold
+    if keep_count >= total_params:
+        global_threshold = 0.0
+    else:
+        global_threshold = torch.kthvalue(all_scores_flat, total_params - keep_count).values.item()
+    
+    print(f"Global threshold: {global_threshold:.6f}")
+    print(f"Score range: [{all_scores_flat.min().item():.6f}, {all_scores_flat.max().item():.6f}]")
+    
+    del all_scores_flat
+    torch.cuda.empty_cache()
+    
+    # Create masks using global threshold
+    print("\nCreating masks with global threshold...")
     masks = {}
-    total_params = 0
     total_kept = 0
     
-    keep_percent = 100.0 - sparsity_percent
-    
     for idx, (name, score) in enumerate(momentum_scores.items()):
-        if idx % 20 == 0:
+        if idx % 50 == 0:
             print(f"  Creating mask {idx+1}/{len(momentum_scores)}")
         
-        score_gpu = score.to(device)
-        flat_scores = score_gpu.flatten()
-        
-        k = max(1, int(keep_percent / 100.0 * flat_scores.numel()))
-        
-        if k >= flat_scores.numel():
-            threshold = 0.0
-        else:
-            threshold = torch.kthvalue(flat_scores, flat_scores.numel() - k).values
-        
-        mask = (score_gpu >= threshold).float().cpu()
+        mask = (score >= global_threshold).float()
         masks[name] = mask
-        
-        total_params += mask.numel()
         total_kept += mask.sum().item()
-        
-        del score_gpu, flat_scores
-        torch.cuda.empty_cache()
     
     actual_sparsity = 100.0 - (total_kept / total_params * 100) if total_params > 0 else 0
-    print(f"Total params: {total_params:,}, Kept: {total_kept:,}")
+    print(f"\nTotal params: {total_params:,}, Kept: {total_kept:,}")
     print(f"Actual sparsity: {actual_sparsity:.2f}% (target: {sparsity_percent}%)")
     
     return masks
@@ -485,15 +542,15 @@ def main(args):
     if args.compute_jaccard:
         # Load ALL deltas (no target_step limit) for ground truth
         all_deltas = load_deltas_from_log_dir(delta_log_dir, target_step=None)
-        ground_truth_masks = compute_ground_truth_mask(all_deltas, args.sparsity_percent, device)
+        ground_truth_masks = compute_ground_truth_mask(all_deltas, args.sparsity_percent, device, args.debug)
     
     # Compute masks based on method
     if args.method == "magnitude":
-        masks = compute_absolute_magnitude_mask(deltas_by_step, args.sparsity_percent, device)
+        masks = compute_absolute_magnitude_mask(deltas_by_step, args.sparsity_percent, device, args.debug)
         method_suffix = "magnitude"
     
     elif args.method == "momentum":
-        masks = compute_momentum_mask(deltas_by_step, args.sparsity_percent, args.momentum_window, device)
+        masks = compute_momentum_mask(deltas_by_step, args.sparsity_percent, args.momentum_window, device, args.debug)
         method_suffix = f"momentum_w{args.momentum_window}"
     
     elif args.method == "fisher":
@@ -601,6 +658,11 @@ if __name__ == "__main__":
         help="Output file path (default: auto-generated in masks/ directory)"
     )
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug output for diagnostics"
+    )
+    parser.add_argument(
         "--cpu",
         action="store_true",
         help="Force CPU execution (default: use GPU if available)"
@@ -611,6 +673,6 @@ if __name__ == "__main__":
 
 
 # Example usage:
-# python improved_mask_finder.py --method magnitude --sparsity_percent 90.0 --target_step 25 --compute_jaccard
-# python improved_mask_finder.py --method momentum --sparsity_percent 90.0 --target_step 25 --momentum_window 5 --compute_jaccard
+# python improved_mask_finder.py --method magnitude --sparsity_percent 90.0 --target_step 25 --compute_jaccard --debug
+# python improved_mask_finder.py --method momentum --sparsity_percent 90.0 --target_step 25 --momentum_window 5 --compute_jaccard --debug
 # python improved_mask_finder.py --method fisher --sparsity_percent 90.0 --target_step 25 --compute_jaccard
