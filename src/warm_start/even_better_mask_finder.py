@@ -85,14 +85,22 @@ def compute_ground_truth_mask(deltas_by_step, sparsity_percent, device='cuda', d
     print(f"Total parameters: {total_params:,}")
     print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
     
-    # Find global threshold
+    # Find global threshold using topk for numerical stability
     if keep_count >= total_params:
         global_threshold = 0.0
+        nonzero_count = (all_changes_flat > 0).sum().item()
+        print(f"WARNING: Keeping all weights. Non-zero changes: {nonzero_count}/{total_params} ({100*nonzero_count/total_params:.2f}%)")
     else:
-        global_threshold = torch.kthvalue(all_changes_flat, total_params - keep_count).values.item()
+        # Use topk which is more numerically stable
+        threshold_val, _ = torch.topk(all_changes_flat, keep_count, largest=True, sorted=False)
+        global_threshold = threshold_val.min().item()
     
-    print(f"Global threshold: {global_threshold:.6f}")
-    print(f"Change range: [{all_changes_flat.min().item():.6f}, {all_changes_flat.max().item():.6f}]")
+    print(f"Global threshold: {global_threshold:.10f}")
+    print(f"Change range: [{all_changes_flat.min().item():.10f}, {all_changes_flat.max().item():.10f}]")
+    
+    # Count non-zero changes
+    nonzero_count = (all_changes_flat > 0).sum().item()
+    print(f"Non-zero changes: {nonzero_count:,}/{total_params:,} ({100*nonzero_count/total_params:.2f}%)")
     
     del all_changes_flat
     torch.cuda.empty_cache()
@@ -105,8 +113,20 @@ def compute_ground_truth_mask(deltas_by_step, sparsity_percent, device='cuda', d
         if idx % 50 == 0:
             print(f"  Creating mask {idx+1}/{len(final_deltas)}")
         
-        # Mask: 1 = keep, 0 = mask out
-        mask = (delta.abs() >= global_threshold).float()
+        # Use > instead of >= to handle threshold=0 case properly
+        if global_threshold > 0:
+            mask = (delta.abs() >= global_threshold).float()
+        else:
+            # If threshold is 0, explicitly select top-k per layer
+            flat_delta = delta.abs().flatten()
+            k_local = max(1, int((100.0 - sparsity_percent) / 100.0 * flat_delta.numel()))
+            if k_local >= flat_delta.numel():
+                mask = torch.ones_like(delta)
+            else:
+                topk_vals, _ = torch.topk(flat_delta, k_local, largest=True)
+                local_threshold = topk_vals.min()
+                mask = (delta.abs() >= local_threshold).float()
+        
         masks[name] = mask
         total_kept += mask.sum().item()
     
@@ -200,23 +220,38 @@ def compute_absolute_magnitude_mask(deltas_by_step, sparsity_percent, device='cu
     print(f"Total parameters: {total_params:,}")
     print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
     
-    # Find global threshold
+    # Find global threshold - use topk for numerical stability
     if keep_count >= total_params:
         global_threshold = 0.0
+        nonzero_count = (all_changes_flat > 0).sum().item()
+        print(f"WARNING: Keeping all weights. Non-zero changes: {nonzero_count}/{total_params} ({100*nonzero_count/total_params:.2f}%)")
     else:
-        global_threshold = torch.kthvalue(all_changes_flat, total_params - keep_count).values.item()
+        # Use topk which is more numerically stable than kthvalue
+        threshold_val, _ = torch.topk(all_changes_flat, keep_count, largest=True, sorted=False)
+        global_threshold = threshold_val.min().item()
     
-    print(f"Global threshold: {global_threshold:.6f}")
-    print(f"Change range: [{all_changes_flat.min().item():.6f}, {all_changes_flat.max().item():.6f}]")
+    print(f"Global threshold: {global_threshold:.10f}")
+    print(f"Change range: [{all_changes_flat.min().item():.10f}, {all_changes_flat.max().item():.10f}]")
+    
+    # Count non-zero changes
+    nonzero_count = (all_changes_flat > 0).sum().item()
+    print(f"Non-zero changes: {nonzero_count:,}/{total_params:,} ({100*nonzero_count/total_params:.2f}%)")
     
     if debug:
         # Show distribution
-        percentiles = [10, 25, 50, 75, 90, 95, 99]
+        percentiles = [10, 25, 50, 75, 90, 95, 99, 99.9]
         print("\nChange distribution (percentiles):")
         for p in percentiles:
-            idx = int(p / 100.0 * total_params)
+            idx = max(1, int(p / 100.0 * total_params))
+            idx = min(idx, total_params - 1)
             val = torch.kthvalue(all_changes_flat, idx).values.item()
-            print(f"  {p}th percentile: {val:.6f}")
+            print(f"  {p}th percentile: {val:.10f}")
+        
+        # Show top values
+        print("\nTop 10 change magnitudes:")
+        top_vals = torch.topk(all_changes_flat, min(10, total_params)).values
+        for i, v in enumerate(top_vals):
+            print(f"  {i+1}: {v.item():.10f}")
     
     del all_changes_flat
     torch.cuda.empty_cache()
@@ -230,7 +265,21 @@ def compute_absolute_magnitude_mask(deltas_by_step, sparsity_percent, device='cu
         if idx % 50 == 0:
             print(f"  Creating mask {idx+1}/{len(aggregated)}")
         
-        mask = (total_change >= global_threshold).float()
+        # Use > instead of >= to handle threshold=0 case properly
+        if global_threshold > 0:
+            mask = (total_change >= global_threshold).float()
+        else:
+            # If threshold is 0, we need to explicitly select top-k
+            # This handles the case where most weights are exactly 0
+            flat_change = total_change.flatten()
+            k_local = max(1, int((100.0 - sparsity_percent) / 100.0 * flat_change.numel()))
+            if k_local >= flat_change.numel():
+                mask = torch.ones_like(total_change)
+            else:
+                topk_vals, _ = torch.topk(flat_change, k_local, largest=True)
+                local_threshold = topk_vals.min()
+                mask = (total_change >= local_threshold).float()
+        
         masks[name] = mask
         total_kept += mask.sum().item()
         
@@ -346,14 +395,22 @@ def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, devic
     print(f"Total parameters: {total_params:,}")
     print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
     
-    # Find global threshold
+    # Find global threshold using topk for numerical stability
     if keep_count >= total_params:
         global_threshold = 0.0
+        nonzero_count = (all_scores_flat > 0).sum().item()
+        print(f"WARNING: Keeping all weights. Non-zero scores: {nonzero_count}/{total_params} ({100*nonzero_count/total_params:.2f}%)")
     else:
-        global_threshold = torch.kthvalue(all_scores_flat, total_params - keep_count).values.item()
+        # Use topk which is more numerically stable
+        threshold_val, _ = torch.topk(all_scores_flat, keep_count, largest=True, sorted=False)
+        global_threshold = threshold_val.min().item()
     
-    print(f"Global threshold: {global_threshold:.6f}")
-    print(f"Score range: [{all_scores_flat.min().item():.6f}, {all_scores_flat.max().item():.6f}]")
+    print(f"Global threshold: {global_threshold:.10f}")
+    print(f"Score range: [{all_scores_flat.min().item():.10f}, {all_scores_flat.max().item():.10f}]")
+    
+    # Count non-zero scores
+    nonzero_count = (all_scores_flat > 0).sum().item()
+    print(f"Non-zero scores: {nonzero_count:,}/{total_params:,} ({100*nonzero_count/total_params:.2f}%)")
     
     del all_scores_flat
     torch.cuda.empty_cache()
@@ -367,7 +424,20 @@ def compute_momentum_mask(deltas_by_step, sparsity_percent, window_size=5, devic
         if idx % 50 == 0:
             print(f"  Creating mask {idx+1}/{len(momentum_scores)}")
         
-        mask = (score >= global_threshold).float()
+        # Use > instead of >= to handle threshold=0 case properly
+        if global_threshold > 0:
+            mask = (score >= global_threshold).float()
+        else:
+            # If threshold is 0, we need to explicitly select top-k per layer
+            flat_score = score.flatten()
+            k_local = max(1, int((100.0 - sparsity_percent) / 100.0 * flat_score.numel()))
+            if k_local >= flat_score.numel():
+                mask = torch.ones_like(score)
+            else:
+                topk_vals, _ = torch.topk(flat_score, k_local, largest=True)
+                local_threshold = topk_vals.min()
+                mask = (score >= local_threshold).float()
+        
         masks[name] = mask
         total_kept += mask.sum().item()
     
