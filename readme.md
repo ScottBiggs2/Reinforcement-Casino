@@ -59,3 +59,10 @@ python src/sandbox/Triton_DPO_training.py \
   --n_steps 10
 ```
 
+Magic
+```bash 
+python src/magic/sparse_DPO_v2.py \
+  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
+  --mask masks/top_10.0pct_magnitude_step25.pt \
+  --n_steps 10
+```
