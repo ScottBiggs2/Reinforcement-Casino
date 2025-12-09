@@ -23,18 +23,6 @@ Full training run:
 python src/full_training/DPO_train.py
 ```
 
-Mask finding (example kwargs): 
-
-Momentum (broken for now)
-```bash
-python src/warm_start/better_mask_finder.py --method momentum --top_k_percent 5.0 --target_step 25 --momentum_window 10
-```
-
-Magnitude: 
-```bash 
-python src/warm_start/better_mask_finder.py --method magnitude --top_k_percent 10.0 --target_step 25
-```
-
 Even Better Mask Finding:
 
 ```bash
@@ -77,28 +65,6 @@ python src/warm_start/even_better_mask_finder.py \
 
 
 Triton Acceleration (example kwargs): 
-```bash 
-python src/sandbox/Triton_DPO_training_dev.py \
-  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
-  --mask masks/top_10.0pct_momentum_w25_step25.pt \
-  --n_steps 10
-```
-
-Dev
-```bash
-python src/sandbox/Triton_DPO_training_dev.py \
-  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
-  --mask masks/top_10.0pct_magnitude_step25.pt \
-  --n_steps 10
-```
-
-Main
-```bash
-python src/sandbox/Triton_DPO_training.py \
-  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
-  --mask masks/top_10.0pct_magnitude_step25.pt \
-  --n_steps 10
-```
 
 Magic
 ```bash 
@@ -112,8 +78,11 @@ python src/magic/sparse_DPO_v2.py \
 python src/magic/sparse_DPO_v2.py \
   --checkpoint None \
   --mask masks/sparsity_90.0pct_magnitude_step100.pt \
-  --n_steps 50
+  --n_steps 100
 ```
+
+
+DPO Baseline timing:
 
 ```bash
 python src/full_training/DPO_timing_baseline.py \
