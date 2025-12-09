@@ -39,7 +39,7 @@ CHECKPOINT_SCHEDULE = (
 
 
 THRESHOLD = 1e-3
-NUM_STEPS = 100
+NUM_STEPS = 1000
 SUBSET_SIZE = None  # reduce for faster bring-up
 
 WANDB_PROJECT = "gemma3-dpo-subnetwork-emergence"
