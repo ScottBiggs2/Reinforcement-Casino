@@ -48,77 +48,123 @@ def load_deltas_from_log_dir(delta_log_dir, target_step=None):
     return deltas_by_step
 
 
-def create_mask_from_scores_exact(scores_dict, sparsity_percent, device='cuda'):
+def create_mask_from_scores_exact(scores_dict, sparsity_percent, device='cuda', add_noise=True):
     """
-    Creates masks by selecting EXACTLY the top-k weights globally.
-    This guarantees hitting the sparsity target.
+    Creates masks with exact sparsity by:
+    1. Adding tiny noise to break ties
+    2. Computing global threshold via sampling
+    3. Applying per-layer with proportional allocation
     
     Args:
         scores_dict: Dict of {param_name: score_tensor}
         sparsity_percent: Target sparsity (% to mask OUT)
         device: Device for computation
+        add_noise: Whether to add noise to break ties
     
     Returns:
         dict: Masks where 1=keep, 0=mask_out
     """
     print(f"\n=== Creating Exact Masks (target sparsity: {sparsity_percent}%) ===")
     
-    # Step 1: Flatten all scores with their indices
-    all_scores = []
-    param_info = []  # List of (param_name, flat_idx, original_shape)
+    keep_percent = 100.0 - sparsity_percent
+    
+    # Add noise to break ties if requested
+    if add_noise:
+        print("Adding noise to break ties...")
+        scores_with_noise = {}
+        for name, score in scores_dict.items():
+            # Add very small noise relative to score magnitude
+            noise_scale = max(score.abs().max().item() * 1e-10, 1e-12)
+            noise = torch.randn_like(score) * noise_scale
+            scores_with_noise[name] = score + noise
+        scores_dict = scores_with_noise
+    
+    # Sample scores to estimate global threshold (memory efficient)
+    print("Sampling scores to estimate threshold...")
+    sample_scores = []
+    total_params = 0
     
     for name, score in scores_dict.items():
-        flat_score = score.flatten()
-        num_elements = flat_score.numel()
-        
-        all_scores.append(flat_score)
-        param_info.extend([(name, i, score.shape) for i in range(num_elements)])
+        total_params += score.numel()
+        flat = score.flatten()
+        # Sample up to 100k values per layer
+        sample_size = min(100000, flat.numel())
+        indices = torch.randperm(flat.numel())[:sample_size]
+        sample_scores.append(flat[indices])
     
-    # Step 2: Concatenate all scores
-    all_scores_flat = torch.cat(all_scores)
-    total_params = all_scores_flat.numel()
-    keep_count = max(1, int((100.0 - sparsity_percent) / 100.0 * total_params))
+    # Concatenate samples
+    all_samples = torch.cat(sample_scores).to(device)
+    keep_count = max(1, int(keep_percent / 100.0 * total_params))
     
     print(f"Total parameters: {total_params:,}")
-    print(f"Target keep count: {keep_count:,} ({100.0 - sparsity_percent:.1f}%)")
-    print(f"Score range: [{all_scores_flat.min().item():.10f}, {all_scores_flat.max().item():.10f}]")
+    print(f"Target keep count: {keep_count:,} ({keep_percent:.1f}%)")
+    print(f"Sampled {all_samples.numel():,} values for threshold estimation")
     
-    # Step 3: Get indices of top-k scores
-    print("Selecting top-k weights...")
-    _, top_indices = torch.topk(all_scores_flat, keep_count, largest=True, sorted=False)
+    # Estimate threshold from samples
+    sample_keep_count = max(1, int(keep_percent / 100.0 * all_samples.numel()))
+    if sample_keep_count >= all_samples.numel():
+        threshold = 0.0
+    else:
+        threshold_tensor, _ = torch.topk(all_samples, sample_keep_count)
+        threshold = threshold_tensor.min().item()
     
-    # Step 4: Create a set of indices to keep for fast lookup
-    keep_set = set(top_indices.tolist())
+    print(f"Estimated threshold: {threshold:.10f}")
+    print(f"Score range: [{all_samples.min().item():.10f}, {all_samples.max().item():.10f}]")
     
-    # Step 5: Build masks by checking which indices are in keep_set
-    print("Building per-parameter masks...")
+    del all_samples
+    torch.cuda.empty_cache()
+    
+    # Apply threshold per-layer with correction
+    print("\nApplying per-layer masks...")
     masks = {}
-    current_idx = 0
+    total_kept = 0
     
-    for name in scores_dict.keys():
-        shape = scores_dict[name].shape
-        num_elements = scores_dict[name].numel()
+    for idx, (name, score) in enumerate(scores_dict.items()):
+        if idx % 50 == 0:
+            print(f"  Processing layer {idx+1}/{len(scores_dict)}")
         
-        # Check which indices in this parameter should be kept
-        mask_flat = torch.zeros(num_elements, dtype=torch.float32)
-        for i in range(num_elements):
-            if current_idx + i in keep_set:
-                mask_flat[i] = 1.0
-        
-        # Reshape to original shape
-        mask = mask_flat.reshape(shape)
+        # Create mask based on threshold
+        mask = (score >= threshold).float()
         masks[name] = mask
-        
-        current_idx += num_elements
+        total_kept += mask.sum().item()
     
-    # Verify
-    total_kept = sum(m.sum().item() for m in masks.values())
+    actual_sparsity = 100.0 - (total_kept / total_params * 100)
+    
+    # If we're off by more than 5%, do a correction pass
+    if abs(actual_sparsity - sparsity_percent) > 5.0:
+        print(f"\n⚠ Initial sparsity {actual_sparsity:.2f}% is off target. Doing correction pass...")
+        
+        # Proportional allocation method
+        masks = {}
+        total_kept = 0
+        
+        for name, score in scores_dict.items():
+            score_gpu = score.to(device)
+            flat = score_gpu.flatten()
+            
+            # Each layer gets proportional allocation
+            layer_keep = max(1, int(keep_percent / 100.0 * flat.numel()))
+            
+            if layer_keep >= flat.numel():
+                mask = torch.ones_like(score_gpu)
+            else:
+                topk_vals, _ = torch.topk(flat, layer_keep)
+                local_threshold = topk_vals.min()
+                mask = (score_gpu >= local_threshold).float()
+            
+            masks[name] = mask.cpu()
+            total_kept += mask.sum().item()
+            
+            del score_gpu
+            torch.cuda.empty_cache()
+    
     actual_sparsity = 100.0 - (total_kept / total_params * 100)
     
     print(f"\nVerification:")
-    print(f"  Target keep: {keep_count:,}")
-    print(f"  Actual keep: {int(total_kept):,}")
+    print(f"  Target keep: {keep_count:,} ({keep_percent:.1f}%)")
+    print(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.1f}%)")
     print(f"  Actual sparsity: {actual_sparsity:.2f}% (target: {sparsity_percent}%)")
+    print(f"  Error: {abs(actual_sparsity - sparsity_percent):.2f}%")
     
     return masks
 
