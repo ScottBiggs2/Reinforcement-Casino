@@ -658,8 +658,8 @@ def train(
 ):
     """Train with optimized Triton-accelerated sparse training."""
     
-    # Determine model source
-    if checkpoint_path is None:
+    # Determine model source - handle "None" string from argparse
+    if checkpoint_path is None or (isinstance(checkpoint_path, str) and checkpoint_path.lower() == "none"):
         checkpoint_path = model_name
         print(f"No checkpoint specified, using base model from HF: {checkpoint_path}")
     else:
@@ -883,7 +883,7 @@ if __name__ == "__main__":
     )
     
     parser.add_argument("--checkpoint", type=str, default=None, 
-                       help=f"Path to model checkpoint or 'None' for HF model (default: None = use {MODEL_NAME})")
+                       help=f"Path to model checkpoint (default: use base model {MODEL_NAME})")
     parser.add_argument("--mask", type=str, default=MASK_PATH, 
                        help=f"Path to sparse mask file (default: {MASK_PATH})")
     parser.add_argument("--n_steps", type=int, default=5, 
@@ -921,7 +921,14 @@ if __name__ == "__main__":
     
     print("Step 3: Loading model...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_path = args.checkpoint if args.checkpoint is not None else MODEL_NAME
+    
+    # FIXED: Handle checkpoint argument properly
+    if args.checkpoint is None or (isinstance(args.checkpoint, str) and args.checkpoint.lower() == "none"):
+        model_path = MODEL_NAME
+        print(f"Using base model: {MODEL_NAME}")
+    else:
+        model_path = args.checkpoint
+        print(f"Using checkpoint: {args.checkpoint}")
     
     model = AutoModelForCausalLM.from_pretrained(
         model_path,

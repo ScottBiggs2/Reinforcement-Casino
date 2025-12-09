@@ -65,6 +65,14 @@ python src/warm_start/even_better_mask_finder.py \
     --momentum_window 80 \
     --compute_jaccard \
     --debug
+
+# Or...
+python src/warm_start/even_better_mask_finder.py \
+    --method fisher \
+    --sparsity_percent 90.0 \
+    --target_step 100 \
+    --compute_jaccard \
+    --debug
 ```
 
 
@@ -95,7 +103,21 @@ python src/sandbox/Triton_DPO_training.py \
 Magic
 ```bash 
 python src/magic/sparse_DPO_v2.py \
-  --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
-  --mask masks/top_10.0pct_magnitude_step25.pt \
-  --n_steps 10
+  --checkpoint checkpoints_gemma3_dpo/checkpoint-1000 \
+  --mask masks/sparsity_90.0pct_magnitude_step100.pt \
+  --n_steps 50
+```
+
+```bash 
+python src/magic/sparse_DPO_v2.py \
+  --checkpoint None \
+  --mask masks/sparsity_90.0pct_magnitude_step100.pt \
+  --n_steps 50
+```
+
+```bash
+python src/full_training/DPO_timing_baseline.py \
+  --checkpoint None \
+  --n_steps 50 \
+  --subset_size 10 \ 
 ```
