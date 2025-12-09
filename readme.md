@@ -61,8 +61,8 @@ python src/warm_start/even_better_mask_finder.py \
 python src/warm_start/even_better_mask_finder.py \
     --method momentum \
     --sparsity_percent 90.0 \
-    --target_step 25 \
-    --momentum_window 3 \
+    --target_step 100 \
+    --momentum_window 80 \
     --compute_jaccard \
     --debug
 ```
