@@ -19,6 +19,24 @@ from typing import List, Dict, Any
 # 0. Config
 #######################################
 
+def sanitize_model_name(model_name: str) -> str:
+    """
+    Convert HuggingFace model name to filesystem-safe string.
+    
+    Examples:
+        "google/gemma-3-270m-it" -> "google_gemma_3_270m_it"
+        "meta-llama/Llama-3.1-8B" -> "meta_llama_llama_3_1_8b"
+    """
+    # Replace "/" with "_", replace "-" with "_", convert to lowercase
+    sanitized = model_name.replace("/", "_").replace("-", "_").lower()
+    # Remove any remaining special characters that might cause issues
+    sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
+    # Collapse multiple underscores
+    while "__" in sanitized:
+        sanitized = sanitized.replace("__", "_")
+    return sanitized.strip("_")
+
+
 parser = argparse.ArgumentParser(description="GRPO Training Script")
 parser.add_argument(
     "--model_name",
@@ -29,9 +47,10 @@ parser.add_argument(
 args = parser.parse_args()
 
 MODEL_NAME = args.model_name
+MODEL_NAME_SANITIZED = sanitize_model_name(MODEL_NAME)
 DATASET_NAME = "open-r1/OpenR1-Math-220k"  # OpenR1 dataset
-OUTPUT_DIR = "./checkpoints_gemma3_grpo" # universal :/
-DELTA_LOG_DIR = "./delta_logs_grpo" # universal :/
+OUTPUT_DIR = f"./checkpoints_{MODEL_NAME_SANITIZED}_grpo"
+DELTA_LOG_DIR = f"./delta_logs_{MODEL_NAME_SANITIZED}_grpo"
 
 # Flexible checkpoint schedule
 # Save every 5 steps for first 25 steps, then every 25 steps after
@@ -50,8 +69,8 @@ THRESHOLD = 1e-3
 NUM_STEPS = 1000
 SUBSET_SIZE = None  # reduce for faster bring-up
 
-WANDB_PROJECT = "gemma3-grpo-subnetwork-emergence"
-WANDB_RUN_NAME = "gemma3-270m-it_openr1_flexible_checkpoints"
+WANDB_PROJECT = f"{MODEL_NAME_SANITIZED}-grpo-subnetwork-emergence"
+WANDB_RUN_NAME = f"{MODEL_NAME_SANITIZED}_openr1_flexible_checkpoints"
 
 print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 

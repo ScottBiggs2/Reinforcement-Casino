@@ -33,8 +33,26 @@ from datetime import datetime
 # CONFIGURATION
 # ============================================================================
 
+def sanitize_model_name(model_name: str) -> str:
+    """
+    Convert HuggingFace model name to filesystem-safe string.
+    
+    Examples:
+        "google/gemma-3-270m-it" -> "google_gemma_3_270m_it"
+        "meta-llama/Llama-3.1-8B" -> "meta_llama_llama_3_1_8b"
+    """
+    # Replace "/" with "_", replace "-" with "_", convert to lowercase
+    sanitized = model_name.replace("/", "_").replace("-", "_").lower()
+    # Remove any remaining special characters that might cause issues
+    sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
+    # Collapse multiple underscores
+    while "__" in sanitized:
+        sanitized = sanitized.replace("__", "_")
+    return sanitized.strip("_")
+
+
 WANDB_PROJECT = "rl-casino-triton"
-MODEL_NAME = "google/gemma-3-270m-it"
+MODEL_NAME_DEFAULT = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w25_step25.pt"
@@ -642,14 +660,14 @@ def make_run_dir(base_dir="results", run_name=None):
 # ============================================================================
 
 def train(
-    model_name=MODEL_NAME,
+    model_name=MODEL_NAME_DEFAULT,
     checkpoint_path=None,
     mask_path=MASK_PATH,
     n_steps=5,
     batch_size=1, 
     learning_rate=5e-5,
     subset_size=10,
-    run_name="triton_sparse_dpo_optimized",
+    run_name=None,
     mlp_only=True,
     block_size=BLOCK_SIZE,
     model=None,
@@ -664,6 +682,11 @@ def train(
         print(f"No checkpoint specified, using base model from HF: {checkpoint_path}")
     else:
         print(f"Using checkpoint path: {checkpoint_path}")
+    
+    # Derive run_name from model_name if not provided
+    if run_name is None:
+        model_sanitized = sanitize_model_name(model_name)
+        run_name = f"triton_sparse_dpo_{model_sanitized}_optimized"
     
     run_dir = make_run_dir(base_dir="results", run_name=run_name)
     print(f"\n{'='*60}")
@@ -882,8 +905,10 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
+    parser.add_argument("--model_name", type=str, default=MODEL_NAME_DEFAULT,
+                       help=f"HuggingFace model name to load (default: {MODEL_NAME_DEFAULT})")
     parser.add_argument("--checkpoint", type=str, default=None, 
-                       help=f"Path to model checkpoint (default: use base model {MODEL_NAME})")
+                       help="Path to model checkpoint (default: use base model from --model_name)")
     parser.add_argument("--mask", type=str, default=MASK_PATH, 
                        help=f"Path to sparse mask file (default: {MASK_PATH})")
     parser.add_argument("--n_steps", type=int, default=5, 
@@ -894,14 +919,16 @@ if __name__ == "__main__":
                        help="Learning rate (default: 5e-5)")
     parser.add_argument("--subset_size", type=int, default=10, 
                        help="Dataset subset size (default: 10)")
-    parser.add_argument("--run_name", type=str, default="triton_sparse_dpo_optimized", 
-                       help="Run name for wandb (default: triton_sparse_dpo_optimized)")
+    parser.add_argument("--run_name", type=str, default=None, 
+                       help="Run name for wandb (default: auto-generated from model_name)")
     parser.add_argument("--mlp_only", action="store_true", default=False, 
                        help="Only apply sparse training to MLP layers (default: False - use all masked layers)")
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
     
     args = parser.parse_args()
+    
+    MODEL_NAME = args.model_name
     
     print(f"\n{'='*60}")
     print("INITIALIZING SHARED RESOURCES")
@@ -949,6 +976,7 @@ if __name__ == "__main__":
     # Now train with pre-loaded resources
     train(
         model_name=MODEL_NAME,
+        run_name=args.run_name,
         checkpoint_path=args.checkpoint,
         mask_path=args.mask,
         n_steps=args.n_steps,
