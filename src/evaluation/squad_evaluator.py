@@ -258,15 +258,32 @@ def evaluate_squad_with_lm_eval(
     if limit:
         print(f"Limiting to {limit} examples")
     
-    results = simple_evaluate(
-        model="hf",
-        model_args=model_args_str,
-        tasks="squad",
-        num_fewshot=num_fewshot,
-        limit=limit,
-        batch_size=batch_size,
-        device=device,
-    )
+    task_candidates = ["squad", "squad_v2"]
+    results = None
+    task_errors = []
+
+    for task_name in task_candidates:
+        try:
+            results = simple_evaluate(
+                model="hf",
+                model_args=model_args_str,
+                tasks=task_name,
+                num_fewshot=num_fewshot,
+                limit=limit,
+                batch_size=batch_size,
+                device=device,
+            )
+            break
+        except Exception as e:
+            if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
+                task_errors.append(str(e))
+                print(f"Task '{task_name}' not found, trying next alias if available...")
+                continue
+            raise
+    if results is None:
+        raise RuntimeError(
+            f"Failed to run SQuAD; tried aliases {task_candidates}. Errors: {task_errors}"
+        )
     
     print("\n" + "=" * 60)
     print("SQuAD RESULTS")

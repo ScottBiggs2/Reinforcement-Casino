@@ -86,24 +86,13 @@ def evaluate_gpqa_diamond(
     if limit:
         print(f"Limiting to {limit} examples")
     
-    # Note: Task name might be "gpqa_diamond" or "gpqa-diamond" depending on version
-    task_name = "gpqa_diamond"
-    
-    try:
-        results = simple_evaluate(
-            model="hf",
-            model_args=model_args_str,
-            tasks=task_name,
-            num_fewshot=num_fewshot,
-            limit=limit,
-            batch_size=batch_size,
-            device=device,
-        )
-    except Exception as e:
-        # Try alternative task name
-        if "gpqa" in str(e).lower() or "not found" in str(e).lower():
-            print(f"Task '{task_name}' not found, trying 'gpqa-diamond'...")
-            task_name = "gpqa-diamond"
+    # Task name varies across lm-eval versions
+    task_candidates = ["gpqa_diamond", "gpqa-diamond", "gpqa"]
+    results = None
+    task_errors = []
+
+    for task_name in task_candidates:
+        try:
             results = simple_evaluate(
                 model="hf",
                 model_args=model_args_str,
@@ -113,8 +102,17 @@ def evaluate_gpqa_diamond(
                 batch_size=batch_size,
                 device=device,
             )
-        else:
+            break
+        except Exception as e:
+            if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
+                task_errors.append(str(e))
+                print(f"Task '{task_name}' not found, trying next alias if available...")
+                continue
             raise
+    if results is None:
+        raise RuntimeError(
+            f"Failed to run GPQA; tried aliases {task_candidates}. Errors: {task_errors}"
+        )
     
     print("\n" + "=" * 60)
     print("GPQA DIAMOND RESULTS")

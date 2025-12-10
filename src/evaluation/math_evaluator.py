@@ -86,15 +86,34 @@ def evaluate_math(
     if limit:
         print(f"Limiting to {limit} examples")
     
-    results = simple_evaluate(
-        model="hf",
-        model_args=model_args_str,
-        tasks="math",
-        num_fewshot=num_fewshot,
-        limit=limit,
-        batch_size=batch_size,
-        device=device,
-    )
+    # Try common task aliases in case the installed lm-eval version uses different names
+    task_candidates = ["math", "hendrycks_math"]
+    results = None
+    task_errors = []
+
+    for task_name in task_candidates:
+        try:
+            results = simple_evaluate(
+                model="hf",
+                model_args=model_args_str,
+                tasks=task_name,
+                num_fewshot=num_fewshot,
+                limit=limit,
+                batch_size=batch_size,
+                device=device,
+            )
+            break
+        except Exception as e:
+            # Fall back only when the task name is missing in this lm-eval build
+            if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
+                task_errors.append(str(e))
+                print(f"Task '{task_name}' not found, trying next alias if available...")
+                continue
+            raise
+    if results is None:
+        raise RuntimeError(
+            f"Failed to run MATH; tried aliases {task_candidates}. Errors: {task_errors}"
+        )
     
     print("\n" + "=" * 60)
     print("MATH RESULTS")
