@@ -84,7 +84,7 @@ python src/magic/sparse_DPO_v2.py \
     --n_steps 50
 
 # From checkpoint [Try this!]
-python src/magic/sparse_DPO_v2.py \
+python src/magic/sparse_DPO_v3.py \
     --model_name "meta-llama/Llama-3.2-3B-Instruct" \
     --checkpoint None \
     --mask masks/sparsity_95.0pct_momentum_w50_step50.pt \
@@ -176,8 +176,9 @@ python src/warm_start/even_better_mask_finder.py \
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
+    --delta_log_dir "delta_logs_meta_llama_llama_3_2_3b_instruct" \
     --method fisher \
-    --sparsity_percent 90.0 \
+    --sparsity_percent 97.5 \
     --target_step 100 \
     --compute_jaccard \
     --debug

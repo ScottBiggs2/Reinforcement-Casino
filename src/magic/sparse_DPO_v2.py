@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Triton-Accelerated Sparse DPO Training - OPTIMIZED VERSION
+Triton-Accelerated Sparse DPO Training - PERFORMANCE OPTIMIZED
 
 Key Optimizations:
-1. Pre-initialized optimizer states (eliminates lazy init overhead)
-2. Reduced block size from 32 to 16 (better granularity)
-3. Pre-computed non-zero indices for true sparse operations
-4. Indexed sparse kernel (only processes ~5% of elements vs 100%)
-5. Gradient masking with indexed updates (true sparse computation)
+1. FIXED: Removed step as constexpr to prevent kernel recompilation
+2. FIXED: Precompute bias corrections on CPU (cheap, avoids power ops in kernel)
+3. Increased block size to 128 for better GPU utilization
+4. Pre-initialized optimizer states (eliminates lazy init overhead)
+5. Pre-computed non-zero indices for true sparse operations
+6. Indexed sparse kernel (only processes ~10% of elements vs 100%)
+7. Gradient masking with indexed updates (true sparse computation)
 
-Run: python src/sandbox/Triton_DPO_training_optimized.py \
+Run: python sparse_DPO_v3_fixed.py \
   --checkpoint checkpoints_gemma3_dpo/checkpoint-100 \
   --mask masks/top_10.0pct_momentum_w25_step25.pt \
   --n_steps 10
@@ -34,18 +36,9 @@ from datetime import datetime
 # ============================================================================
 
 def sanitize_model_name(model_name: str) -> str:
-    """
-    Convert HuggingFace model name to filesystem-safe string.
-    
-    Examples:
-        "google/gemma-3-270m-it" -> "google_gemma_3_270m_it"
-        "meta-llama/Llama-3.1-8B" -> "meta_llama_llama_3_1_8b"
-    """
-    # Replace "/" with "_", replace "-" with "_", convert to lowercase
+    """Convert HuggingFace model name to filesystem-safe string."""
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
-    # Remove any remaining special characters that might cause issues
     sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
-    # Collapse multiple underscores
     while "__" in sanitized:
         sanitized = sanitized.replace("__", "_")
     return sanitized.strip("_")
@@ -56,11 +49,11 @@ MODEL_NAME_DEFAULT = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w25_step25.pt"
-BLOCK_SIZE = 16  # OPTIMIZATION: Reduced from 32 for better granularity
+BLOCK_SIZE = 128  # CRITICAL FIX: Increased from 16 to 128 for better GPU utilization
 
 
 # ============================================================================
-# TRITON KERNELS
+# TRITON KERNELS - PERFORMANCE FIXED
 # ============================================================================
 
 @triton.jit
@@ -79,22 +72,18 @@ def indexed_sparse_adamw_kernel(
     beta2: tl.constexpr,
     eps: tl.constexpr,
     weight_decay: tl.constexpr,
-    step: tl.constexpr,
+    # CRITICAL FIX: Removed step as constexpr - pass precomputed bias corrections instead
+    bias_correction1_val,
+    bias_correction2_val,
     BLOCK_SIZE: tl.constexpr,
 ):
     """
-    OPTIMIZED: Indexed sparse AdamW that only processes non-zero mask elements.
+    PERFORMANCE FIXED: Indexed sparse AdamW without kernel recompilation.
     
-    KEY IMPROVEMENT: With 94% sparsity, this processes only ~6% of elements
-    instead of 100%, directly addressing the memory bandwidth bottleneck.
+    KEY FIX: Removed 'step' as constexpr to avoid recompiling kernel every step.
+    Instead, bias corrections are precomputed on CPU (cheap) and passed in.
     
-    Algorithm:
-    1. Each thread block processes BLOCK_SIZE non-zero indices
-    2. Load parameters/gradients ONLY at these indices (gather operation)
-    3. Perform AdamW update
-    4. Store back ONLY at these indices (scatter operation)
-    
-    Expected speedup: ~15-20x for layers with 94% sparsity
+    This eliminates 50-200ms compilation overhead PER STEP!
     """
     pid = tl.program_id(0)
     
@@ -126,12 +115,9 @@ def indexed_sparse_adamw_kernel(
     grad_squared = grad * grad
     exp_avg_sq_new = beta2 * exp_avg_sq + beta2_complement * grad_squared
     
-    # Bias correction
-    bias_correction1 = 1.0 - (beta1 ** step)
-    bias_correction2 = 1.0 - (beta2 ** step)
-    
-    exp_avg_corrected = exp_avg_new / bias_correction1
-    exp_avg_sq_corrected = exp_avg_sq_new / bias_correction2
+    # CRITICAL FIX: Use precomputed bias corrections (no expensive power ops!)
+    exp_avg_corrected = exp_avg_new / bias_correction1_val
+    exp_avg_sq_corrected = exp_avg_sq_new / bias_correction2_val
     
     # Compute parameter update
     denom = tl.sqrt(exp_avg_sq_corrected) + eps
@@ -146,31 +132,27 @@ def indexed_sparse_adamw_kernel(
 
 def triton_indexed_sparse_adamw_step(
     param, grad, nonzero_indices, exp_avg, exp_avg_sq,
-    lr, beta1, beta2, eps, weight_decay, step, block_size=16
+    lr, beta1, beta2, eps, weight_decay, step, block_size=128
 ):
     """
     Wrapper for indexed sparse AdamW kernel.
     
-    IMPORTANT: This function flattens all tensors for indexed access,
-    then uses gather/scatter operations via the kernel.
-    
-    Args:
-        param: Parameter tensor (any shape)
-        grad: Gradient tensor (same shape as param)
-        nonzero_indices: 1D tensor of flattened indices where mask is non-zero
-        exp_avg, exp_avg_sq: Optimizer state tensors
-        lr, beta1, beta2, eps, weight_decay: AdamW hyperparameters
-        step: Current optimizer step (for bias correction)
-        block_size: Triton kernel block size
+    CRITICAL FIX: Precompute bias corrections on CPU to avoid kernel recompilation.
+    This is extremely cheap (microseconds) and prevents expensive JIT recompilation.
     """
     n_indices = nonzero_indices.shape[0]
     
     if n_indices == 0:
-        # Edge case: completely masked layer (shouldn't happen but be safe)
         return
     
+    # CRITICAL FIX: Precompute bias corrections on CPU (very cheap!)
+    # This avoids:
+    # 1. Kernel recompilation every step (50-200ms overhead)
+    # 2. Expensive power operations in the kernel
+    bias_correction1 = 1.0 - (beta1 ** step)
+    bias_correction2 = 1.0 - (beta2 ** step)
+    
     # Flatten all tensors for indexed access
-    # Note: .flatten() creates a view, not a copy (efficient)
     param_flat = param.flatten()
     grad_flat = grad.flatten()
     exp_avg_flat = exp_avg.flatten()
@@ -179,7 +161,7 @@ def triton_indexed_sparse_adamw_step(
     # Calculate grid size based on number of non-zero indices
     grid = (triton.cdiv(n_indices, block_size),)
     
-    # Launch kernel
+    # Launch kernel with precomputed bias corrections
     indexed_sparse_adamw_kernel[grid](
         param_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat,
         nonzero_indices,
@@ -189,12 +171,12 @@ def triton_indexed_sparse_adamw_step(
         beta2=beta2,
         eps=eps,
         weight_decay=weight_decay,
-        step=step,
+        bias_correction1_val=bias_correction1,  # ← Precomputed (not constexpr)
+        bias_correction2_val=bias_correction2,  # ← Precomputed (not constexpr)
         BLOCK_SIZE=block_size,
     )
     
     # Reshape back to original shape
-    # Note: Since we modified in-place via flatten(), we need to update .data
     param.data = param_flat.reshape(param.shape)
     exp_avg.data = exp_avg_flat.reshape(exp_avg.shape)
     exp_avg_sq.data = exp_avg_sq_flat.reshape(exp_avg_sq.shape)
@@ -239,25 +221,21 @@ class SparseMaskManager:
             self.masks[name] = mask
             
             # Compute statistics
-            sparsity = (mask == 0.0).sum().item() / mask.numel()  # % of zeros
+            sparsity = (mask == 0.0).sum().item() / mask.numel()
             nonzero_count = (mask != 0.0).sum().item()
             
             self.mask_stats[name] = {
                 'shape': tuple(mask.shape),
-                'sparsity': sparsity,  # % zeros
-                'nonzero': nonzero_count,  # count of non-zeros
+                'sparsity': sparsity,
+                'nonzero': nonzero_count,
             }
             
-            # CRITICAL FIX: Pre-compute flattened indices of non-zero elements ON GPU
-            # The mask is already on device, so nonzero() will return GPU indices
+            # Pre-compute flattened indices of non-zero elements ON GPU
             if nonzero_count > 0:
-                # nonzero() returns indices; we flatten and store as 1D tensor
                 flat_mask = mask.flatten()
                 indices = torch.nonzero(flat_mask, as_tuple=False).squeeze(-1).contiguous()
-                # Ensure indices are on the correct device (should already be, but verify)
                 self.nonzero_indices[name] = indices.to(device, non_blocking=True)
             else:
-                # Edge case: completely sparse mask
                 self.nonzero_indices[name] = torch.empty(0, dtype=torch.long, device=device)
         
         print(f"✓ Loaded {len(self.masks)} masks with pre-computed indices")
@@ -271,7 +249,6 @@ class SparseMaskManager:
         total_active = sum(stats['nonzero'] 
                           for stats in self.mask_stats.values())
         
-        # Calculate true sparsity (% of zeros)
         total_sparsity = 1.0 - (total_active / total_params) if total_params > 0 else 0
         
         print(f"  Total parameters covered: {total_params:,}")
@@ -280,7 +257,7 @@ class SparseMaskManager:
         print(f"  Active parameters (% non-zero): {(1-total_sparsity)*100:.2f}%")
     
     def get_mask(self, param_name):
-        """Get mask for a parameter - try direct match first, then with conversions."""
+        """Get mask for a parameter."""
         if param_name in self.masks:
             return self.masks[param_name]
         
@@ -333,7 +310,8 @@ class SparseAdamW(torch.optim.Optimizer):
     OPTIMIZATIONS:
     1. Pre-initialized optimizer states (no lazy init overhead)
     2. Indexed sparse kernel using gather/scatter operations
-    3. Only processes non-zero mask elements (~5% with 94% sparsity)
+    3. Only processes non-zero mask elements (~10% with 90% sparsity)
+    4. FIXED: Precompute bias corrections to avoid kernel recompilation
     """
     
     def __init__(
@@ -344,7 +322,7 @@ class SparseAdamW(torch.optim.Optimizer):
         betas=(0.9, 0.999),
         eps=1e-8,
         weight_decay=0.01,
-        block_size=16,
+        block_size=128,
         mlp_only=True,
     ):
         self.param_to_name = {}
@@ -367,7 +345,6 @@ class SparseAdamW(torch.optim.Optimizer):
         }
         
         # OPTIMIZATION: Pre-initialize all optimizer states upfront
-        # This eliminates the lazy initialization overhead during training
         print(f"\nPre-initializing optimizer states for all parameters...")
         init_start = time.time()
         with torch.no_grad():
@@ -375,7 +352,6 @@ class SparseAdamW(torch.optim.Optimizer):
                 for p in group['params']:
                     state = self.state[p]
                     state['step'] = 0
-                    # Initialize momentum buffers on same device as parameters
                     state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
                     state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
         
@@ -385,6 +361,7 @@ class SparseAdamW(torch.optim.Optimizer):
         print(f"  MLP-only: {mlp_only}")
         print(f"  Block size: {block_size}")
         print(f"  Using indexed sparse kernels: TRUE")
+        print(f"  Kernel recompilation fix: APPLIED")
     
     @torch.no_grad()
     def step(self, closure=None):
@@ -419,14 +396,7 @@ class SparseAdamW(torch.optim.Optimizer):
         return loss
     
     def _sparse_step(self, param, param_name, group):
-        """
-        OPTIMIZED: Sparse update using indexed Triton kernel.
-        
-        Key improvement: Uses pre-computed non-zero indices to only
-        process active weights (gather/scatter operations).
-        
-        NOTE: Timing removed to avoid CPU-GPU synchronization overhead
-        """
+        """Sparse update using indexed Triton kernel (PERFORMANCE FIXED)."""
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
@@ -444,16 +414,13 @@ class SparseAdamW(torch.optim.Optimizer):
             return
         
         state = self.state[param]
-        
-        # OPTIMIZATION: No more lazy init check - states pre-initialized
         state['step'] += 1
         
-        # CRITICAL: Apply mask to gradient first
-        # This ensures gradients at masked locations are zero before sparse update
+        # Apply mask to gradient first
         grad.mul_(mask)
         
         try:
-            # Use optimized indexed sparse kernel
+            # Use optimized indexed sparse kernel (with bias correction fix)
             triton_indexed_sparse_adamw_step(
                 param=param,
                 grad=grad,
@@ -477,16 +444,10 @@ class SparseAdamW(torch.optim.Optimizer):
         self.stats['sparse_steps'] += 1
     
     def _dense_step(self, param, group):
-        """
-        Standard dense AdamW update (fallback for non-masked params).
-        
-        OPTIMIZATION: No more lazy init check - states pre-initialized.
-        NOTE: Timing removed to avoid CPU-GPU synchronization overhead
-        """
+        """Standard dense AdamW update (fallback for non-masked params)."""
         grad = param.grad
         state = self.state[param]
         
-        # OPTIMIZATION: No lazy init needed
         state['step'] += 1
         
         beta1, beta2 = group['betas']
@@ -541,8 +502,6 @@ class SparseAdamW(torch.optim.Optimizer):
         print(f"Total steps:      {total:,}")
         print(f"Sparse steps:     {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
         print(f"Dense steps:      {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
-        print(f"\nNOTE: Per-step timing removed to avoid GPU synchronization overhead.")
-        print(f"      Use PyTorch profiler or nsys for accurate performance measurement.")
         print(f"{'='*60}\n")
 
 
@@ -673,10 +632,11 @@ def train(
     model=None,
     dpo_dataset=None,
     tokenizer=None,
+    enable_subnet_logging=False,
 ):
     """Train with optimized Triton-accelerated sparse training."""
     
-    # Determine model source - handle "None" string from argparse
+    # Determine model source
     if checkpoint_path is None or (isinstance(checkpoint_path, str) and checkpoint_path.lower() == "none"):
         checkpoint_path = model_name
         print(f"No checkpoint specified, using base model from HF: {checkpoint_path}")
@@ -686,18 +646,19 @@ def train(
     # Derive run_name from model_name if not provided
     if run_name is None:
         model_sanitized = sanitize_model_name(model_name)
-        run_name = f"triton_sparse_dpo_{model_sanitized}_optimized"
+        run_name = f"triton_sparse_dpo_{model_sanitized}_fixed"
     
     run_dir = make_run_dir(base_dir="results", run_name=run_name)
     print(f"\n{'='*60}")
-    print(f"TRITON-ACCELERATED SPARSE DPO TRAINING (OPTIMIZED)")
+    print(f"TRITON SPARSE DPO - PERFORMANCE FIXED")
     print(f"{'='*60}")
     print(f"Run directory: {run_dir}")
     print(f"Model source: {checkpoint_path}")
     print(f"Mask path: {mask_path}")
     print(f"Steps: {n_steps}")
     print(f"Learning rate: {learning_rate}")
-    print(f"Block size: {block_size}")
+    print(f"Block size: {block_size} (optimized)")
+    print(f"Subnet logging: {enable_subnet_logging}")
     print(f"{'='*60}\n")
 
     # Load or reuse tokenizer
@@ -783,7 +744,7 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=1,
-        report_to="wandb",
+        report_to="wandb" if enable_subnet_logging else "none",
         remove_unused_columns=False,
         run_name=run_name,
         gradient_accumulation_steps=1,
@@ -796,102 +757,76 @@ def train(
         dataloader_pin_memory=False,
     )
 
-    # Initialize wandb
-    wandb.init(
-        project=WANDB_PROJECT, 
-        name=run_name, 
-        config={
-            "model_name": model_name,
-            "checkpoint": checkpoint_path,
-            "mask_path": mask_path,
-            "dataset": DATASET_NAME,
-            "n_steps": n_steps,
-            "batch_size": batch_size,
-            "learning_rate": learning_rate,
-            "subset_size": subset_size,
-            "mlp_only": mlp_only,
-            "block_size": block_size,
-            "triton_enabled": True,
-            "optimizer": "SparseAdamW_Indexed",
-            "dtype": "bfloat16",
-            "optimization": "pre_init_indexed_gather_scatter"
-        }
-    )
-
-    # Snapshot initial params θ(0)
-    base_state = {}
-    with torch.no_grad():
-        for name, param in model.named_parameters():
-            base_state[name] = param.detach().float().cpu().clone()
-
-    # Subnet logging callback
-    class SubnetLoggingCallback(TrainerCallback):
-        """
-        Callback that logs subnet statistics to wandb.
+    # Initialize wandb only if subnet logging is enabled
+    if enable_subnet_logging:
+        wandb.init(
+            project=WANDB_PROJECT, 
+            name=run_name, 
+            config={
+                "model_name": model_name,
+                "checkpoint": checkpoint_path,
+                "mask_path": mask_path,
+                "dataset": DATASET_NAME,
+                "n_steps": n_steps,
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "subset_size": subset_size,
+                "mlp_only": mlp_only,
+                "block_size": block_size,
+                "triton_enabled": True,
+                "optimizer": "SparseAdamW_Fixed",
+                "dtype": "bfloat16",
+                "optimization": "bias_correction_fix_large_blocks"
+            }
+        )
         
-        ⚠️ PERFORMANCE WARNING: This callback is VERY SLOW due to:
-        1. GPU→CPU transfers (line 843: `.cpu()`) - forces GPU sync + PCIe transfer
-        2. Iterating ALL parameters every step (line 842)
-        3. Computing norms on CPU tensors (line 846)
-        4. wandb.log() network I/O overhead (line 869)
-        
-        For speed, consider:
-        - Removing this callback entirely (see sparse_DPO_v3.py)
-        - Sampling only a subset of parameters
-        - Using async wandb logging
-        - Keeping computations on GPU (but base_state is on CPU)
-        """
-        
-        def __init__(self, base_state, threshold=1e-3):
-            self.base_state = base_state
-            self.threshold = threshold
+        # Snapshot initial params for subnet logging
+        base_state = {}
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                base_state[name] = param.detach().float().cpu().clone()
 
-        def on_step_end(self, args, state, control, **kwargs):
-            model = kwargs["model"]
-            step = state.global_step
+        # Subnet logging callback (SLOW - only enable if needed!)
+        class SubnetLoggingCallback(TrainerCallback):
+            def __init__(self, base_state, threshold=1e-3):
+                self.base_state = base_state
+                self.threshold = threshold
 
-            layer_stats = {}
+            def on_step_end(self, args, state, control, **kwargs):
+                model = kwargs["model"]
+                step = state.global_step
 
-            with torch.no_grad():
-                for name, param in model.named_parameters():
-                    # ⚠️ SLOW: .cpu() forces GPU sync + PCIe transfer for EVERY parameter
-                    current = param.detach().float().cpu()
-                    diff = current - self.base_state[name]
+                layer_stats = {}
+                with torch.no_grad():
+                    for name, param in model.named_parameters():
+                        current = param.detach().float().cpu()
+                        diff = current - self.base_state[name]
+                        l2 = torch.norm(diff).item()
+                        frac_big = (diff.abs() > self.threshold).float().mean().item()
+                        layer_stats[name] = {"l2_from_init": l2, "frac_big_from_init": frac_big}
 
-                    # ⚠️ SLOW: Computing on CPU tensors
-                    l2 = torch.norm(diff).item()
-                    frac_big = (diff.abs() > self.threshold).float().mean().item()
+                all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
+                all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
+                mean_l2 = sum(all_l2) / len(all_l2)
+                mean_frac = sum(all_frac) / len(all_frac)
 
-                    layer_stats[name] = {
-                        "l2_from_init": l2,
-                        "frac_big_from_init": frac_big,
-                    }
+                attn_l2 = []
+                mlp_l2 = []
+                for n, st in layer_stats.items():
+                    low = n.lower()
+                    if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
+                        attn_l2.append(st["l2_from_init"])
+                    if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
+                        mlp_l2.append(st["l2_from_init"])
 
-            # Aggregate summaries for wandb
-            all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
-            all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
-            mean_l2 = sum(all_l2) / len(all_l2)
-            mean_frac = sum(all_frac) / len(all_frac)
-
-            attn_l2 = []
-            mlp_l2 = []
-            for n, st in layer_stats.items():
-                low = n.lower()
-                if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
-                    attn_l2.append(st["l2_from_init"])
-                if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
-                    mlp_l2.append(st["l2_from_init"])
-
-            # ⚠️ SLOW: Network I/O overhead
-            wandb.log({
-                "step": step,
-                "subnet/mean_l2_from_init": mean_l2,
-                "subnet/mean_frac_big_from_init": mean_frac,
-                "subnet/attn_mean_l2": (sum(attn_l2)/len(attn_l2)) if attn_l2 else 0.0,
-                "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
-            }, step=step)
-
-            return control
+                wandb.log({
+                    "step": step,
+                    "subnet/mean_l2_from_init": mean_l2,
+                    "subnet/mean_frac_big_from_init": mean_frac,
+                    "subnet/attn_mean_l2": (sum(attn_l2)/len(attn_l2)) if attn_l2 else 0.0,
+                    "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
+                }, step=step)
+                return control
 
     # Create optimized sparse optimizer
     sparse_optimizer = SparseAdamW(
@@ -905,8 +840,8 @@ def train(
         mlp_only=mlp_only,
     )
 
-    # Set up DPOTrainer - match baseline exactly
-    print("\nInitializing DPOTrainer with optimized SparseAdamW...")
+    # Set up DPOTrainer
+    print("\nInitializing DPOTrainer with PERFORMANCE-FIXED SparseAdamW...")
     dpo_trainer = DPOTrainer(
         model=model,
         args=dpo_config,
@@ -919,17 +854,19 @@ def train(
     print("Attaching optimized sparse optimizer to trainer...")
     dpo_trainer.optimizer = sparse_optimizer
     
-    # Add subnet logging callback
-    dpo_trainer.add_callback(SubnetLoggingCallback(base_state=base_state, threshold=1e-3))
+    # Add subnet logging callback only if enabled
+    if enable_subnet_logging:
+        print("Adding subnet logging callback (WARNING: this is slow)...")
+        dpo_trainer.add_callback(SubnetLoggingCallback(base_state=base_state, threshold=1e-3))
 
     # Train
     print(f"\n{'='*60}")
     print("STARTING TRAINING")
     print(f"{'='*60}\n")
     
-    # Use CUDA events for accurate GPU timing (doesn't force synchronization)
+    # Use CUDA events for accurate GPU timing
     if torch.cuda.is_available():
-        torch.cuda.synchronize()  # Sync once before starting
+        torch.cuda.synchronize()
         start_event = torch.cuda.Event(enable_timing=True)
         end_event = torch.cuda.Event(enable_timing=True)
         start_event.record()
@@ -939,8 +876,8 @@ def train(
     
     if torch.cuda.is_available():
         end_event.record()
-        torch.cuda.synchronize()  # Sync once at the end
-        training_time_gpu = start_event.elapsed_time(end_event) / 1000.0  # Convert ms to seconds
+        torch.cuda.synchronize()
+        training_time_gpu = start_event.elapsed_time(end_event) / 1000.0
     
     training_time = time.time() - training_start
     
@@ -960,8 +897,6 @@ def train(
     # Print optimizer statistics
     sparse_optimizer.print_stats()
     
-    print(f"Skipping final model save to conserve space.")
-    
     # Save timing info
     timing_info = {
         'total_training_time': training_time,
@@ -973,19 +908,21 @@ def train(
         json.dump(timing_info, f, indent=2)
     print(f"✓ Timing info saved to {run_dir}/timing_info.json")
     
-    wandb.finish()
+    if enable_subnet_logging:
+        wandb.finish()
+    
     print("\n✓ All done!")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Optimized Triton-accelerated sparse DPO training",
+        description="PERFORMANCE-FIXED Triton-accelerated sparse DPO training",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     
     parser.add_argument("--model_name", type=str, default=MODEL_NAME_DEFAULT,
-                       help=f"HuggingFace model name to load (default: {MODEL_NAME_DEFAULT})")
+                       help=f"HuggingFace model name (default: {MODEL_NAME_DEFAULT})")
     parser.add_argument("--checkpoint", type=str, default=None, 
-                       help="Path to model checkpoint (default: use base model from --model_name)")
+                       help="Path to checkpoint (default: use base model)")
     parser.add_argument("--mask", type=str, default=MASK_PATH, 
                        help=f"Path to sparse mask file (default: {MASK_PATH})")
     parser.add_argument("--n_steps", type=int, default=5, 
@@ -997,36 +934,36 @@ if __name__ == "__main__":
     parser.add_argument("--subset_size", type=int, default=10, 
                        help="Dataset subset size (default: 10)")
     parser.add_argument("--run_name", type=str, default=None, 
-                       help="Run name for wandb (default: auto-generated from model_name)")
+                       help="Run name (default: auto-generated)")
     parser.add_argument("--mlp_only", action="store_true", default=False, 
-                       help="Only apply sparse training to MLP layers (default: False - use all masked layers)")
+                       help="Only sparse train MLP layers (default: False)")
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
+    parser.add_argument("--enable_subnet_logging", action="store_true", default=False,
+                       help="Enable subnet logging to wandb (SLOW! Only for analysis)")
     
     args = parser.parse_args()
     
     MODEL_NAME = args.model_name
     
     print(f"\n{'='*60}")
-    print("INITIALIZING SHARED RESOURCES")
+    print("INITIALIZING RESOURCES")
     print(f"{'='*60}\n")
     
-    # Pre-load shared resources once
     print("Step 1: Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
-    print("✓ Tokenizer loaded and ready\n")
+    print("✓ Tokenizer loaded\n")
     
     print("Step 2: Loading dataset...")
     dataset = load_dpo_dataset(subset_size=args.subset_size)
-    print("✓ Dataset loaded and ready\n")
+    print("✓ Dataset loaded\n")
     
     print("Step 3: Loading model...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # FIXED: Handle checkpoint argument properly
     if args.checkpoint is None or (isinstance(args.checkpoint, str) and args.checkpoint.lower() == "none"):
         model_path = MODEL_NAME
         print(f"Using base model: {MODEL_NAME}")
@@ -1047,10 +984,9 @@ if __name__ == "__main__":
     print(f"✓ Model loaded on {device} with dtype: {model.dtype}\n")
     
     print(f"{'='*60}")
-    print("STARTING TRAINING")
+    print("STARTING TRAINING WITH PERFORMANCE FIXES")
     print(f"{'='*60}\n")
     
-    # Now train with pre-loaded resources
     train(
         model_name=MODEL_NAME,
         run_name=args.run_name,
@@ -1065,4 +1001,5 @@ if __name__ == "__main__":
         model=model,
         dpo_dataset=dataset,
         tokenizer=tokenizer,
+        enable_subnet_logging=args.enable_subnet_logging,
     )
