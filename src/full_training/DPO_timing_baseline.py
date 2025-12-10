@@ -13,8 +13,9 @@ import json
 import time
 import torch
 import argparse
+import wandb
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import DPOTrainer, DPOConfig
 from typing import List, Dict, Any
 
@@ -186,7 +187,7 @@ def train_baseline(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=n_steps + 1,  # Disable logging
-        report_to="none",
+        report_to=["wandb"],
         remove_unused_columns=False,
         gradient_accumulation_steps=1,
         beta=0.1,
@@ -199,6 +200,84 @@ def train_baseline(
         save_steps=n_steps + 1,  # Disable saving
     )
 
+    # Snapshot initial params θ(0)
+    base_state = {}
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            base_state[name] = param.detach().float().cpu().clone()
+
+    # Subnet logging callback
+    class SubnetLoggingCallback(TrainerCallback):
+        """Callback that logs subnet statistics to wandb."""
+        
+        def __init__(self, base_state, threshold=1e-3):
+            self.base_state = base_state
+            self.threshold = threshold
+            self.wandb_initialized = False
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            if not self.wandb_initialized:
+                wandb.init(
+                    project="dpo-timing-baseline",
+                    name=args.run_name if hasattr(args, 'run_name') else "dpo_timing",
+                    config={
+                        "model_name": MODEL_NAME,
+                        "dataset": DATASET_NAME,
+                        "subset_size": subset_size,
+                        "learning_rate": args.learning_rate,
+                        "batch_size_per_device": args.per_device_train_batch_size,
+                    },
+                )
+                self.wandb_initialized = True
+
+        def on_step_end(self, args, state, control, **kwargs):
+            model = kwargs["model"]
+            step = state.global_step
+
+            layer_stats = {}
+
+            with torch.no_grad():
+                for name, param in model.named_parameters():
+                    current = param.detach().float().cpu()
+                    diff = current - self.base_state[name]
+
+                    l2 = torch.norm(diff).item()
+                    frac_big = (diff.abs() > self.threshold).float().mean().item()
+
+                    layer_stats[name] = {
+                        "l2_from_init": l2,
+                        "frac_big_from_init": frac_big,
+                    }
+
+            # Aggregate summaries for wandb
+            all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
+            all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
+            mean_l2 = sum(all_l2) / len(all_l2)
+            mean_frac = sum(all_frac) / len(all_frac)
+
+            attn_l2 = []
+            mlp_l2 = []
+            for n, st in layer_stats.items():
+                low = n.lower()
+                if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
+                    attn_l2.append(st["l2_from_init"])
+                if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
+                    mlp_l2.append(st["l2_from_init"])
+
+            wandb.log({
+                "step": step,
+                "subnet/mean_l2_from_init": mean_l2,
+                "subnet/mean_frac_big_from_init": mean_frac,
+                "subnet/attn_mean_l2": (sum(attn_l2)/len(attn_l2)) if attn_l2 else 0.0,
+                "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
+            }, step=step)
+
+            return control
+
+        def on_train_end(self, args, state, control, **kwargs):
+            if self.wandb_initialized:
+                wandb.finish()
+
     # Initialize trainer
     print("Initializing DPOTrainer...")
     trainer = DPOTrainer(
@@ -208,6 +287,10 @@ def train_baseline(
         eval_dataset=None,
         data_collator=collator,
     )
+    
+    # Add subnet logging callback
+    trainer.add_callback(SubnetLoggingCallback(base_state=base_state, threshold=1e-3))
+    
     print("✓ Trainer ready\n")
 
     # Train with timing

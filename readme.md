@@ -87,9 +87,10 @@ python src/magic/sparse_DPO_v2.py \
 python src/magic/sparse_DPO_v2.py \
     --model_name "meta-llama/Llama-3.2-3B-Instruct" \
     --checkpoint None \
-    --mask sparsity_90.0pct_magnitude_step25.pt \
-    --n_steps 20 \
+    --mask masks/sparsity_90.0pct_magnitude_step25.pt \
+    --n_steps 100 \
     --batch_size 1 \
+    --subset_size 100 \
     --learning_rate 5e-5
 ```
 
@@ -127,10 +128,9 @@ python src/magic/sparse_GRPO_v2.py \
 
 ```bash
 python src/full_training/DPO_timing_baseline.py \
-    --checkpoint None \
-    --n_steps 50 \
+    --n_steps 100 \
     --batch_size 1 \
-    --subset_size 10
+    --subset_size 100
 ```
 
 ### GRPO Baseline
@@ -163,10 +163,11 @@ python src/warm_start/even_better_mask_finder.py \
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
+    --delta_log_dir "delta_logs_meta_llama_llama_3_2_3b_instruct" \
     --method momentum \
-    --sparsity_percent 90.0 \
-    --target_step 100 \
-    --momentum_window 80 \
+    --sparsity_percent 95.0 \
+    --target_step 50 \
+    --momentum_window 50 \
     --compute_jaccard \
     --debug
 ```
