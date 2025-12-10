@@ -79,10 +79,15 @@ def indexed_sparse_adamw_kernel(
     """
     PERFORMANCE FIXED: Indexed sparse AdamW without kernel recompilation.
     
-    KEY FIX: Removed 'step' as constexpr to avoid recompiling kernel every step.
-    Instead, bias corrections are precomputed on CPU (cheap) and passed in.
+    KEY FIXES:
+    1. Removed 'step' as constexpr to avoid recompiling kernel every step
+    2. Precompute bias corrections on CPU (cheap) and pass in
+    3. Gradient masking is IMPLICIT - we only load/process non-zero indices
     
     This eliminates 50-200ms compilation overhead PER STEP!
+    
+    NOTE: grad.mul_(mask) is NOT needed here because we're using indexed operations.
+    The gradient is already effectively masked by only loading at non-zero indices.
     """
     pid = tl.program_id(0)
     
@@ -95,6 +100,7 @@ def indexed_sparse_adamw_kernel(
     idx = tl.load(indices_ptr + offsets, mask=mask_valid, other=0)
     
     # OPTIMIZATION: Gather operation - only load values at non-zero indices
+    # This IMPLICITLY masks the gradient - we never touch masked locations
     param = tl.load(param_ptr + idx, mask=mask_valid, other=0.0)
     grad = tl.load(grad_ptr + idx, mask=mask_valid, other=0.0)
     exp_avg = tl.load(exp_avg_ptr + idx, mask=mask_valid, other=0.0)
@@ -136,26 +142,39 @@ def triton_indexed_sparse_adamw_step(
     """
     Wrapper for indexed sparse AdamW kernel.
     
-    CRITICAL FIX: Precompute bias corrections on CPU to avoid kernel recompilation.
-    This is extremely cheap (microseconds) and prevents expensive JIT recompilation.
+    CRITICAL OPTIMIZATIONS:
+    1. Precompute bias corrections on CPU (cheap, avoids kernel recompilation)
+    2. Use contiguous() only when needed (check first)
+    3. Flatten creates views (zero-copy), but we update .data directly
     """
     n_indices = nonzero_indices.shape[0]
     
     if n_indices == 0:
         return
     
-    # CRITICAL FIX: Precompute bias corrections on CPU (very cheap!)
+    # CRITICAL FIX: Precompute bias corrections on CPU (microseconds)
     # This avoids:
     # 1. Kernel recompilation every step (50-200ms overhead)
     # 2. Expensive power operations in the kernel
     bias_correction1 = 1.0 - (beta1 ** step)
     bias_correction2 = 1.0 - (beta2 ** step)
     
-    # Flatten all tensors for indexed access
+    # Flatten all tensors for indexed access (creates views, not copies)
     param_flat = param.flatten()
     grad_flat = grad.flatten()
     exp_avg_flat = exp_avg.flatten()
     exp_avg_sq_flat = exp_avg_sq.flatten()
+    
+    # OPTIMIZATION: Ensure contiguity for optimal memory access
+    # Only call .contiguous() if needed (it's expensive if it has to copy)
+    if not param_flat.is_contiguous():
+        param_flat = param_flat.contiguous()
+    if not grad_flat.is_contiguous():
+        grad_flat = grad_flat.contiguous()
+    if not exp_avg_flat.is_contiguous():
+        exp_avg_flat = exp_avg_flat.contiguous()
+    if not exp_avg_sq_flat.is_contiguous():
+        exp_avg_sq_flat = exp_avg_sq_flat.contiguous()
     
     # Calculate grid size based on number of non-zero indices
     grid = (triton.cdiv(n_indices, block_size),)
@@ -175,7 +194,9 @@ def triton_indexed_sparse_adamw_step(
         BLOCK_SIZE=block_size,
     )
     
-    # Reshape back to original shape
+    # OPTIMIZATION: Update .data directly to avoid overhead
+    # Since flatten() created views, modifications are already reflected
+    # But we need to ensure the reshaped view is set back
     param.data = param_flat.reshape(param.shape)
     exp_avg.data = exp_avg_flat.reshape(exp_avg.shape)
     exp_avg_sq.data = exp_avg_sq_flat.reshape(exp_avg_sq.shape)
@@ -400,7 +421,18 @@ class SparseAdamW(torch.optim.Optimizer):
         return loss
     
     def _sparse_step(self, param, param_name, group):
-        """Sparse update using indexed Triton kernel (PERFORMANCE FIXED)."""
+        """
+        Sparse update using indexed Triton kernel (PERFORMANCE FIXED).
+        
+        CRITICAL OPTIMIZATION: We do NOT call grad.mul_(mask) here!
+        The indexed kernel only processes non-zero indices, so gradient
+        masking is implicit. Calling grad.mul_(mask) would:
+        1. Waste time processing ALL gradients (dense operation)
+        2. Cause an extra GPU memory pass
+        3. Provide no benefit since we only load at non-zero indices
+        
+        The kernel's gather operation IS the gradient masking.
+        """
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
@@ -420,8 +452,8 @@ class SparseAdamW(torch.optim.Optimizer):
         state = self.state[param]
         state['step'] += 1
         
-        # Apply mask to gradient first
-        grad.mul_(mask)
+        # REMOVED: grad.mul_(mask) - this is wasteful with indexed operations!
+        # The kernel only touches non-zero indices, so masking is implicit.
         
         try:
             # Use optimized indexed sparse kernel (with bias correction fix)
@@ -635,6 +667,7 @@ def train(
     model=None,
     dpo_dataset=None,
     tokenizer=None,
+    save_model=False,
 ):
     """Train with optimized Triton-accelerated sparse training."""
     
@@ -833,6 +866,15 @@ def train(
         json.dump(timing_info, f, indent=2)
     print(f"✓ Timing info saved to {run_dir}/timing_info.json")
     
+    # Save final model to safetensors if requested
+    if save_model:
+        print(f"\nSaving final model to safetensors...")
+        model_save_dir = os.path.join(run_dir, "final_model")
+        os.makedirs(model_save_dir, exist_ok=True)
+        model.save_pretrained(model_save_dir, safe_serialization=True)
+        tokenizer.save_pretrained(model_save_dir)
+        print(f"✓ Model saved to {model_save_dir}")
+    
     print("\n✓ All done!")
 
 if __name__ == "__main__":
@@ -861,6 +903,8 @@ if __name__ == "__main__":
                        help="Only sparse train MLP layers (default: False)")
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
+    parser.add_argument("--save_model", action="store_true", default=False,
+                       help="Save final model to safetensors after training (default: False)")
     
     args = parser.parse_args()
     
@@ -920,4 +964,5 @@ if __name__ == "__main__":
         model=model,
         dpo_dataset=dataset,
         tokenizer=tokenizer,
+        save_model=args.save_model,
     )
