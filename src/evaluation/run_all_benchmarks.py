@@ -6,6 +6,7 @@ Supports running individual benchmarks or all benchmarks at once.
 import os
 import sys
 import argparse
+import inspect
 import json
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -53,13 +54,40 @@ def run_benchmark(
         )
     
     evaluator = BENCHMARKS[benchmark_name]
+
+    # Drop kwargs that are not accepted by the evaluator to avoid unexpected errors
+    evaluator_signature = inspect.signature(evaluator)
+    accepts_var_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in evaluator_signature.parameters.values()
+    )
+    if accepts_var_kwargs:
+        filtered_kwargs = kwargs
+        ignored_kwargs = {}
+    else:
+        filtered_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in evaluator_signature.parameters
+        }
+        ignored_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key not in evaluator_signature.parameters
+        }
+
+    if ignored_kwargs:
+        print(
+            f"Ignoring unsupported arguments for {benchmark_name}: "
+            f"{list(ignored_kwargs.keys())}"
+        )
     
     print(f"\n{'='*80}")
     print(f"Running {benchmark_name.upper()} benchmark")
     print(f"{'='*80}\n")
     
     try:
-        results = evaluator(model_path=model_path, **kwargs)
+        results = evaluator(model_path=model_path, **filtered_kwargs)
         
         # Save results if output directory is specified
         if output_dir:
@@ -95,6 +123,10 @@ def run_all_benchmarks(
     """
     if benchmarks is None:
         benchmarks = ["mmlu", "math", "squad", "gpqa_diamond"]
+
+    # Ensure output directory exists before running any benchmarks or writing summary
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     
     all_results = {}
     

@@ -4,6 +4,7 @@ SQuAD (Stanford Question Answering Dataset) evaluation harness.
 
 import os
 import sys
+import inspect
 from typing import Dict, Any, Optional, List
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForQuestionAnswering
@@ -301,11 +302,29 @@ def evaluate_squad(
         Dictionary with evaluation results
     """
     if method == "lm_eval":
-        return evaluate_squad_with_lm_eval(model_path=model_path, **kwargs)
+        target = evaluate_squad_with_lm_eval
     elif method == "hf_evaluate":
-        return evaluate_squad_with_hf_evaluate(model_path=model_path, **kwargs)
+        target = evaluate_squad_with_hf_evaluate
     else:
         raise ValueError(f"Unknown method: {method}. Use 'lm_eval' or 'hf_evaluate'")
+
+    # Only forward arguments the target evaluator knows how to handle
+    signature = inspect.signature(target)
+    accepted_params = set(signature.parameters.keys()) - {"model_path"}
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items() if key in accepted_params
+    }
+    ignored_kwargs = {
+        key: value for key, value in kwargs.items() if key not in accepted_params
+    }
+
+    if ignored_kwargs:
+        print(
+            f"Ignoring unsupported arguments for SQuAD ({method}): "
+            f"{list(ignored_kwargs.keys())}"
+        )
+
+    return target(model_path=model_path, **filtered_kwargs)
 
 
 if __name__ == "__main__":

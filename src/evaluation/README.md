@@ -35,7 +35,7 @@ Use the unified runner to evaluate on all benchmarks:
 
 ```bash
 python src/evaluation/run_all_benchmarks.py \
-    --model_path google/gemma-2-2b \
+    --model_path meta-llama/Llama-3.2-3B-Instruct \
     --output_dir ./evaluation_results
 ```
 
