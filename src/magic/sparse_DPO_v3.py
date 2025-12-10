@@ -21,10 +21,9 @@ import time
 import torch
 import triton
 import triton.language as tl
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
 from datasets import load_dataset
-import wandb
 import argparse
 from typing import List, Dict, Any
 from datetime import datetime
@@ -51,7 +50,6 @@ def sanitize_model_name(model_name: str) -> str:
     return sanitized.strip("_")
 
 
-WANDB_PROJECT = "rl-casino-triton"
 MODEL_NAME_DEFAULT = "google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
@@ -783,7 +781,7 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=1,
-        report_to="wandb",
+        report_to="none",
         remove_unused_columns=False,
         run_name=run_name,
         gradient_accumulation_steps=1,
@@ -795,103 +793,6 @@ def train(
         gradient_checkpointing=True,
         dataloader_pin_memory=False,
     )
-
-    # Initialize wandb
-    wandb.init(
-        project=WANDB_PROJECT, 
-        name=run_name, 
-        config={
-            "model_name": model_name,
-            "checkpoint": checkpoint_path,
-            "mask_path": mask_path,
-            "dataset": DATASET_NAME,
-            "n_steps": n_steps,
-            "batch_size": batch_size,
-            "learning_rate": learning_rate,
-            "subset_size": subset_size,
-            "mlp_only": mlp_only,
-            "block_size": block_size,
-            "triton_enabled": True,
-            "optimizer": "SparseAdamW_Indexed",
-            "dtype": "bfloat16",
-            "optimization": "pre_init_indexed_gather_scatter"
-        }
-    )
-
-    # Snapshot initial params θ(0)
-    base_state = {}
-    with torch.no_grad():
-        for name, param in model.named_parameters():
-            base_state[name] = param.detach().float().cpu().clone()
-
-    # Subnet logging callback
-    class SubnetLoggingCallback(TrainerCallback):
-        """
-        Callback that logs subnet statistics to wandb.
-        
-        ⚠️ PERFORMANCE WARNING: This callback is VERY SLOW due to:
-        1. GPU→CPU transfers (line 843: `.cpu()`) - forces GPU sync + PCIe transfer
-        2. Iterating ALL parameters every step (line 842)
-        3. Computing norms on CPU tensors (line 846)
-        4. wandb.log() network I/O overhead (line 869)
-        
-        For speed, consider:
-        - Removing this callback entirely (see sparse_DPO_v3.py)
-        - Sampling only a subset of parameters
-        - Using async wandb logging
-        - Keeping computations on GPU (but base_state is on CPU)
-        """
-        
-        def __init__(self, base_state, threshold=1e-3):
-            self.base_state = base_state
-            self.threshold = threshold
-
-        def on_step_end(self, args, state, control, **kwargs):
-            model = kwargs["model"]
-            step = state.global_step
-
-            layer_stats = {}
-
-            with torch.no_grad():
-                for name, param in model.named_parameters():
-                    # ⚠️ SLOW: .cpu() forces GPU sync + PCIe transfer for EVERY parameter
-                    current = param.detach().float().cpu()
-                    diff = current - self.base_state[name]
-
-                    # ⚠️ SLOW: Computing on CPU tensors
-                    l2 = torch.norm(diff).item()
-                    frac_big = (diff.abs() > self.threshold).float().mean().item()
-
-                    layer_stats[name] = {
-                        "l2_from_init": l2,
-                        "frac_big_from_init": frac_big,
-                    }
-
-            # Aggregate summaries for wandb
-            all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
-            all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
-            mean_l2 = sum(all_l2) / len(all_l2)
-            mean_frac = sum(all_frac) / len(all_frac)
-
-            attn_l2 = []
-            mlp_l2 = []
-            for n, st in layer_stats.items():
-                low = n.lower()
-                if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
-                    attn_l2.append(st["l2_from_init"])
-                if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
-                    mlp_l2.append(st["l2_from_init"])
-
-            # ⚠️ SLOW: Network I/O overhead
-            wandb.log({
-                "step": step,
-                "subnet/mean_l2_from_init": mean_l2,
-                "subnet/mean_frac_big_from_init": mean_frac,
-                "subnet/attn_mean_l2": (sum(attn_l2)/len(attn_l2)) if attn_l2 else 0.0,
-                "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
-            }, step=step)
-
-            return control
 
     # Create optimized sparse optimizer
     sparse_optimizer = SparseAdamW(
@@ -918,9 +819,6 @@ def train(
     # Set optimizer AFTER initialization
     print("Attaching optimized sparse optimizer to trainer...")
     dpo_trainer.optimizer = sparse_optimizer
-    
-    # Add subnet logging callback
-    dpo_trainer.add_callback(SubnetLoggingCallback(base_state=base_state, threshold=1e-3))
 
     # Train
     print(f"\n{'='*60}")
@@ -973,7 +871,6 @@ def train(
         json.dump(timing_info, f, indent=2)
     print(f"✓ Timing info saved to {run_dir}/timing_info.json")
     
-    wandb.finish()
     print("\n✓ All done!")
 
 if __name__ == "__main__":
@@ -997,7 +894,7 @@ if __name__ == "__main__":
     parser.add_argument("--subset_size", type=int, default=10, 
                        help="Dataset subset size (default: 10)")
     parser.add_argument("--run_name", type=str, default=None, 
-                       help="Run name for wandb (default: auto-generated from model_name)")
+                       help="Run name (default: auto-generated from model_name)")
     parser.add_argument("--mlp_only", action="store_true", default=False, 
                        help="Only apply sparse training to MLP layers (default: False - use all masked layers)")
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
