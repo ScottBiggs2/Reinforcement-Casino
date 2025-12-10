@@ -83,12 +83,12 @@ python src/magic/sparse_DPO_v2.py \
     --mask masks/top_10.0pct_momentum_w25_step25.pt \
     --n_steps 50
 
-# From checkpoint
+# From checkpoint [Try this!]
 python src/magic/sparse_DPO_v2.py \
-    --model_name "google/gemma-3-270m-it" \
-    --checkpoint checkpoints_google_gemma_3_270m_it_dpo/checkpoint-1000 \
-    --mask masks/sparsity_90.0pct_magnitude_step100.pt \
-    --n_steps 50 \
+    --model_name "meta-llama/Llama-3.2-3B-Instruct" \
+    --checkpoint None \
+    --mask sparsity_90.0pct_magnitude_step25.pt \
+    --n_steps 20 \
     --batch_size 1 \
     --learning_rate 5e-5
 ```
@@ -151,6 +151,7 @@ Find optimal sparse masks using various methods:
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
+    --delta_log_dir "delta_logs_meta_llama_llama_3_2_3b_instruct"
     --method magnitude \
     --sparsity_percent 90.0 \
     --target_step 100 \

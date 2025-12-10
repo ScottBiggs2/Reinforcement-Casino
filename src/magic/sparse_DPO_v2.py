@@ -982,7 +982,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         subset_size=args.subset_size,
-        run_name=args.run_name,
         mlp_only=args.mlp_only,
         block_size=args.block_size,
         model=model,
