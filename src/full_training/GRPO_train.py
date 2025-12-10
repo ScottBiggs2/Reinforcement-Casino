@@ -11,7 +11,7 @@ from transformers import (
     TrainerCallback,
     DataCollatorWithPadding,
 )
-from trl import DPOTrainer, DPOConfig
+from trl import GRPOTrainer, GRPOConfig
 from typing import List, Dict, Any
 
 
@@ -19,7 +19,7 @@ from typing import List, Dict, Any
 # 0. Config
 #######################################
 
-parser = argparse.ArgumentParser(description="DPO Training Script")
+parser = argparse.ArgumentParser(description="GRPO Training Script")
 parser.add_argument(
     "--model_name",
     type=str,
@@ -29,9 +29,9 @@ parser.add_argument(
 args = parser.parse_args()
 
 MODEL_NAME = args.model_name
-DATASET_NAME = "qihoo360/Light-R1-DPOData"
-OUTPUT_DIR = "./checkpoints_gemma3_dpo"
-DELTA_LOG_DIR = "./delta_logs"
+DATASET_NAME = "open-r1/OpenR1-Math-220k"  # OpenR1 dataset
+OUTPUT_DIR = "./checkpoints_gemma3_grpo" # universal :/
+DELTA_LOG_DIR = "./delta_logs_grpo" # universal :/
 
 # Flexible checkpoint schedule
 # Save every 5 steps for first 25 steps, then every 25 steps after
@@ -41,19 +41,17 @@ DELTA_LOG_DIR = "./delta_logs"
 # )
 
 CHECKPOINT_SCHEDULE = (
-    list(range(10, 90, 10)) +  # [5, 10, 15, 20, 25]
-    list(range(100, 1001, 100))  # [50, 75, 100]
+    list(range(10, 90, 10)) +  # [10, 20, 30, 40, 50, 60, 70, 80, 90]
+    list(range(100, 1001, 100))  # [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 )
-# [10, 20, 30 , 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
-
-
+# [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 
 THRESHOLD = 1e-3
 NUM_STEPS = 1000
 SUBSET_SIZE = None  # reduce for faster bring-up
 
-WANDB_PROJECT = "gemma3-dpo-subnetwork-emergence"
-WANDB_RUN_NAME = "gemma3-270m-it_lightR1_flexible_checkpoints"
+WANDB_PROJECT = "gemma3-grpo-subnetwork-emergence"
+WANDB_RUN_NAME = "gemma3-270m-it_openr1_flexible_checkpoints"
 
 print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 
@@ -61,34 +59,39 @@ print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 # 1. Load dataset
 #######################################
 
-raw_ds = load_dataset(DATASET_NAME, split="train")
-
-def msg_to_text(x):
-    if isinstance(x, str):
-        return x
-    if isinstance(x, dict):
-        return x.get("value", "")
-    if isinstance(x, list):
-        return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
-    return str(x)
+raw_ds = load_dataset(DATASET_NAME, split="default")  # Use default split
 
 def normalize_record(rec):
-    prompt_raw   = rec.get("prompt", "")
-    chosen_raw   = rec.get("chosen", "")
-    rejected_raw = rec.get("rejected", "")
-
+    """
+    Normalize OpenR1 dataset record to format expected by GRPO.
+    OpenR1 has 'prompt' and 'solution' fields.
+    """
+    prompt_raw = rec.get("prompt", "")
+    solution_raw = rec.get("solution", "")
+    
+    # Handle prompt - could be string or list
     if isinstance(prompt_raw, list):
         prompt_text = "\n".join(
-            m.get("value","") for m in prompt_raw
-            if isinstance(m, dict) and m.get("from","").lower() != "assistant"
+            m.get("value", "") if isinstance(m, dict) else str(m)
+            for m in prompt_raw
         ).strip()
+    elif isinstance(prompt_raw, dict):
+        prompt_text = prompt_raw.get("value", str(prompt_raw))
     else:
-        prompt_text = msg_to_text(prompt_raw).strip()
-
-    chosen_text   = msg_to_text(chosen_raw).strip()
-    rejected_text = msg_to_text(rejected_raw).strip()
-
-    return {"prompt": prompt_text, "chosen": chosen_text, "rejected": rejected_text}
+        prompt_text = str(prompt_raw).strip()
+    
+    # Handle solution - could be string or list
+    if isinstance(solution_raw, list):
+        solution_text = "\n".join(
+            m.get("value", "") if isinstance(m, dict) else str(m)
+            for m in solution_raw
+        ).strip()
+    elif isinstance(solution_raw, dict):
+        solution_text = solution_raw.get("value", str(solution_raw))
+    else:
+        solution_text = str(solution_raw).strip()
+    
+    return {"prompt": prompt_text, "solution": solution_text}
 
 norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
 
@@ -109,7 +112,11 @@ if tokenizer.pad_token is None:
 tokenizer.padding_side = "right"
 
 
-def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+def grpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+    """
+    Collator function for GRPO training.
+    GRPO expects prompts and generates completions, so we only need to tokenize prompts.
+    """
     # If the dataset was already preprocessed, just stack/pad those tensors.
     if "prompt_input_ids" in examples[0]:
         def pad_stack(key):
@@ -124,43 +131,83 @@ def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
             return out, mask
 
         p_ids, p_mask = pad_stack("prompt_input_ids")
-        c_ids, c_mask = pad_stack("chosen_input_ids")
-        r_ids, r_mask = pad_stack("rejected_input_ids")
         return {
-            "prompt_input_ids": p_ids, "prompt_attention_mask": p_mask,
-            "chosen_input_ids": c_ids, "chosen_attention_mask": c_mask,
-            "rejected_input_ids": r_ids, "rejected_attention_mask": r_mask,
+            "prompt_input_ids": p_ids,
+            "prompt_attention_mask": p_mask,
         }
 
     # Otherwise, we expect raw strings.
-    prompts  = [ex.get("prompt", "")   for ex in examples]
-    chosens  = [ex.get("chosen", "")   for ex in examples]
-    rejects  = [ex.get("rejected", "") for ex in examples]
+    prompts = [ex.get("prompt", "") for ex in examples]
 
-    enc_prompt = [tokenizer(p, truncation=True, max_length=512,  return_tensors="pt") for p in prompts]
-    enc_chosen = [tokenizer(c, truncation=True, max_length=1024, return_tensors="pt") for c in chosens]
-    enc_reject = [tokenizer(r, truncation=True, max_length=1024, return_tensors="pt") for r in rejects]
-
+    enc_prompt = [tokenizer(p, truncation=True, max_length=512, return_tensors="pt") for p in prompts]
     batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-    batch_chosen = tokenizer.pad(enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-    batch_reject = tokenizer.pad(enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8)
 
     for k in ("input_ids", "attention_mask"):
         batch_prompt[k] = batch_prompt[k].to(torch.long)
-        batch_chosen[k] = batch_chosen[k].to(torch.long)
-        batch_reject[k] = batch_reject[k].to(torch.long)
 
     return {
-        "prompt_input_ids":        batch_prompt["input_ids"],
-        "prompt_attention_mask":   batch_prompt["attention_mask"],
-        "chosen_input_ids":        batch_chosen["input_ids"],
-        "chosen_attention_mask":   batch_chosen["attention_mask"],
-        "rejected_input_ids":      batch_reject["input_ids"],
-        "rejected_attention_mask": batch_reject["attention_mask"],
+        "prompt_input_ids": batch_prompt["input_ids"],
+        "prompt_attention_mask": batch_prompt["attention_mask"],
     }
 
+
 #######################################
-# 3. Load policy model (trainable)
+# 3. Reward function for GRPO
+
+# TODO: Replace with proper reward function, not this dumb-ahh placeholder XD 
+#######################################
+
+def reward_function(completions: List[str] | List[List[Dict[str, str]]], **kwargs) -> List[float]:
+    """
+    Reward function for GRPO training.
+    
+    For OpenR1, we can use a simple reward based on:
+    - Length of completion (encourage longer reasoning)
+    - Presence of solution markers (if present in dataset)
+    - Or use a more sophisticated reward model
+    
+    This is a simple placeholder - you may want to replace with a proper reward model.
+    
+    Args:
+        completions: List of strings or list of conversational messages
+        **kwargs: Additional dataset columns (e.g., ground_truth, solution)
+    """
+    rewards = []
+    for completion in completions:
+        # Handle conversational format (list of dicts)
+        if isinstance(completion, list):
+            # Extract text from conversational format
+            completion_text = " ".join(
+                msg.get("content", "") if isinstance(msg, dict) else str(msg)
+                for msg in completion
+            )
+        else:
+            completion_text = str(completion)
+        
+        # Simple reward: encourage longer completions with reasoning
+        # You can replace this with a proper reward model
+        base_reward = len(completion_text.split()) / 100.0  # Normalize by word count
+        
+        # Bonus for having solution markers (if dataset uses them)
+        if "<SOLUTION>" in completion_text or "</SOLUTION>" in completion_text:
+            base_reward += 0.5
+        
+        # Bonus for having reasoning markers
+        if "<think>" in completion_text.lower() or "<start_working_out>" in completion_text.lower():
+            base_reward += 0.3
+        
+        # Check if ground truth solution is provided in kwargs
+        if "solution" in kwargs:
+            # Could add reward based on matching solution (simplified here)
+            pass
+        
+        rewards.append(min(base_reward, 1.0))  # Cap at 1.0
+    
+    return rewards
+
+
+#######################################
+# 4. Load policy model (trainable)
 #######################################
 
 model = AutoModelForCausalLM.from_pretrained(
@@ -171,10 +218,10 @@ model = AutoModelForCausalLM.from_pretrained(
 model.config.use_cache = False  # Trainer compat
 
 #######################################
-# 4. DPOConfig
+# 5. GRPOConfig
 #######################################
 
-cfg = DPOConfig(
+cfg = GRPOConfig(
     output_dir=OUTPUT_DIR,
     run_name=WANDB_RUN_NAME,
     report_to=["wandb"],
@@ -183,28 +230,32 @@ cfg = DPOConfig(
     learning_rate=5e-6,
     max_steps=NUM_STEPS,
     num_train_epochs=1,
-    bf16=True, 
+    bf16=True,
     fp16=False,
     logging_steps=1,
     save_steps=999999,  # Disabled - we'll handle saving in callback
     save_total_limit=None,
     remove_unused_columns=False,
-    # DPO knobs:
-    beta=0.1,
+    # GRPO-specific knobs:
+    num_generations=8,  # Number of generations per prompt for group-based advantage estimation
+    generation_batch_size=8,  # Batch size for generation
     max_length=1024,
     max_prompt_length=512,
+    beta=0.1,  # KL penalty coefficient (controls deviation from reference policy)
 )
 
-trainer = DPOTrainer(
+trainer = GRPOTrainer(
     model=model,
     args=cfg,
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
-    data_collator=dpo_collator_fn,
+    reward_funcs=[reward_function],  # GRPOTrainer expects a list of reward functions
+    data_collator=grpo_collator_fn,
+    processing_class=tokenizer,
 )
 
 #######################################
-# 5. Snapshot initial params θ(0)
+# 6. Snapshot initial params θ(0)
 #######################################
 
 base_state = {}
@@ -216,7 +267,7 @@ os.makedirs(DELTA_LOG_DIR, exist_ok=True)
 torch.save(base_state, os.path.join(DELTA_LOG_DIR, "base_state.pt"))
 
 #######################################
-# 6. Flexible Checkpoint Callback
+# 7. Flexible Checkpoint Callback
 #######################################
 
 class FlexibleCheckpointCallback(TrainerCallback):
@@ -224,6 +275,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
     Callback that saves deltas on a flexible schedule and tracks statistics.
     
     Schedule: Every 5 steps for first 25 steps, then every 25 steps after.
+    Identical to DPO_train.py callback.
     """
     
     def __init__(self, base_state, delta_log_dir, checkpoint_schedule, threshold):
@@ -247,6 +299,8 @@ class FlexibleCheckpointCallback(TrainerCallback):
                     "batch_size_per_device": args.per_device_train_batch_size,
                     "grad_accum": args.gradient_accumulation_steps,
                     "checkpoint_schedule": sorted(list(self.checkpoint_schedule)),
+                    "num_generations": args.num_generations if hasattr(args, 'num_generations') else None,
+                    "generation_batch_size": args.generation_batch_size if hasattr(args, 'generation_batch_size') else None,
                 },
             )
             self.wandb_initialized = True
@@ -317,7 +371,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
             wandb.finish()
 
 #######################################
-# 7. Register callback and train
+# 8. Register callback and train
 #######################################
 
 trainer.add_callback(
@@ -330,7 +384,7 @@ trainer.add_callback(
 )
 
 print(f"\n{'='*60}")
-print(f"Starting DPO training with flexible checkpoint schedule")
+print(f"Starting GRPO training with flexible checkpoint schedule")
 print(f"{'='*60}")
 print(f"Checkpoints will be saved at steps: {CHECKPOINT_SCHEDULE}")
 print(f"Total steps: {NUM_STEPS}")
