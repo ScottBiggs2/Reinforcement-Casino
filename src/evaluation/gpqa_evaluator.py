@@ -1,0 +1,164 @@
+"""
+GPQA Diamond benchmark evaluation harness.
+"""
+
+import os
+import sys
+from typing import Dict, Any, Optional
+import torch
+
+# Add project root to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+try:
+    from lm_eval import simple_evaluate
+    LM_EVAL_AVAILABLE = True
+except ImportError:
+    LM_EVAL_AVAILABLE = False
+    print("Warning: lm-evaluation-harness not installed. Install with: pip install lm-eval")
+
+
+def evaluate_gpqa_diamond(
+    model_path: str,
+    num_fewshot: int = 0,
+    limit: Optional[int] = None,
+    device: Optional[str] = None,
+    dtype: Optional[torch.dtype] = None,
+    batch_size: int = 8,
+    trust_remote_code: bool = False,
+) -> Dict[str, Any]:
+    """
+    Evaluate a model on the GPQA Diamond benchmark.
+    
+    Args:
+        model_path: Path to model (HuggingFace ID or local path)
+        num_fewshot: Number of few-shot examples (default: 0)
+        limit: Limit number of examples (None = all)
+        device: Device to run on (auto-detect if None)
+        dtype: Model dtype (auto-detect if None)
+        batch_size: Batch size for evaluation
+        trust_remote_code: Whether to trust remote code
+        
+    Returns:
+        Dictionary with evaluation results
+    """
+    if not LM_EVAL_AVAILABLE:
+        raise ImportError(
+            "lm-evaluation-harness is required for GPQA Diamond evaluation. "
+            "Install with: pip install lm-eval"
+        )
+    
+    print("=" * 60)
+    print("GPQA DIAMOND EVALUATION")
+    print("=" * 60)
+    
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if torch.cuda.is_available():
+            dtype_str = "float16"
+        elif torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
+    
+    # Auto-detect device if not specified
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    
+    # Build model_args string for lm-eval
+    model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
+    if trust_remote_code:
+        model_args_parts.append("trust_remote_code=True")
+    model_args_str = ",".join(model_args_parts)
+    
+    # Run evaluation using lm-evaluation-harness
+    # Note: simple_evaluate will load the model internally
+    print(f"\nRunning GPQA Diamond evaluation with {num_fewshot}-shot learning...")
+    print(f"Model: {model_path}")
+    print(f"Device: {device}, Dtype: {dtype_str}")
+    if limit:
+        print(f"Limiting to {limit} examples")
+    
+    # Note: Task name might be "gpqa_diamond" or "gpqa-diamond" depending on version
+    task_name = "gpqa_diamond"
+    
+    try:
+        results = simple_evaluate(
+            model="hf",
+            model_args=model_args_str,
+            tasks=task_name,
+            num_fewshot=num_fewshot,
+            limit=limit,
+            batch_size=batch_size,
+            device=device,
+        )
+    except Exception as e:
+        # Try alternative task name
+        if "gpqa" in str(e).lower() or "not found" in str(e).lower():
+            print(f"Task '{task_name}' not found, trying 'gpqa-diamond'...")
+            task_name = "gpqa-diamond"
+            results = simple_evaluate(
+                model="hf",
+                model_args=model_args_str,
+                tasks=task_name,
+                num_fewshot=num_fewshot,
+                limit=limit,
+                batch_size=batch_size,
+                device=device,
+            )
+        else:
+            raise
+    
+    print("\n" + "=" * 60)
+    print("GPQA DIAMOND RESULTS")
+    print("=" * 60)
+    
+    # Extract and print key metrics
+    if "results" in results:
+        gpqa_results = results["results"]
+        # GPQA typically reports accuracy
+        for key, value in gpqa_results.items():
+            if "gpqa" in key.lower() or "diamond" in key.lower():
+                if isinstance(value, dict):
+                    acc = value.get("acc", value.get("acc,none", 0))
+                    if acc:
+                        print(f"\nGPQA Diamond Accuracy: {acc:.4f}")
+                break
+    
+    return results
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Evaluate model on GPQA Diamond benchmark")
+    parser.add_argument("--model_path", type=str, required=True,
+                        help="Path to model (HuggingFace ID or local path)")
+    parser.add_argument("--num_fewshot", type=int, default=0,
+                        help="Number of few-shot examples")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Limit number of examples")
+    parser.add_argument("--batch_size", type=int, default=8,
+                        help="Batch size for evaluation")
+    parser.add_argument("--device", type=str, default=None,
+                        help="Device to run on (auto-detect if not specified)")
+    parser.add_argument("--trust_remote_code", action="store_true",
+                        help="Trust remote code in model config")
+    
+    args = parser.parse_args()
+    
+    results = evaluate_gpqa_diamond(
+        model_path=args.model_path,
+        num_fewshot=args.num_fewshot,
+        limit=args.limit,
+        batch_size=args.batch_size,
+        device=args.device,
+        trust_remote_code=args.trust_remote_code,
+    )
