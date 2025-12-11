@@ -80,12 +80,15 @@ def evaluate_math(
         apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
 
     # Build model_args string for lm-eval
-    model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
+    base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
-        model_args_parts.append("trust_remote_code=True")
+        base_model_args_parts.append("trust_remote_code=True")
+    base_model_args_str = ",".join(base_model_args_parts)
+
+    model_args_variants = []
     if apply_chat_template:
-        model_args_parts.append("apply_chat_template=True")
-    model_args_str = ",".join(model_args_parts)
+        model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
+    model_args_variants.append(base_model_args_str)
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
@@ -101,24 +104,35 @@ def evaluate_math(
     task_errors = []
 
     for task_name in task_candidates:
-        try:
-            results = simple_evaluate(
-                model="hf",
-                model_args=model_args_str,
-                tasks=task_name,
-                num_fewshot=num_fewshot,
-                limit=limit,
-                batch_size=batch_size,
-                device=device,
-            )
+        for model_args_str in model_args_variants:
+            try:
+                results = simple_evaluate(
+                    model="hf",
+                    model_args=model_args_str,
+                    tasks=task_name,
+                    num_fewshot=num_fewshot,
+                    limit=limit,
+                    batch_size=batch_size,
+                    device=device,
+                )
+                break
+            except TypeError as e:
+                if "apply_chat_template" in str(e):
+                    print(
+                        "apply_chat_template not supported by this lm-eval/transformers version; "
+                        "retrying without it."
+                    )
+                    continue
+                raise
+            except Exception as e:
+                # Fall back only when the task name is missing in this lm-eval build
+                if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
+                    task_errors.append(str(e))
+                    print(f"Task '{task_name}' not found, trying next alias if available...")
+                    break
+                raise
+        if results is not None:
             break
-        except Exception as e:
-            # Fall back only when the task name is missing in this lm-eval build
-            if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
-                task_errors.append(str(e))
-                print(f"Task '{task_name}' not found, trying next alias if available...")
-                continue
-            raise
     if results is None:
         raise RuntimeError(
             f"Failed to run MATH; tried aliases {task_candidates}. Errors: {task_errors}"

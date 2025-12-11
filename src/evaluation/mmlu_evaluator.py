@@ -79,13 +79,16 @@ def evaluate_mmlu(
         lower_path = model_path.lower()
         apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
 
-    # Build model_args string for lm-eval
-    model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
+    # Build model_args string(s) for lm-eval
+    base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
-        model_args_parts.append("trust_remote_code=True")
+        base_model_args_parts.append("trust_remote_code=True")
+    base_model_args_str = ",".join(base_model_args_parts)
+
+    model_args_variants = []
     if apply_chat_template:
-        model_args_parts.append("apply_chat_template=True")
-    model_args_str = ",".join(model_args_parts)
+        model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
+    model_args_variants.append(base_model_args_str)
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
@@ -95,15 +98,32 @@ def evaluate_mmlu(
     if limit:
         print(f"Limiting to {limit} examples per task")
     
-    results = simple_evaluate(
-        model="hf",
-        model_args=model_args_str,
-        tasks="mmlu",
-        num_fewshot=num_fewshot,
-        limit=limit,
-        batch_size=batch_size,
-        device=device,
-    )
+    results = None
+    last_error = None
+    for model_args_str in model_args_variants:
+        try:
+            results = simple_evaluate(
+                model="hf",
+                model_args=model_args_str,
+                tasks="mmlu",
+                num_fewshot=num_fewshot,
+                limit=limit,
+                batch_size=batch_size,
+                device=device,
+            )
+            break
+        except TypeError as e:
+            if "apply_chat_template" in str(e):
+                print(
+                    "apply_chat_template not supported by this lm-eval/transformers version; "
+                    "retrying without it."
+                )
+                last_error = e
+                continue
+            raise
+
+    if results is None:
+        raise last_error or RuntimeError("Failed to run MMLU evaluation.")
     
     print("\n" + "=" * 60)
     print("MMLU RESULTS")
