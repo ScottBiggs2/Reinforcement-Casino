@@ -258,7 +258,7 @@ def evaluate_squad_with_lm_eval(
     if limit:
         print(f"Limiting to {limit} examples")
     
-    task_candidates = ["squad", "squad_v2"]
+    task_candidates = ["squad", "squad_v2", "squad_completion"]
     results = None
     task_errors = []
 

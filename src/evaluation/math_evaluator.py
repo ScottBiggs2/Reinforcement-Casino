@@ -87,7 +87,7 @@ def evaluate_math(
         print(f"Limiting to {limit} examples")
     
     # Try common task aliases in case the installed lm-eval version uses different names
-    task_candidates = ["math", "hendrycks_math"]
+    task_candidates = ["math", "hendrycks_math500"]
     results = None
     task_errors = []
 
