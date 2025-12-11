@@ -85,20 +85,19 @@ def evaluate_mmlu(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
-    # Build model_args string(s) for lm-eval
+    # Build model_args string for lm-eval
     # lm-eval's from_pretrained will automatically detect and use .safetensors files
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
     base_model_args_str = ",".join(base_model_args_parts)
-
-    model_args_variants = []
+    
+    # Try different configurations for chat template
+    configs_to_try = []
     if apply_chat_template:
-        model_args_variants.append(
-            base_model_args_str + ",apply_chat_template=True,fewshot_as_multiturn=True"
-        )
-        model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
-    model_args_variants.append(base_model_args_str)
+        configs_to_try.append({"apply_chat_template": True, "fewshot_as_multiturn": True})
+        configs_to_try.append({"apply_chat_template": True})
+    configs_to_try.append({})  # Base config without chat template
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
@@ -113,38 +112,41 @@ def evaluate_mmlu(
     
     results = None
     last_error = None
-    for model_args_str in model_args_variants:
-        try:
-            # Suppress lm-eval verbose output when not verbose
-            import logging
-            lm_eval_logger = logging.getLogger("lm_eval")
-            old_level = lm_eval_logger.level
-            if not verbose:
-                lm_eval_logger.setLevel(logging.WARNING)
-            
-            results = simple_evaluate(
-                model="hf",
-                model_args=model_args_str,
-                tasks="mmlu",
-                num_fewshot=num_fewshot,
-                limit=limit,
-                batch_size=batch_size,
-                device=device,
-            )
-            
-            if not verbose:
-                lm_eval_logger.setLevel(old_level)
-            break
-        except TypeError as e:
-            if "apply_chat_template" in str(e):
-                if verbose:
-                    print(
-                        "apply_chat_template not supported by this lm-eval/transformers version; "
-                        "retrying without it."
-                    )
-                last_error = e
-                continue
-            raise
+    
+    import logging
+    import warnings
+    lm_eval_logger = logging.getLogger("lm_eval")
+    old_level = lm_eval_logger.level
+    if not verbose:
+        lm_eval_logger.setLevel(logging.WARNING)
+    
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*chat template.*")
+        
+        for config in configs_to_try:
+            try:
+                eval_kwargs = {
+                    "model": "hf",
+                    "model_args": base_model_args_str,
+                    "tasks": "mmlu",
+                    "num_fewshot": num_fewshot,
+                    "limit": limit,
+                    "batch_size": batch_size,
+                    "device": device,
+                }
+                eval_kwargs.update(config)
+                results = simple_evaluate(**eval_kwargs)
+                break
+            except TypeError as e:
+                if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
+                    if verbose:
+                        print(f"Chat template config not supported: {config}; retrying without it.")
+                    last_error = e
+                    continue
+                raise
+    
+    if not verbose:
+        lm_eval_logger.setLevel(old_level)
 
     if results is None:
         raise last_error or RuntimeError("Failed to run MMLU evaluation.")

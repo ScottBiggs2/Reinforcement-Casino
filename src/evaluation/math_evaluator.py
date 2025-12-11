@@ -92,16 +92,6 @@ def evaluate_math(
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
     base_model_args_str = ",".join(base_model_args_parts)
-
-    model_args_variants = []
-    if apply_chat_template:
-        # Try with chat template options - order matters, try most specific first
-        model_args_variants.append(
-            base_model_args_str + ",apply_chat_template=True,fewshot_as_multiturn=True"
-        )
-        model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
-    # Always include base (without chat template) as fallback
-    model_args_variants.append(base_model_args_str)
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
@@ -125,28 +115,50 @@ def evaluate_math(
     if not verbose:
         lm_eval_logger.setLevel(logging.WARNING)
 
+    # Try different configurations for chat template
+    # apply_chat_template should be passed as a parameter to simple_evaluate, not in model_args
+    configs_to_try = []
+    if apply_chat_template:
+        # Try with chat template and fewshot_as_multiturn first (best for instruct models)
+        configs_to_try.append({
+            "apply_chat_template": True,
+            "fewshot_as_multiturn": True
+        })
+        # Try with just chat template
+        configs_to_try.append({
+            "apply_chat_template": True
+        })
+    # Always include base (without chat template) as fallback
+    configs_to_try.append({})
+    
     for task_name in task_candidates:
-        for model_args_str in model_args_variants:
+        for config in configs_to_try:
             try:
                 # Suppress the chat template warnings - they're just informational
                 import warnings
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore", message=".*chat template.*")
-                    results = simple_evaluate(
-                        model="hf",
-                        model_args=model_args_str,
-                        tasks=task_name,
-                        num_fewshot=num_fewshot,
-                        limit=limit,
-                        batch_size=batch_size,
-                        device=device,
-                    )
+                    
+                    # Build kwargs for simple_evaluate
+                    eval_kwargs = {
+                        "model": "hf",
+                        "model_args": base_model_args_str,
+                        "tasks": task_name,
+                        "num_fewshot": num_fewshot,
+                        "limit": limit,
+                        "batch_size": batch_size,
+                        "device": device,
+                    }
+                    # Add chat template config if specified
+                    eval_kwargs.update(config)
+                    
+                    results = simple_evaluate(**eval_kwargs)
                 break
             except TypeError as e:
-                if "apply_chat_template" in str(e):
+                if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                     if verbose:
                         print(
-                            "apply_chat_template not supported by this lm-eval/transformers version; "
+                            f"Chat template config not supported: {config}; "
                             "retrying without it."
                         )
                     continue

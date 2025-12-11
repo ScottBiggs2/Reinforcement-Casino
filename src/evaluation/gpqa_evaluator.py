@@ -91,14 +91,13 @@ def evaluate_gpqa_diamond(
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
     base_model_args_str = ",".join(base_model_args_parts)
-
-    model_args_variants = []
+    
+    # Try different configurations for chat template
+    configs_to_try = []
     if apply_chat_template:
-        model_args_variants.append(
-            base_model_args_str + ",apply_chat_template=True,fewshot_as_multiturn=True"
-        )
-        model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
-    model_args_variants.append(base_model_args_str)
+        configs_to_try.append({"apply_chat_template": True, "fewshot_as_multiturn": True})
+        configs_to_try.append({"apply_chat_template": True})
+    configs_to_try.append({})  # Base config without chat template
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
@@ -122,37 +121,40 @@ def evaluate_gpqa_diamond(
     if not verbose:
         lm_eval_logger.setLevel(logging.WARNING)
 
-    for task_name in task_candidates:
-        for model_args_str in model_args_variants:
-            try:
-                results = simple_evaluate(
-                    model="hf",
-                    model_args=model_args_str,
-                    tasks=task_name,
-                    num_fewshot=num_fewshot,
-                    limit=limit,
-                    batch_size=batch_size,
-                    device=device,
-                )
-                break
-            except TypeError as e:
-                if "apply_chat_template" in str(e):
-                    if verbose:
-                        print(
-                            "apply_chat_template not supported by this lm-eval/transformers version; "
-                            "retrying without it."
-                        )
-                    continue
-                raise
-            except Exception as e:
-                if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
-                    task_errors.append(str(e))
-                    if verbose:
-                        print(f"Task '{task_name}' not found, trying next alias if available...")
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*chat template.*")
+        
+        for task_name in task_candidates:
+            for config in configs_to_try:
+                try:
+                    eval_kwargs = {
+                        "model": "hf",
+                        "model_args": base_model_args_str,
+                        "tasks": task_name,
+                        "num_fewshot": num_fewshot,
+                        "limit": limit,
+                        "batch_size": batch_size,
+                        "device": device,
+                    }
+                    eval_kwargs.update(config)
+                    results = simple_evaluate(**eval_kwargs)
                     break
-                raise
-        if results is not None:
-            break
+                except TypeError as e:
+                    if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
+                        if verbose:
+                            print(f"Chat template config not supported: {config}; retrying without it.")
+                        continue
+                    raise
+                except Exception as e:
+                    if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
+                        task_errors.append(str(e))
+                        if verbose:
+                            print(f"Task '{task_name}' not found, trying next alias if available...")
+                        break
+                    raise
+            if results is not None:
+                break
     
     if not verbose:
         lm_eval_logger.setLevel(old_level)
