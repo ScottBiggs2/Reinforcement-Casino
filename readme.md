@@ -100,7 +100,7 @@ python src/magic/sparse_DPO_v3.py \
     --n_steps 100 \
     --batch_size 1 \
     --subset_size 100 \
-    --learning_rate 5e-5
+    --learning_rate 5e-5 \
     --block_size 64
 
 
@@ -117,12 +117,12 @@ python src/magic/sparse_DPO_v3.py \
 python src/magic/sparse_DPO_v3.py \
     --model_name "meta-llama/Llama-3.1-8B-Instruct" \
     --checkpoint None \
-    --mask masks/sparsity_90.0pct_magnitude_step40.pt \
+    --mask masks/sparsity_99.5pct_magnitude_step40.pt \
     --n_steps 100 \
     --batch_size 1 \
     --subset_size 100 \
-    --learning_rate 5e-5
-    --block_size 256
+    --learning_rate 5e-5 \
+    --block_size 128
 ```
 
 ### Sparse GRPO Training
@@ -205,7 +205,7 @@ python src/warm_start/even_better_mask_finder.py \
 python src/warm_start/even_better_mask_finder.py \
     --delta_log_dir "delta_logs_meta_llama_llama_3_1_8b_instruct" \
     --method magnitude \
-    --sparsity_percent 90 \
+    --sparsity_percent 99.5 \
     --target_step 40 \
     --compute_jaccard \
     --debug
