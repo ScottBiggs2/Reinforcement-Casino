@@ -111,6 +111,16 @@ python src/magic/sparse_DPO_v3.py \
     --n_steps 100 \
     --batch_size 1 \
     --subset_size 100 \
+    --learning_rate 5e-5 \
+    --block_size 256
+
+python src/magic/sparse_DPO_v3.py \
+    --model_name "meta-llama/Llama-3.1-8B-Instruct" \
+    --checkpoint None \
+    --mask masks/sparsity_90.0pct_magnitude_step40.pt \
+    --n_steps 100 \
+    --batch_size 1 \
+    --subset_size 100 \
     --learning_rate 5e-5
     --block_size 256
 ```

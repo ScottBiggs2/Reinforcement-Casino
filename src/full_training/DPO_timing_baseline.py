@@ -22,7 +22,7 @@ from typing import List, Dict, Any
 # CONFIGURATION
 # ============================================================================
 
-MODEL_NAME = "meta-llama/Llama-3.2-3B-Instruct" #"google/gemma-3-270m-it"
+MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct" #"google/gemma-3-270m-it"
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
 SUBSET_SIZE = 10
 
