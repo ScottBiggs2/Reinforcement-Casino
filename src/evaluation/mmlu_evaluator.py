@@ -87,6 +87,9 @@ def evaluate_mmlu(
 
     model_args_variants = []
     if apply_chat_template:
+        model_args_variants.append(
+            base_model_args_str + ",apply_chat_template=True,fewshot_as_multiturn=True"
+        )
         model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
     model_args_variants.append(base_model_args_str)
     
