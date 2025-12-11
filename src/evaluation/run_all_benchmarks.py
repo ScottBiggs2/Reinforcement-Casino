@@ -33,6 +33,7 @@ def run_benchmark(
     benchmark_name: str,
     model_path: str,
     output_dir: Optional[str] = None,
+    verbose: bool = True,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -76,15 +77,20 @@ def run_benchmark(
             if key not in evaluator_signature.parameters
         }
 
-    if ignored_kwargs:
+    if ignored_kwargs and verbose:
         print(
             f"Ignoring unsupported arguments for {benchmark_name}: "
             f"{list(ignored_kwargs.keys())}"
         )
     
-    print(f"\n{'='*80}")
-    print(f"Running {benchmark_name.upper()} benchmark")
-    print(f"{'='*80}\n")
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"Running {benchmark_name.upper()} benchmark")
+        print(f"{'='*80}\n")
+    
+    # Pass verbose flag to evaluator
+    if "verbose" not in filtered_kwargs:
+        filtered_kwargs["verbose"] = verbose
     
     try:
         results = evaluator(model_path=model_path, **filtered_kwargs)
@@ -95,7 +101,8 @@ def run_benchmark(
             output_file = os.path.join(output_dir, f"{benchmark_name}_results.json")
             with open(output_file, 'w') as f:
                 json.dump(results, f, indent=2, default=str)
-            print(f"\nResults saved to: {output_file}")
+            if verbose:
+                print(f"\nResults saved to: {output_file}")
         
         return results
     except Exception as e:
@@ -107,6 +114,7 @@ def run_all_benchmarks(
     model_path: str,
     benchmarks: Optional[List[str]] = None,
     output_dir: Optional[str] = None,
+    verbose: bool = False,
     **kwargs
 ) -> Dict[str, Dict[str, Any]]:
     """
@@ -128,6 +136,10 @@ def run_all_benchmarks(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
     
+    if not verbose:
+        print(f"Evaluating on {len(benchmarks)} benchmarks: {', '.join(benchmarks)}")
+        print(f"Model: {model_path}\n")
+    
     all_results = {}
     
     for benchmark in benchmarks:
@@ -136,11 +148,15 @@ def run_all_benchmarks(
                 benchmark_name=benchmark,
                 model_path=model_path,
                 output_dir=output_dir,
+                verbose=verbose,
                 **kwargs
             )
             all_results[benchmark] = results
         except Exception as e:
-            print(f"\nFailed to run {benchmark}: {e}")
+            if verbose:
+                print(f"\nFailed to run {benchmark}: {e}")
+            else:
+                print(f"{benchmark}: ERROR - {e}")
             all_results[benchmark] = {"error": str(e)}
     
     # Save summary if output directory is specified
@@ -148,21 +164,21 @@ def run_all_benchmarks(
         summary_file = os.path.join(output_dir, "all_benchmarks_summary.json")
         with open(summary_file, 'w') as f:
             json.dump(all_results, f, indent=2, default=str)
-        print(f"\nSummary saved to: {summary_file}")
+        if verbose:
+            print(f"\nSummary saved to: {summary_file}")
     
     return all_results
 
 
 def print_summary(results: Dict[str, Dict[str, Any]]):
-    """Print a summary of all benchmark results."""
+    """Print a concise summary of all benchmark results."""
     print("\n" + "="*80)
     print("EVALUATION SUMMARY")
     print("="*80)
     
     for benchmark_name, benchmark_results in results.items():
-        print(f"\n{benchmark_name.upper()}:")
         if "error" in benchmark_results:
-            print(f"  Error: {benchmark_results['error']}")
+            print(f"{benchmark_name.upper()}: ERROR - {benchmark_results['error']}")
             continue
         
         # Extract key metrics based on benchmark
@@ -171,27 +187,33 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 mmlu_results = benchmark_results["results"]
                 for key, value in mmlu_results.items():
                     if "mmlu" in key.lower():
-                        if isinstance(value, dict) and "acc" in value:
-                            print(f"  Accuracy: {value['acc']:.4f}")
+                        if isinstance(value, dict):
+                            acc = value.get("acc", value.get("acc,none", 0))
+                            if acc:
+                                print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                                break
         elif benchmark_name == "math":
             if "results" in benchmark_results:
                 math_results = benchmark_results["results"]
                 for key, value in math_results.items():
                     if "math" in key.lower():
-                        if isinstance(value, dict) and "acc" in value:
-                            print(f"  Accuracy: {value['acc']:.4f}")
+                        if isinstance(value, dict):
+                            acc = value.get("acc", value.get("acc,none", 0))
+                            if acc:
+                                print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                                break
         elif benchmark_name == "squad":
             if "exact_match" in benchmark_results:
-                print(f"  Exact Match: {benchmark_results['exact_match']:.4f}")
-                print(f"  F1 Score: {benchmark_results['f1']:.4f}")
+                em = benchmark_results['exact_match']
+                f1 = benchmark_results['f1']
+                print(f"{benchmark_name.upper()}: Exact Match = {em:.4f}, F1 = {f1:.4f}")
             elif "results" in benchmark_results:
                 squad_results = benchmark_results["results"]
                 if "squad" in squad_results:
                     squad_data = squad_results["squad"]
                     exact_match = squad_data.get("exact_match,none", 0)
                     f1 = squad_data.get("f1,none", 0)
-                    print(f"  Exact Match: {exact_match:.4f}")
-                    print(f"  F1 Score: {f1:.4f}")
+                    print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
         elif benchmark_name in ["gpqa", "gpqa_diamond"]:
             if "results" in benchmark_results:
                 gpqa_results = benchmark_results["results"]
@@ -200,7 +222,8 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                         if isinstance(value, dict):
                             acc = value.get("acc", value.get("acc,none", 0))
                             if acc:
-                                print(f"  Accuracy: {acc:.4f}")
+                                print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                                break
 
 
 if __name__ == "__main__":
@@ -271,6 +294,10 @@ Examples:
         choices=["lm_eval", "hf_evaluate"],
         help="Method for SQuAD evaluation"
     )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Enable verbose logging (default: quiet mode for run_all)"
+    )
     
     args = parser.parse_args()
     
@@ -296,11 +323,12 @@ Examples:
     if "squad" in benchmarks_to_run:
         eval_kwargs["method"] = args.squad_method
     
-    # Run benchmarks
+    # Run benchmarks (quiet by default unless --verbose is set)
     results = run_all_benchmarks(
         model_path=args.model_path,
         benchmarks=benchmarks_to_run,
         output_dir=args.output_dir,
+        verbose=args.verbose,
         **eval_kwargs
     )
     

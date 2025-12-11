@@ -101,6 +101,19 @@ python src/evaluation/run_all_benchmarks.py \
 
 The model loader will automatically detect and use `.safetensors` files if present.
 
+#### Loading Models Saved by sparse_DPO_v3.py
+
+Models saved by `sparse_DPO_v3.py` with the `--save_model` flag are saved to `{run_dir}/final_model/` with `.safetensors` format. You can evaluate them directly:
+
+```bash
+# Example: evaluate a model saved from training
+python src/evaluation/run_all_benchmarks.py \
+    --model_path results/my_training_run/final_model \
+    --output_dir ./evaluation_results
+```
+
+The evaluators automatically detect and load `.safetensors` files - no special configuration needed!
+
 ### Programmatic Usage
 
 You can also use the evaluators programmatically:

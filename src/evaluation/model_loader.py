@@ -45,6 +45,10 @@ def load_model_and_tokenizer(
         else:
             device = "cpu"
     
+    # Convert to absolute path if it's a local path
+    if os.path.exists(model_path):
+        model_path = os.path.abspath(model_path)
+    
     print(f"Loading model from: {model_path}")
     print(f"Device: {device}, Dtype: {dtype}")
     
@@ -54,13 +58,22 @@ def load_model_and_tokenizer(
         # Check if it's a directory with model files
         if os.path.isdir(model_path):
             # Check for safetensors or pytorch_model.bin
-            has_safetensors = any(
-                f.endswith('.safetensors') 
-                for f in os.listdir(model_path) 
-                if os.path.isfile(os.path.join(model_path, f))
-            )
+            model_files = [f for f in os.listdir(model_path) 
+                          if os.path.isfile(os.path.join(model_path, f))]
+            has_safetensors = any(f.endswith('.safetensors') for f in model_files)
+            has_pytorch = any(f.startswith('pytorch_model') for f in model_files)
+            
             if has_safetensors:
-                print("Found .safetensors files in directory")
+                safetensor_files = [f for f in model_files if f.endswith('.safetensors')]
+                print(f"Found {len(safetensor_files)} .safetensors file(s) in directory")
+            elif has_pytorch:
+                print("Found pytorch_model.bin in directory (using PyTorch format)")
+            else:
+                # Check if it might be a checkpoint directory structure
+                if 'config.json' in model_files:
+                    print("Found config.json, assuming model checkpoint directory")
+                else:
+                    print("Warning: No model weight files detected, but directory exists")
         else:
             raise ValueError(f"Model path {model_path} exists but is not a directory")
     else:
@@ -78,12 +91,14 @@ def load_model_and_tokenizer(
     
     # Load model
     print("Loading model...")
+    # from_pretrained automatically handles .safetensors files if present
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=dtype,
         trust_remote_code=trust_remote_code,
         device_map="auto" if device == "cuda" else None,
         low_cpu_mem_usage=True,
+        # Prefer safetensors if available (default behavior)
     )
     
     # Move to device if not using device_map

@@ -27,6 +27,7 @@ def evaluate_mmlu(
     batch_size: int = 8,
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
+    verbose: bool = True,
 ) -> Dict[str, Any]:
     """
     Evaluate a model on the MMLU benchmark.
@@ -50,9 +51,10 @@ def evaluate_mmlu(
             "Install with: pip install lm-eval"
         )
     
-    print("=" * 60)
-    print("MMLU EVALUATION")
-    print("=" * 60)
+    if verbose:
+        print("=" * 60)
+        print("MMLU EVALUATION")
+        print("=" * 60)
     
     # Auto-detect dtype if not specified
     if dtype is None:
@@ -79,7 +81,12 @@ def evaluate_mmlu(
         lower_path = model_path.lower()
         apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
 
+    # Convert to absolute path if it's a local path (for lm-eval compatibility)
+    if os.path.exists(model_path):
+        model_path = os.path.abspath(model_path)
+    
     # Build model_args string(s) for lm-eval
+    # lm-eval's from_pretrained will automatically detect and use .safetensors files
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
@@ -95,16 +102,26 @@ def evaluate_mmlu(
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
-    print(f"\nRunning MMLU evaluation with {num_fewshot}-shot learning...")
-    print(f"Model: {model_path}")
-    print(f"Device: {device}, Dtype: {dtype_str}")
-    if limit:
-        print(f"Limiting to {limit} examples per task")
+    if verbose:
+        print(f"\nRunning MMLU evaluation with {num_fewshot}-shot learning...")
+        print(f"Model: {model_path}")
+        print(f"Device: {device}, Dtype: {dtype_str}")
+        if limit:
+            print(f"Limiting to {limit} examples per task")
+    else:
+        print("MMLU: Running...", end=" ", flush=True)
     
     results = None
     last_error = None
     for model_args_str in model_args_variants:
         try:
+            # Suppress lm-eval verbose output when not verbose
+            import logging
+            lm_eval_logger = logging.getLogger("lm_eval")
+            old_level = lm_eval_logger.level
+            if not verbose:
+                lm_eval_logger.setLevel(logging.WARNING)
+            
             results = simple_evaluate(
                 model="hf",
                 model_args=model_args_str,
@@ -114,13 +131,17 @@ def evaluate_mmlu(
                 batch_size=batch_size,
                 device=device,
             )
+            
+            if not verbose:
+                lm_eval_logger.setLevel(old_level)
             break
         except TypeError as e:
             if "apply_chat_template" in str(e):
-                print(
-                    "apply_chat_template not supported by this lm-eval/transformers version; "
-                    "retrying without it."
-                )
+                if verbose:
+                    print(
+                        "apply_chat_template not supported by this lm-eval/transformers version; "
+                        "retrying without it."
+                    )
                 last_error = e
                 continue
             raise
@@ -128,16 +149,18 @@ def evaluate_mmlu(
     if results is None:
         raise last_error or RuntimeError("Failed to run MMLU evaluation.")
     
-    print("\n" + "=" * 60)
-    print("MMLU RESULTS")
-    print("=" * 60)
-    
     # Extract and print key metrics
     if "results" in results:
         mmlu_results = results["results"]
         if "mmlu" in mmlu_results:
             mmlu_score = mmlu_results["mmlu"].get("acc,none", 0)
-            print(f"\nMMLU Accuracy: {mmlu_score:.4f}")
+            if verbose:
+                print("\n" + "=" * 60)
+                print("MMLU RESULTS")
+                print("=" * 60)
+                print(f"\nMMLU Accuracy: {mmlu_score:.4f}")
+            else:
+                print(f"Accuracy: {mmlu_score:.4f}")
         else:
             # MMLU has multiple subtasks
             subtask_scores = {}
@@ -147,10 +170,16 @@ def evaluate_mmlu(
                         subtask_scores[key] = value["acc"]
             if subtask_scores:
                 avg_score = sum(subtask_scores.values()) / len(subtask_scores)
-                print(f"\nMMLU Average Accuracy: {avg_score:.4f}")
-                print("\nPer-subject scores:")
-                for subject, score in sorted(subtask_scores.items()):
-                    print(f"  {subject}: {score:.4f}")
+                if verbose:
+                    print("\n" + "=" * 60)
+                    print("MMLU RESULTS")
+                    print("=" * 60)
+                    print(f"\nMMLU Average Accuracy: {avg_score:.4f}")
+                    print("\nPer-subject scores:")
+                    for subject, score in sorted(subtask_scores.items()):
+                        print(f"  {subject}: {score:.4f}")
+                else:
+                    print(f"Accuracy: {avg_score:.4f}")
     
     return results
 

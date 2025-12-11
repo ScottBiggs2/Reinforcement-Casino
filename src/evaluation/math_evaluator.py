@@ -27,6 +27,7 @@ def evaluate_math(
     batch_size: int = 8,
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
+    verbose: bool = True,
 ) -> Dict[str, Any]:
     """
     Evaluate a model on the MATH benchmark.
@@ -50,9 +51,10 @@ def evaluate_math(
             "Install with: pip install lm-eval"
         )
     
-    print("=" * 60)
-    print("MATH EVALUATION")
-    print("=" * 60)
+    if verbose:
+        print("=" * 60)
+        print("MATH EVALUATION")
+        print("=" * 60)
     
     # Auto-detect dtype if not specified
     if dtype is None:
@@ -79,7 +81,12 @@ def evaluate_math(
         lower_path = model_path.lower()
         apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
 
+    # Convert to absolute path if it's a local path (for lm-eval compatibility)
+    if os.path.exists(model_path):
+        model_path = os.path.abspath(model_path)
+    
     # Build model_args string for lm-eval
+    # lm-eval's from_pretrained will automatically detect and use .safetensors files
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
@@ -95,16 +102,25 @@ def evaluate_math(
     
     # Run evaluation using lm-evaluation-harness
     # Note: simple_evaluate will load the model internally
-    print(f"\nRunning MATH evaluation with {num_fewshot}-shot learning...")
-    print(f"Model: {model_path}")
-    print(f"Device: {device}, Dtype: {dtype_str}")
-    if limit:
-        print(f"Limiting to {limit} examples")
+    if verbose:
+        print(f"\nRunning MATH evaluation with {num_fewshot}-shot learning...")
+        print(f"Model: {model_path}")
+        print(f"Device: {device}, Dtype: {dtype_str}")
+        if limit:
+            print(f"Limiting to {limit} examples")
+    else:
+        print("MATH: Running...", end=" ", flush=True)
     
     # Try common task aliases in case the installed lm-eval version uses different names
     task_candidates = ["math", "hendrycks_math500"]
     results = None
     task_errors = []
+    
+    import logging
+    lm_eval_logger = logging.getLogger("lm_eval")
+    old_level = lm_eval_logger.level
+    if not verbose:
+        lm_eval_logger.setLevel(logging.WARNING)
 
     for task_name in task_candidates:
         for model_args_str in model_args_variants:
@@ -121,42 +137,56 @@ def evaluate_math(
                 break
             except TypeError as e:
                 if "apply_chat_template" in str(e):
-                    print(
-                        "apply_chat_template not supported by this lm-eval/transformers version; "
-                        "retrying without it."
-                    )
+                    if verbose:
+                        print(
+                            "apply_chat_template not supported by this lm-eval/transformers version; "
+                            "retrying without it."
+                        )
                     continue
                 raise
             except Exception as e:
                 # Fall back only when the task name is missing in this lm-eval build
                 if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
                     task_errors.append(str(e))
-                    print(f"Task '{task_name}' not found, trying next alias if available...")
+                    if verbose:
+                        print(f"Task '{task_name}' not found, trying next alias if available...")
                     break
                 raise
         if results is not None:
             break
+    
+    if not verbose:
+        lm_eval_logger.setLevel(old_level)
+    
     if results is None:
         raise RuntimeError(
             f"Failed to run MATH; tried aliases {task_candidates}. Errors: {task_errors}"
         )
-    
-    print("\n" + "=" * 60)
-    print("MATH RESULTS")
-    print("=" * 60)
     
     # Extract and print key metrics
     if "results" in results:
         math_results = results["results"]
         if "math" in math_results:
             math_score = math_results["math"].get("acc,none", 0)
-            print(f"\nMATH Accuracy: {math_score:.4f}")
+            if verbose:
+                print("\n" + "=" * 60)
+                print("MATH RESULTS")
+                print("=" * 60)
+                print(f"\nMATH Accuracy: {math_score:.4f}")
+            else:
+                print(f"Accuracy: {math_score:.4f}")
         else:
             # Check for other possible keys
             for key, value in math_results.items():
                 if "math" in key.lower():
                     if "acc" in value:
-                        print(f"\nMATH Accuracy: {value['acc']:.4f}")
+                        if verbose:
+                            print("\n" + "=" * 60)
+                            print("MATH RESULTS")
+                            print("=" * 60)
+                            print(f"\nMATH Accuracy: {value['acc']:.4f}")
+                        else:
+                            print(f"Accuracy: {value['acc']:.4f}")
                     break
     
     return results
