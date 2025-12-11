@@ -107,7 +107,7 @@ python src/magic/sparse_DPO_v3.py \
 python src/magic/sparse_DPO_v3.py \
     --model_name "meta-llama/Llama-3.2-3B-Instruct" \
     --checkpoint None \
-    --mask masks/sparsity_99.0pct_magnitude_step50.pt \
+    --mask masks/sparsity_97.5_pct_magnitude_step50.pt \
     --n_steps 100 \
     --batch_size 1 \
     --subset_size 100 \
@@ -117,7 +117,7 @@ python src/magic/sparse_DPO_v3.py \
 python src/magic/sparse_DPO_v3.py \
     --model_name "meta-llama/Llama-3.1-8B-Instruct" \
     --checkpoint None \
-    --mask masks/sparsity_99.5pct_magnitude_step40.pt \
+    --mask masks/sparsity_97.5pct_magnitude_step40.pt \
     --n_steps 100 \
     --batch_size 1 \
     --subset_size 100 \

@@ -88,6 +88,11 @@ python src/evaluation/math_evaluator.py \
     --model_path google/gemma-2-2b \
     --num_fewshot 4 \
     --batch_size 8
+
+python src/evaluation/math_evaluator.py \
+    --model_path results/triton_sparse_dpo_meta_llama_llama_3_1_8b_instruct_fixed/final_model \
+    --num_fewshot 4 \
+    --batch_size 8
 ```
 
 #### SQuAD
@@ -124,6 +129,13 @@ python src/evaluation/run_all_benchmarks.py \
     --model_path ./models/my_model \
     --output_dir ./results
 ```
+
+```bash
+python src/evaluation/run_all_benchmarks.py \
+    --model_path results/triton_sparse_dpo_meta_llama_llama_3_1_8b_instruct_fixed/final_model \
+    --output_dir ./llama_3.1_8B_97.5_eval_results
+```
+
 
 The model loader will automatically detect and use `.safetensors` files if present.
 

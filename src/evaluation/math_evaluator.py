@@ -79,7 +79,8 @@ def evaluate_math(
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     if apply_chat_template is None:
         lower_path = model_path.lower()
-        apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
+        # Check if it's an instruct/chat model
+        apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int", "llama-3"])
 
     # Convert to absolute path if it's a local path (for lm-eval compatibility)
     if os.path.exists(model_path):
@@ -94,10 +95,12 @@ def evaluate_math(
 
     model_args_variants = []
     if apply_chat_template:
+        # Try with chat template options - order matters, try most specific first
         model_args_variants.append(
             base_model_args_str + ",apply_chat_template=True,fewshot_as_multiturn=True"
         )
         model_args_variants.append(base_model_args_str + ",apply_chat_template=True")
+    # Always include base (without chat template) as fallback
     model_args_variants.append(base_model_args_str)
     
     # Run evaluation using lm-evaluation-harness
@@ -125,15 +128,19 @@ def evaluate_math(
     for task_name in task_candidates:
         for model_args_str in model_args_variants:
             try:
-                results = simple_evaluate(
-                    model="hf",
-                    model_args=model_args_str,
-                    tasks=task_name,
-                    num_fewshot=num_fewshot,
-                    limit=limit,
-                    batch_size=batch_size,
-                    device=device,
-                )
+                # Suppress the chat template warnings - they're just informational
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=".*chat template.*")
+                    results = simple_evaluate(
+                        model="hf",
+                        model_args=model_args_str,
+                        tasks=task_name,
+                        num_fewshot=num_fewshot,
+                        limit=limit,
+                        batch_size=batch_size,
+                        device=device,
+                    )
                 break
             except TypeError as e:
                 if "apply_chat_template" in str(e):
@@ -164,30 +171,69 @@ def evaluate_math(
         )
     
     # Extract and print key metrics
+    # lm-eval results structure can vary: 
+    # {"results": {"task_name": {"acc,none": value, ...}}, ...}
+    # or {"results": {"task_name": {"acc": value, ...}}, ...}
+    math_score = None
+    task_key_used = None
+    
     if "results" in results:
         math_results = results["results"]
-        if "math" in math_results:
-            math_score = math_results["math"].get("acc,none", 0)
-            if verbose:
-                print("\n" + "=" * 60)
-                print("MATH RESULTS")
-                print("=" * 60)
-                print(f"\nMATH Accuracy: {math_score:.4f}")
-            else:
-                print(f"Accuracy: {math_score:.4f}")
-        else:
-            # Check for other possible keys
+        # Try different possible keys for MATH results
+        for key in ["math", "hendrycks_math500", "hendrycks_math", "hendrycksMath"]:
+            if key in math_results:
+                task_result = math_results[key]
+                if isinstance(task_result, dict):
+                    # Try different accuracy key formats (order matters - try most specific first)
+                    for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
+                        if acc_key in task_result:
+                            math_score = task_result[acc_key]
+                            task_key_used = key
+                            break
+                    if math_score is not None:
+                        break
+        
+        # If still not found, search for any key containing "math"
+        if math_score is None:
             for key, value in math_results.items():
-                if "math" in key.lower():
-                    if "acc" in value:
-                        if verbose:
-                            print("\n" + "=" * 60)
-                            print("MATH RESULTS")
-                            print("=" * 60)
-                            print(f"\nMATH Accuracy: {value['acc']:.4f}")
-                        else:
-                            print(f"Accuracy: {value['acc']:.4f}")
-                    break
+                if "math" in key.lower() and isinstance(value, dict):
+                    for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
+                        if acc_key in value:
+                            math_score = value[acc_key]
+                            task_key_used = key
+                            break
+                    if math_score is not None:
+                        break
+    
+    if math_score is not None:
+        if verbose:
+            print("\n" + "=" * 60)
+            print("MATH RESULTS")
+            print("=" * 60)
+            print(f"\nMATH Accuracy: {math_score:.4f}")
+            if task_key_used:
+                print(f"Task key: {task_key_used}")
+        else:
+            print(f"Accuracy: {math_score:.4f}")
+    else:
+        # Debug: print what we actually got
+        print("\n" + "=" * 60)
+        print("MATH RESULTS - EXTRACTION FAILED")
+        print("=" * 60)
+        print(f"Results type: {type(results)}")
+        if isinstance(results, dict):
+            print(f"Top-level keys: {list(results.keys())}")
+            if "results" in results:
+                print(f"Results['results'] type: {type(results['results'])}")
+                if isinstance(results['results'], dict):
+                    print(f"Results['results'] keys: {list(results['results'].keys())}")
+                    # Print first few result entries for debugging
+                    for key, value in list(results['results'].items())[:3]:
+                        print(f"  {key}: {type(value)} = {value}")
+        print("\nFull results structure (first 500 chars):")
+        import json
+        print(json.dumps(results, indent=2, default=str)[:500])
+        print("\nERROR: Could not extract accuracy from results.")
     
     return results
 
