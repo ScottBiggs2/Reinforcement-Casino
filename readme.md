@@ -193,10 +193,10 @@ python src/warm_start/even_better_mask_finder.py \
     --debug
 
 python src/warm_start/even_better_mask_finder.py \
-    --delta_log_dir "delta_logs_meta_llama_llama_3_2_3b_instruct" \
+    --delta_log_dir "delta_logs_meta_llama_llama_3_1_8b_instruct" \
     --method magnitude \
-    --sparsity_percent 99 \
-    --target_step 100 \
+    --sparsity_percent 90 \
+    --target_step 40 \
     --compute_jaccard \
     --debug
 ```
