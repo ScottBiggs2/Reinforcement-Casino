@@ -161,8 +161,8 @@ python src/magic/sparse_GRPO_v2.py \
 ```bash
 python src/full_training/DPO_timing_baseline.py \
     --n_steps 100 \
-    --batch_size 1 \
-    --subset_size 100
+    --batch_size 4 \
+    --subset_size 1000
 ```
 
 ### GRPO Baseline

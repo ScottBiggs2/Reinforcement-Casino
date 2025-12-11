@@ -132,6 +132,7 @@ def train_baseline(
     batch_size=1,
     learning_rate=5e-5,
     subset_size=10,
+    save_model=False,
 ):
     """Baseline dense DPO training with timing measurement."""
     
@@ -258,6 +259,15 @@ def train_baseline(
     with open('baseline_timing.json', 'w') as f:
         json.dump(results, f, indent=2)
     print("✓ Timing results saved to baseline_timing.json\n")
+    
+    # Save final model to safetensors if requested
+    if save_model:
+        print(f"\nSaving final model to safetensors...")
+        model_save_dir = os.path.join("results", "baseline_dpo_timing", "final_model")
+        os.makedirs(model_save_dir, exist_ok=True)
+        model.save_pretrained(model_save_dir, safe_serialization=True)
+        tokenizer.save_pretrained(model_save_dir)
+        print(f"✓ Model saved to {model_save_dir}")
 
 
 if __name__ == "__main__":
@@ -273,6 +283,8 @@ if __name__ == "__main__":
                        help="Learning rate (default: 5e-5)")
     parser.add_argument("--subset_size", type=int, default=10,
                        help="Dataset subset size (default: 10)")
+    parser.add_argument("--save_model", action="store_true", default=False,
+                       help="Save final model to safetensors after training (use flag without value: --save_model)")
     
     args = parser.parse_args()
     
@@ -282,4 +294,5 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         subset_size=args.subset_size,
+        save_model=args.save_model,
     )
