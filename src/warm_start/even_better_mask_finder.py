@@ -1,16 +1,10 @@
 import torch
 import os
+import sys
 import argparse
 from collections import defaultdict
 import json
 import gc
-import subprocess
-
-
-def safe_cuda_empty_cache(device):
-    """Safely clear CUDA cache only if using CUDA device."""
-    if device == 'cuda' and torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 def load_deltas_streaming(delta_log_dir, target_step=None):
     """
@@ -87,7 +81,7 @@ def create_mask_from_scores_gpu_efficient(scores_dict, sparsity_percent, device=
     
     print(f"Estimated threshold: {threshold:.10f}")
     del all_samples
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     # Apply masks on GPU, store on CPU
     print("\nApplying per-layer masks...")
@@ -130,7 +124,7 @@ def create_mask_from_scores_gpu_efficient(scores_dict, sparsity_percent, device=
     # Clean up GPU
     for name in list(scores_dict.keys()):
         del scores_dict[name]
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     actual_sparsity = 100.0 - (total_kept / total_params * 100)
     
@@ -160,7 +154,7 @@ def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, devic
     masks = create_mask_from_scores_gpu_efficient(scores, sparsity_percent, device)
     
     del final_deltas
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     return masks
 
@@ -194,7 +188,7 @@ def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent,
         
         # Free memory immediately
         del deltas
-        safe_cuda_empty_cache(device)
+        torch.cuda.empty_cache()
     
     if debug:
         print("\nAggregated score statistics (first 5 layers):")
@@ -205,7 +199,7 @@ def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent,
     masks = create_mask_from_scores_gpu_efficient(aggregated, sparsity_percent, device)
     
     del aggregated
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     return masks
 
@@ -251,7 +245,7 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
             del prev_deltas
         prev_deltas = curr_deltas
         
-        safe_cuda_empty_cache(device)
+        torch.cuda.empty_cache()
     
     # Compute momentum scores from accumulated velocities
     print("Computing momentum scores...")
@@ -285,7 +279,7 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
     if prev_deltas is not None:
         del prev_deltas
     
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     if debug:
         print("\nMomentum score statistics (first 5 layers):")
@@ -296,7 +290,7 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
     masks = create_mask_from_scores_gpu_efficient(momentum_scores, sparsity_percent, device)
     
     del momentum_scores
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     return masks
 
@@ -334,7 +328,7 @@ def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cud
         count += 1
         
         del deltas
-        safe_cuda_empty_cache(device)
+        torch.cuda.empty_cache()
     
     # Compute Fisher scores
     print("Computing Fisher scores...")
@@ -352,22 +346,24 @@ def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cud
     
     # Clean up
     del sum_delta, sum_delta_sq
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     masks = create_mask_from_scores_gpu_efficient(fisher_scores, sparsity_percent, device)
     
     del fisher_scores
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     return masks
 
 
-def compute_jaccard_similarity(pred_masks, true_masks, device='cuda'):
+def compute_jaccard_similarity(pred_masks, true_masks):
     """
     Computes Jaccard similarity between predicted and ground truth masks.
-    Uses GPU for faster computation if available.
+    Uses GPU for faster computation.
     """
     print("\n=== Computing Jaccard Similarity ===")
+    
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     per_layer_jaccard = {}
     total_intersection = 0
@@ -391,7 +387,7 @@ def compute_jaccard_similarity(pred_masks, true_masks, device='cuda'):
         
         del pred, true
     
-    safe_cuda_empty_cache(device)
+    torch.cuda.empty_cache()
     
     aggregate_jaccard = total_intersection / total_union if total_union > 0 else 0.0
     
@@ -463,94 +459,53 @@ def main(args):
     # Create output directory
     os.makedirs("masks", exist_ok=True)
     
-    # Robust CUDA detection and initialization
-    device = None
+    # Auto-fix CUDA_VISIBLE_DEVICES if not set
+    if not args.force_cpu and os.environ.get('CUDA_VISIBLE_DEVICES') is None:
+        print("⚠️  CUDA_VISIBLE_DEVICES not set, attempting auto-detection...")
+        
+        # Check for GPU devices
+        gpu_devices = []
+        for i in range(8):  # Check up to 8 GPUs
+            if os.path.exists(f'/dev/nvidia{i}'):
+                gpu_devices.append(str(i))
+        
+        if gpu_devices:
+            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(gpu_devices)
+            print(f"✓ Auto-set CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
+            # Force PyTorch to reinitialize CUDA
+            import importlib
+            if 'torch.cuda' in sys.modules:
+                importlib.reload(torch.cuda)
+        else:
+            print("⚠️  No GPU devices found in /dev/nvidia*")
     
-    if args.cpu:
-        print("WARNING: --cpu flag set, but this script is optimized for GPU.")
-        print("Consider using the original script for CPU execution.")
-        device = 'cpu'
+    # Check GPU availability with diagnostics
+    print("\n=== GPU Diagnostics ===")
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"CUDA version: {torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
+    
+    if torch.cuda.is_available():
+        print(f"GPU count: {torch.cuda.device_count()}")
+        print(f"Current device: {torch.cuda.current_device()}")
+        print(f"GPU name: {torch.cuda.get_device_name(0)}")
+        print(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     else:
-        # Check if CUDA is available
-        cuda_available = torch.cuda.is_available()
-        
-        if not cuda_available:
-            # Provide diagnostic information
-            print("=" * 60)
-            print("CUDA DETECTION DIAGNOSTICS")
-            print("=" * 60)
-            print(f"torch.cuda.is_available(): {cuda_available}")
-            print(f"PyTorch version: {torch.__version__}")
-            print(f"CUDA compiled version: {torch.version.cuda if hasattr(torch.version, 'cuda') else 'N/A'}")
-            
-            # Check environment variables
-            cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')
-            print(f"CUDA_VISIBLE_DEVICES: {cuda_visible}")
-            
-            # Try to get device count (might work even if is_available() is False)
-            try:
-                device_count = torch.cuda.device_count()
-                print(f"torch.cuda.device_count(): {device_count}")
-            except Exception as e:
-                print(f"torch.cuda.device_count() failed: {e}")
-            
-            # Check if nvidia-smi is available
-            import subprocess
-            try:
-                nvidia_smi = subprocess.run(['nvidia-smi', '--list-gpus'], 
-                                           capture_output=True, text=True, timeout=2)
-                if nvidia_smi.returncode == 0:
-                    print(f"\nnvidia-smi output:\n{nvidia_smi.stdout}")
-                    print("\nCUDA devices are present in the system, but PyTorch cannot access them.")
-                    print("Possible issues:")
-                    print("  1. PyTorch was compiled without CUDA support")
-                    print("  2. CUDA driver/runtime mismatch")
-                    print("  3. Environment variables not set correctly")
-                    print("  4. Need to set CUDA_VISIBLE_DEVICES")
-                else:
-                    print("\nnvidia-smi failed or no GPUs detected")
-            except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
-                print(f"\nCould not run nvidia-smi: {e}")
-            
-            print("=" * 60)
-            print("\nERROR: CUDA is not available to PyTorch.")
-            print("This script requires GPU acceleration.")
+        print("\n⚠️  CUDA not available!")
+        print("Common fixes for SLURM/HPC:")
+        print("  1. Make sure you're running this in a GPU job (srun/sbatch with --gres=gpu)")
+        print("  2. Check: nvidia-smi")
+        print("  3. Check: echo $CUDA_VISIBLE_DEVICES")
+        print("  4. Try: module load cuda")
+        if not args.force_cpu:
+            print("\nAdd --force-cpu flag to run on CPU anyway (very slow for large models)")
             return
-        
-        # CUDA is available, try to initialize and get device info
-        try:
-            # Try to create a tensor on GPU to ensure it's actually working
-            test_tensor = torch.zeros(1).cuda()
-            del test_tensor
-            safe_cuda_empty_cache('cuda')
-            
-            device = 'cuda'
-            device_count = torch.cuda.device_count()
-            current_device = torch.cuda.current_device()
-            
-            print(f"\n✓ CUDA initialized successfully")
-            print(f"Using device: {device}")
-            print(f"Available GPUs: {device_count}")
-            print(f"Current GPU: {current_device}")
-            print(f"GPU Name: {torch.cuda.get_device_name(current_device)}")
-            
-            props = torch.cuda.get_device_properties(current_device)
-            print(f"GPU Memory: {props.total_memory / 1e9:.2f} GB")
-            print(f"Compute Capability: {props.major}.{props.minor}")
-            
-        except Exception as e:
-            print(f"\nERROR: CUDA is reported as available but initialization failed:")
-            print(f"  {type(e).__name__}: {e}")
-            print("\nThis might indicate:")
-            print("  - GPU is in use by another process")
-            print("  - Insufficient GPU memory")
-            print("  - Driver/runtime mismatch")
-            print("  - Permission issues")
-            return
+        else:
+            print("\n⚠️  Running on CPU as requested (will be very slow)")
     
-    if device is None:
-        print("ERROR: Could not determine device. Exiting.")
-        return
+    device = 'cuda' if (torch.cuda.is_available() and not args.force_cpu) else 'cpu'
+    print(f"\n✓ Using device: {device}")
     
     # Get streaming iterator
     steps_and_paths = load_deltas_streaming(delta_log_dir, args.target_step)
@@ -603,7 +558,7 @@ def main(args):
     # Compute Jaccard similarity if requested
     jaccard_results = None
     if args.compute_jaccard and ground_truth_masks is not None:
-        jaccard_results = compute_jaccard_similarity(masks, ground_truth_masks, device)
+        jaccard_results = compute_jaccard_similarity(masks, ground_truth_masks)
     
     # Save masks
     step_suffix = f"_step{args.target_step}" if args.target_step else ""
@@ -616,14 +571,8 @@ def main(args):
         "num_steps_used": len(steps_and_paths),
         "steps": steps,
         "device": device,
+        "gpu_name": torch.cuda.get_device_name(0),
     }
-    
-    if device == 'cuda':
-        try:
-            metadata["gpu_name"] = torch.cuda.get_device_name(0)
-            metadata["gpu_memory_gb"] = torch.cuda.get_device_properties(0).total_memory / 1e9
-        except Exception:
-            metadata["gpu_name"] = "Unknown"
     
     if args.method == "momentum":
         metadata["momentum_window"] = args.momentum_window
@@ -645,12 +594,7 @@ def main(args):
         print(f"Detailed Jaccard results saved to: {jaccard_file}")
     
     print("\n✓ Mask generation complete!")
-    if device == 'cuda':
-        try:
-            peak_memory = torch.cuda.max_memory_allocated() / 1e9
-            print(f"Peak GPU memory allocated: {peak_memory:.2f} GB")
-        except Exception:
-            pass
+    print(f"Peak GPU memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 
 
 if __name__ == "__main__":
@@ -665,7 +609,7 @@ if __name__ == "__main__":
     parser.add_argument("--compute_jaccard", action="store_true")
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--cpu", action="store_true", help="Force CPU (not recommended)")
+    parser.add_argument("--force_cpu", action="store_true", help="Force CPU execution (slow but works without GPU)")
     
     args = parser.parse_args()
     main(args)
