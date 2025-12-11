@@ -37,6 +37,11 @@ Use the unified runner to evaluate on all benchmarks:
 python src/evaluation/run_all_benchmarks.py \
     --model_path meta-llama/Llama-3.2-3B-Instruct \
     --output_dir ./evaluation_results
+
+# Force applying chat templates for instruct/chat models
+python src/evaluation/run_all_benchmarks.py \
+    --model_path meta-llama/Llama-3.2-3B-Instruct \
+    --apply_chat_template
 ```
 
 ### Running Individual Benchmarks
@@ -171,6 +176,7 @@ When using `--output_dir`, results are saved as JSON files:
 - **Dtype**: Automatically uses float16 on GPU, float32 on CPU
 - **Memory**: Large models may require significant GPU memory. Consider using `--limit` to reduce dataset size for testing
 - **Few-shot**: Default few-shot settings vary by benchmark (MMLU: 5, MATH: 4, GPQA: 0)
+- **Chat templates**: For chat/instruct models, pass `--apply_chat_template` (or rely on auto-detection) to apply the model's chat template; disable with `--no-apply_chat_template` if needed
 
 ## Troubleshooting
 

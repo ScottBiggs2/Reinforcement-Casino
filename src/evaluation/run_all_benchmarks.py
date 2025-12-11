@@ -258,6 +258,15 @@ Examples:
         help="Trust remote code in model config"
     )
     parser.add_argument(
+        "--apply_chat_template", dest="apply_chat_template", action="store_true",
+        help="Force applying the model's chat template when supported"
+    )
+    parser.add_argument(
+        "--no-apply_chat_template", dest="apply_chat_template", action="store_false",
+        help="Disable applying chat template (defaults to auto-detect for instruct/chat models)"
+    )
+    parser.set_defaults(apply_chat_template=None)
+    parser.add_argument(
         "--squad_method", type=str, default="lm_eval",
         choices=["lm_eval", "hf_evaluate"],
         help="Method for SQuAD evaluation"
@@ -277,6 +286,7 @@ Examples:
         "batch_size": args.batch_size,
         "device": args.device,
         "trust_remote_code": args.trust_remote_code,
+        "apply_chat_template": args.apply_chat_template,
     }
     
     # Add benchmark-specific kwargs

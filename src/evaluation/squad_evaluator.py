@@ -199,6 +199,7 @@ def evaluate_squad_with_lm_eval(
     dtype: Optional[torch.dtype] = None,
     batch_size: int = 8,
     trust_remote_code: bool = False,
+    apply_chat_template: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate a model on SQuAD using lm-evaluation-harness.
@@ -211,6 +212,7 @@ def evaluate_squad_with_lm_eval(
         dtype: Model dtype (auto-detect if None)
         batch_size: Batch size for evaluation
         trust_remote_code: Whether to trust remote code
+        apply_chat_template: Whether to apply the model's chat template (auto for instruct/chat if None)
         
     Returns:
         Dictionary with evaluation results
@@ -244,10 +246,17 @@ def evaluate_squad_with_lm_eval(
         else:
             device = "cpu"
     
+    # Auto-apply chat templates for instruct/chat models if not explicitly set
+    if apply_chat_template is None:
+        lower_path = model_path.lower()
+        apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
+
     # Build model_args string for lm-eval
     model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         model_args_parts.append("trust_remote_code=True")
+    if apply_chat_template:
+        model_args_parts.append("apply_chat_template=True")
     model_args_str = ",".join(model_args_parts)
     
     # Run evaluation
