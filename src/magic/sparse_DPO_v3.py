@@ -904,7 +904,7 @@ if __name__ == "__main__":
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
     parser.add_argument("--save_model", action="store_true", default=False,
-                       help="Save final model to safetensors after training (default: False)")
+                       help="Save final model to safetensors after training (use flag without value: --save_model)")
     
     args = parser.parse_args()
     

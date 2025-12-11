@@ -994,7 +994,7 @@ if __name__ == "__main__":
     parser.add_argument("--enable_subnet_logging", action="store_true", default=False,
                        help="Enable subnet logging to wandb (SLOW! Only for analysis)")
     parser.add_argument("--save_model", action="store_true", default=False,
-                       help="Save final model to safetensors after training (default: False)")
+                       help="Save final model to safetensors after training (use flag without value: --save_model)")
     
     args = parser.parse_args()
     

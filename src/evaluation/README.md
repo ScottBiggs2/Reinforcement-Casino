@@ -11,19 +11,45 @@ This directory contains evaluation harnesses for common LLM benchmarks. All harn
 
 ## Installation
 
-The evaluation harnesses require `lm-evaluation-harness` for most benchmarks:
+The evaluation harnesses require `lm-evaluation-harness` for most benchmarks.
+
+### Quick Install (Recommended)
+
+Use the provided installation script which handles Python 3.11 compatibility issues:
 
 ```bash
+bash install_lm_eval.sh
+```
+
+### Manual Install
+
+If the script doesn't work, try these steps:
+
+```bash
+# 1. Upgrade pip and setuptools
+pip install --upgrade pip setuptools wheel
+
+# 2. Install rouge-score separately (often causes build issues)
+pip install rouge-score
+
+# 3. Install lm-eval
 pip install lm-eval
 ```
 
-**Note**: The `lm-eval` package may require additional dependencies. If you encounter issues, you may need to install from source:
+### Install from Source (If PyPI install fails)
 
 ```bash
 git clone https://github.com/EleutherAI/lm-evaluation-harness
 cd lm-evaluation-harness
 pip install -e .
 ```
+
+### Troubleshooting Python 3.11 Issues
+
+If you encounter `AttributeError: module '_distutils_hack' has no attribute 'add_shim'`:
+- This is usually a harmless warning from setuptools
+- Try: `pip install --upgrade setuptools`
+- If rouge-score fails to build, install it separately first: `pip install rouge-score --no-build-isolation`
 
 For SQuAD, the HuggingFace `evaluate` library is also used (already in requirements.txt).
 

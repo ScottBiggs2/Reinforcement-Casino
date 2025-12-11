@@ -122,7 +122,8 @@ python src/magic/sparse_DPO_v3.py \
     --batch_size 1 \
     --subset_size 100 \
     --learning_rate 5e-5 \
-    --block_size 128
+    --block_size 128 \
+    --save_model 
 ```
 
 ### Sparse GRPO Training
