@@ -119,8 +119,8 @@ python src/magic/sparse_DPO_v3.py \
     --checkpoint None \
     --mask masks/sparsity_97.5pct_magnitude_step40.pt \
     --n_steps 100 \
-    --batch_size 1 \
-    --subset_size 100 \
+    --batch_size 4 \
+    --subset_size 1000 \
     --learning_rate 5e-5 \
     --block_size 128 \
     --save_model 
@@ -162,7 +162,8 @@ python src/magic/sparse_GRPO_v2.py \
 python src/full_training/DPO_timing_baseline.py \
     --n_steps 100 \
     --batch_size 4 \
-    --subset_size 1000
+    --subset_size 1000 \
+    --save_model
 ```
 
 ### GRPO Baseline
@@ -187,6 +188,31 @@ python src/warm_start/even_better_mask_finder.py \
     --method magnitude \
     --sparsity_percent 90.0 \
     --target_step 100 \
+    --compute_jaccard \
+    --debug
+
+python src/warm_start/even_better_mask_finder.py \
+    --delta_log_dir "delta_logs_google_gemma_3_270m_it"\
+    --method magnitude \
+    --sparsity_percent 99.0 \
+    --target_step 50 \
+    --compute_jaccard \
+    --debug
+
+python src/warm_start/even_better_mask_finder.py \
+    --delta_log_dir "delta_logs_google_gemma_3_270m_it"\
+    --method momentum \
+    --momentum_window 10 \
+    --sparsity_percent 99.0 \
+    --target_step 50 \
+    --compute_jaccard \
+    --debug
+
+python src/warm_start/even_better_mask_finder.py \
+    --delta_log_dir "delta_logs_google_gemma_3_270m_it"\
+    --method fisher \
+    --sparsity_percent 99.0 \
+    --target_step 50 \
     --compute_jaccard \
     --debug
 ```

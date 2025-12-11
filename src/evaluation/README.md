@@ -93,6 +93,11 @@ python src/evaluation/math_evaluator.py \
     --model_path results/triton_sparse_dpo_meta_llama_llama_3_1_8b_instruct_fixed/final_model \
     --num_fewshot 4 \
     --batch_size 8
+
+python src/evaluation/math_evaluator.py \
+    --model_path results/baseline_dpo_timing/final_model \
+    --num_fewshot 4 \
+    --batch_size 8
 ```
 
 #### SQuAD

@@ -186,38 +186,129 @@ def evaluate_math(
     # lm-eval results structure can vary: 
     # {"results": {"task_name": {"acc,none": value, ...}}, ...}
     # or {"results": {"task_name": {"acc": value, ...}}, ...}
+    # or {"results": {"task_name/subset": {"acc,none": value, ...}}, ...}
     math_score = None
     task_key_used = None
+    acc_key_used = None
     
     if "results" in results:
         math_results = results["results"]
+        
+        # Debug: print all keys in results if verbose
+        if verbose:
+            print(f"\nDebug: Found {len(math_results)} result keys: {list(math_results.keys())}")
+        
         # Try different possible keys for MATH results
         for key in ["math", "hendrycks_math500", "hendrycks_math", "hendrycksMath"]:
             if key in math_results:
                 task_result = math_results[key]
                 if isinstance(task_result, dict):
+                    if verbose:
+                        print(f"Debug: Found task '{key}' with keys: {list(task_result.keys())}")
                     # Try different accuracy key formats (order matters - try most specific first)
                     for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
                         if acc_key in task_result:
                             math_score = task_result[acc_key]
-                            task_key_used = key
-                            break
+                            # 0 is a valid score, so check if it's actually a number
+                            if isinstance(math_score, (int, float)):
+                                task_key_used = key
+                                acc_key_used = acc_key
+                                if verbose:
+                                    print(f"Debug: Found accuracy using key '{acc_key}': {math_score}")
+                                break
                     if math_score is not None:
                         break
         
-        # If still not found, search for any key containing "math"
+        # If still not found, search for any key containing "math" (handles nested keys like "math/test")
         if math_score is None:
             for key, value in math_results.items():
                 if "math" in key.lower() and isinstance(value, dict):
+                    if verbose:
+                        print(f"Debug: Checking key '{key}' with sub-keys: {list(value.keys())}")
                     for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
                         if acc_key in value:
                             math_score = value[acc_key]
-                            task_key_used = key
-                            break
+                            # 0 is a valid score, so check if it's actually a number
+                            if isinstance(math_score, (int, float)):
+                                task_key_used = key
+                                acc_key_used = acc_key
+                                if verbose:
+                                    print(f"Debug: Found accuracy in '{key}' using '{acc_key}': {math_score}")
+                                break
                     if math_score is not None:
                         break
+        
+        # Last resort: check if there's a nested structure or different format
+        if math_score is None:
+            # Sometimes results are nested differently - check all dict values recursively
+            def find_accuracy_recursive(obj, path=""):
+                if isinstance(obj, dict):
+                    # Check for accuracy keys first
+                    for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
+                        if acc_key in obj:
+                            val = obj[acc_key]
+                            # 0 is a valid score, so just check if it's a number
+                            if isinstance(val, (int, float)):
+                                return val, path, acc_key
+                    # Recurse into nested dicts
+                    for k, v in obj.items():
+                        if isinstance(v, dict):
+                            result = find_accuracy_recursive(v, f"{path}.{k}" if path else k)
+                            if result:
+                                return result
+                return None
+            
+            recursive_result = find_accuracy_recursive(math_results)
+            if recursive_result:
+                math_score, task_key_used, acc_key_used = recursive_result
+                if verbose:
+                    print(f"Debug: Found accuracy recursively at '{task_key_used}' using '{acc_key_used}': {math_score}")
+    
+    # Also check the top-level "results" for aggregated scores
+    if math_score is None and "results" in results:
+        # Sometimes there's an aggregated score at the top level
+        for key in ["acc", "accuracy", "acc,none"]:
+            if key in results:
+                val = results[key]
+                if isinstance(val, (int, float)):
+                    math_score = val
+                    acc_key_used = key
+                    if verbose:
+                        print(f"Debug: Found accuracy at top level using '{key}': {math_score}")
+                    break
+    
+    # Check for alternative result structures (some versions use different formats)
+    if math_score is None and isinstance(results, dict):
+        # Check for "versions" or "scores" nested structure
+        for top_key in ["versions", "scores", "config"]:
+            if top_key in results and isinstance(results[top_key], dict):
+                for key, value in results[top_key].items():
+                    if "math" in key.lower() and isinstance(value, dict):
+                        for acc_key in ["acc,none", "acc", "accuracy"]:
+                            if acc_key in value:
+                                val = value[acc_key]
+                                if isinstance(val, (int, float)):
+                                    math_score = val
+                                    task_key_used = key
+                                    acc_key_used = acc_key
+                                    if verbose:
+                                        print(f"Debug: Found accuracy in '{top_key}.{key}' using '{acc_key}': {math_score}")
+                                    break
+                        if math_score is not None:
+                            break
+                if math_score is not None:
+                    break
     
     if math_score is not None:
+        # 0 is a valid score, but warn if it seems suspiciously low for a good model
+        if math_score == 0.0 and verbose:
+            print("\n⚠️  WARNING: Extracted accuracy is 0.0")
+            print("This could indicate:")
+            print("  1. The model actually scored 0% (very unlikely for Llama 3.1 8B)")
+            print("  2. The wrong metric was extracted")
+            print("  3. The evaluation failed silently")
+            print("\nPlease verify the results structure above.")
+        
         if verbose:
             print("\n" + "=" * 60)
             print("MATH RESULTS")
@@ -225,10 +316,12 @@ def evaluate_math(
             print(f"\nMATH Accuracy: {math_score:.4f}")
             if task_key_used:
                 print(f"Task key: {task_key_used}")
+            if acc_key_used:
+                print(f"Accuracy key: {acc_key_used}")
         else:
             print(f"Accuracy: {math_score:.4f}")
     else:
-        # Debug: print what we actually got
+        # Debug: print what we actually got - ALWAYS show this if extraction fails
         print("\n" + "=" * 60)
         print("MATH RESULTS - EXTRACTION FAILED")
         print("=" * 60)
@@ -239,13 +332,26 @@ def evaluate_math(
                 print(f"Results['results'] type: {type(results['results'])}")
                 if isinstance(results['results'], dict):
                     print(f"Results['results'] keys: {list(results['results'].keys())}")
-                    # Print first few result entries for debugging
-                    for key, value in list(results['results'].items())[:3]:
-                        print(f"  {key}: {type(value)} = {value}")
-        print("\nFull results structure (first 500 chars):")
+                    # Print ALL result entries for debugging (not just first 3)
+                    print("\nAll result entries:")
+                    for key, value in results['results'].items():
+                        print(f"  {key}:")
+                        if isinstance(value, dict):
+                            for sub_key, sub_value in value.items():
+                                print(f"    {sub_key}: {sub_value} (type: {type(sub_value).__name__})")
+                        else:
+                            print(f"    (not a dict): {value} (type: {type(value).__name__})")
+        print("\nFull results structure (first 1000 chars):")
         import json
-        print(json.dumps(results, indent=2, default=str)[:500])
+        results_str = json.dumps(results, indent=2, default=str)
+        print(results_str[:1000])
+        if len(results_str) > 1000:
+            print(f"... (truncated, total length: {len(results_str)} chars)")
         print("\nERROR: Could not extract accuracy from results.")
+        print("This might indicate:")
+        print("  1. The result structure is different than expected")
+        print("  2. The evaluation failed silently")
+        print("  3. The accuracy key name is different")
     
     return results
 

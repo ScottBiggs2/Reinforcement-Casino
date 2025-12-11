@@ -195,13 +195,23 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
         elif benchmark_name == "math":
             if "results" in benchmark_results:
                 math_results = benchmark_results["results"]
+                acc = None
                 for key, value in math_results.items():
                     if "math" in key.lower():
                         if isinstance(value, dict):
-                            acc = value.get("acc", value.get("acc,none", 0))
-                            if acc:
-                                print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                            # Try multiple accuracy key formats (use explicit None check, not 'or' which treats 0 as falsy)
+                            for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
+                                if acc_key in value:
+                                    acc = value[acc_key]
+                                    if isinstance(acc, (int, float)):
+                                        print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                                        break
+                            if acc is not None:
                                 break
+                if acc is None:
+                    print(f"{benchmark_name.upper()}: Could not extract accuracy (check verbose output)")
+                    # Debug: show what we found
+                    print(f"  Available keys in results: {list(math_results.keys()) if isinstance(math_results, dict) else 'N/A'}")
         elif benchmark_name == "squad":
             if "exact_match" in benchmark_results:
                 em = benchmark_results['exact_match']
