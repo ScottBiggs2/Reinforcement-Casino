@@ -23,6 +23,15 @@ except ImportError:
     LM_EVAL_AVAILABLE = False
 
 
+def _has_chat_template(model_path: str) -> bool:
+    """Check if a model has a chat template by inspecting its tokenizer config."""
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        return tokenizer.chat_template is not None
+    except Exception:
+        return False
+
+
 def evaluate_squad_with_hf_evaluate(
     model_path: str,
     split: str = "validation",
@@ -262,9 +271,43 @@ def evaluate_squad_with_lm_eval(
             device = "cpu"
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
+    # NOTE: This codebase uses instruct models, so we should be confident about applying templates
     if apply_chat_template is None:
         lower_path = model_path.lower()
-        apply_chat_template = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
+        # First check path-based detection for HuggingFace models
+        path_has_instruct = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
+        
+        # For local paths, check the model config to see if it has a chat template
+        # (local models saved from instruct training will have chat templates in config)
+        if os.path.exists(model_path):
+            if path_has_instruct:
+                # Path indicates instruct model, apply template
+                apply_chat_template = True
+                if verbose:
+                    print(f"✓ Detected instruct model from path, enabling chat template")
+            else:
+                # Check config to see if model has chat template (for local saved models)
+                if _has_chat_template(model_path):
+                    apply_chat_template = True
+                    if verbose:
+                        print(f"✓ Model has chat template in config (instruct model), enabling chat template")
+                else:
+                    apply_chat_template = False
+                    if verbose:
+                        print(f"⚠ Model does not have chat template in config, disabling chat template")
+        else:
+            # HuggingFace model - use path-based detection
+            apply_chat_template = path_has_instruct
+            if verbose:
+                if apply_chat_template:
+                    print(f"✓ Detected instruct model from HuggingFace path, enabling chat template")
+                else:
+                    print(f"⚠ HuggingFace model path doesn't indicate instruct model, disabling chat template")
+        
+        if verbose:
+            print(f"Final decision: apply_chat_template = {apply_chat_template}")
+    elif verbose:
+        print(f"Chat template explicitly set to: {apply_chat_template}")
 
     # Convert to absolute path if it's a local path (for lm-eval compatibility)
     if os.path.exists(model_path):
@@ -320,6 +363,11 @@ def evaluate_squad_with_lm_eval(
                         "limit": limit,
                         "batch_size": batch_size,
                         "device": device,
+                        # Set generation parameters for proper evaluation
+                        "gen_kwargs": {
+                            "temperature": 0.0,  # Deterministic for fair evaluation
+                            "max_gen_toks": 128,  # Sufficient for SQuAD answers
+                        }
                     }
                     eval_kwargs.update(config)
                     results = simple_evaluate(**eval_kwargs)

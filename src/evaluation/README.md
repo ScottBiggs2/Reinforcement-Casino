@@ -131,8 +131,8 @@ All evaluators support loading models from local directories containing `.safete
 
 ```bash
 python src/evaluation/run_all_benchmarks.py \
-    --model_path ./models/my_model \
-    --output_dir ./results
+    --model_path results/baseline_dpo_timing/final_model \
+    --output_dir ./baseline_dpo_timing_results
 ```
 
 ```bash
