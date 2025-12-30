@@ -53,6 +53,20 @@ If you encounter `AttributeError: module '_distutils_hack' has no attribute 'add
 
 For SQuAD, the HuggingFace `evaluate` library is also used (already in requirements.txt).
 
+### Authentication for Llama Models
+
+If you're using Llama models (e.g., `meta-llama/Llama-3.1-8B-Instruct`), you'll need to:
+
+1. **Accept the license** on the [model page](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)
+2. **Set up authentication** using your Hugging Face token:
+
+```bash
+# Get your token from https://huggingface.co/settings/tokens
+huggingface-cli login
+```
+
+Enter your API token when prompted. This allows you to download and use the model.
+
 ## Usage
 
 ### Running All Benchmarks
@@ -61,7 +75,7 @@ Use the unified runner to evaluate on all benchmarks:
 
 ```bash
 python src/evaluation/run_all_benchmarks.py \
-    --model_path meta-llama/Llama-3.2-3B-Instruct \
+    --model_path meta-llama/Llama-3.1-8B-Instruct \
     --output_dir ./evaluation_results
 
 # Force applying chat templates for instruct/chat models
@@ -69,6 +83,40 @@ python src/evaluation/run_all_benchmarks.py \
     --model_path meta-llama/Llama-3.2-3B-Instruct \
     --apply_chat_template
 ```
+
+### Using Llama 3.1 8B Instruct
+
+The Llama 3.1 8B Instruct model requires `transformers >= 4.43.0` for optimal support. Make sure to upgrade:
+
+```bash
+pip install --upgrade transformers
+```
+
+**Key Features:**
+- Supports conversational inference using the Transformers pipeline abstraction or `AutoModelForCausalLM` with `generate()`
+- Uses `apply_chat_template()` for proper chat formatting (automatically handled by the evaluators)
+- Supports tool use through chat templates (see [Hugging Face documentation](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) for details)
+- Recommended settings: `torch_dtype=torch.bfloat16`, `device_map="auto"`
+- Uses special terminators: `eos_token_id` and `<|eot_id|>` token
+
+**Model Loading:**
+The model is automatically loaded with appropriate settings when using the evaluators. For manual loading:
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+model_id = "meta-llama/Llama-3.1-8B-Instruct"
+
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+)
+```
+
+For more detailed usage examples, including tool use and advanced features, see the [official Hugging Face documentation](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) or the [huggingface-llama-recipes](https://github.com/huggingface/huggingface-llama-recipes) repository.
 
 ### Running Individual Benchmarks
 
@@ -139,6 +187,12 @@ python src/evaluation/run_all_benchmarks.py \
 python src/evaluation/run_all_benchmarks.py \
     --model_path results/triton_sparse_dpo_meta_llama_llama_3_1_8b_instruct_fixed/final_model \
     --output_dir ./llama_3.1_8B_97.5_eval_results
+```
+
+```bash 
+python src/evaluation/run_all_benchmarks.py \
+    --model_path meta-llama/Llama-3.1-8B-Instruct \
+    --output_dir ./llama_3.1_8B_raw_results
 ```
 
 
@@ -229,10 +283,12 @@ When using `--output_dir`, results are saved as JSON files:
 ## Notes
 
 - **Device**: Models are automatically loaded on CUDA if available, otherwise CPU/MPS
-- **Dtype**: Automatically uses float16 on GPU, float32 on CPU
+- **Dtype**: Automatically uses float16 on GPU, float32 on CPU. Llama 3.1 8B Instruct is recommended to use `bfloat16` for optimal performance
 - **Memory**: Large models may require significant GPU memory. Consider using `--limit` to reduce dataset size for testing
 - **Few-shot**: Default few-shot settings vary by benchmark (MMLU: 5, MATH: 4, GPQA: 0)
 - **Chat templates**: For chat/instruct models, pass `--apply_chat_template` (or rely on auto-detection) to apply the model's chat template; disable with `--no-apply_chat_template` if needed
+- **Transformers version**: Llama 3.1 8B Instruct requires `transformers >= 4.43.0` for full support of conversational inference and tool use features
+- **Model terminators**: Llama 3.1 8B Instruct uses both `eos_token_id` and `<|eot_id|>` as termination tokens, which are automatically handled by the evaluators
 
 ## Troubleshooting
 
