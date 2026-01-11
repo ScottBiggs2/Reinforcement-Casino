@@ -5,7 +5,7 @@ Baseline Dense DPO Training - Timing Comparison Version
 Stripped down version for clean performance comparison.
 No logging, no checkpointing - just pure training time measurement.
 
-Run: python baseline_dpo_timing.py --n_steps 10
+Run: python baseline_dpo_timing.py --n_steps 10 --optimizer sgd
 """
 
 import os
@@ -133,6 +133,7 @@ def train_baseline(
     learning_rate=5e-5,
     subset_size=10,
     save_model=False,
+    optimizer_type="sgd",
 ):
     """Baseline dense DPO training with timing measurement."""
     
@@ -142,6 +143,7 @@ def train_baseline(
     print(f"BASELINE DENSE DPO TRAINING")
     print(f"{'='*60}")
     print(f"Model: {model_path}")
+    print(f"Optimizer: {optimizer_type}")
     print(f"Steps: {n_steps}")
     print(f"Batch size: {batch_size}")
     print(f"Learning rate: {learning_rate}")
@@ -180,6 +182,16 @@ def train_baseline(
     model.config.use_cache = False
     print(f"✓ Model loaded on {device} with dtype: {model.dtype}\n")
 
+    # Select optimizer
+    if optimizer_type == "sgd":
+        print("Using SGD optimizer...")
+        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    elif optimizer_type == "adamw":
+        print("Using AdamW optimizer...")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    else:
+        raise ValueError(f"Unknown optimizer type: {optimizer_type}")
+
     # Configure DPO
     dpo_config = DPOConfig(
         output_dir="./baseline_temp",
@@ -208,6 +220,7 @@ def train_baseline(
         train_dataset=dataset,
         eval_dataset=None,
         data_collator=collator,
+        optimizers=(optimizer, None)
     )
     
     print("✓ Trainer ready\n")
@@ -250,6 +263,7 @@ def train_baseline(
         'n_steps': n_steps,
         'batch_size': batch_size,
         'learning_rate': learning_rate,
+        'optimizer': optimizer_type,
     }
     
     if torch.cuda.is_available():
@@ -283,6 +297,8 @@ if __name__ == "__main__":
                        help="Learning rate (default: 5e-5)")
     parser.add_argument("--subset_size", type=int, default=10,
                        help="Dataset subset size (default: 10)")
+    parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw"], default="sgd",
+                       help="Optimizer to use (default: sgd)")
     parser.add_argument("--save_model", action="store_true", default=False,
                        help="Save final model to safetensors after training (use flag without value: --save_model)")
     
@@ -295,4 +311,5 @@ if __name__ == "__main__":
         learning_rate=args.learning_rate,
         subset_size=args.subset_size,
         save_model=args.save_model,
+        optimizer_type=args.optimizer
     )
