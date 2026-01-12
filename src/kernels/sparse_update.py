@@ -1,20 +1,7 @@
 
-import os
-import json
-import time
-import torch
 import triton
 import triton.language as tl
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
-from trl import DPOTrainer, DPOConfig
-from datasets import Dataset
-import sys
-import wandb
-from transformers import TrainerCallback
-
-# ============================================================================
-# TRITON KERNEL (from working notebook)
-# ============================================================================
+import torch
 
 @triton.jit
 def sparse_update_kernel(
@@ -84,16 +71,6 @@ def sparse_update_kernel(
 def triton_sparse_update(weights, gradient, mask, lr, block_size=32):
     """
     Apply sparse gradient update using Triton kernel.
-    
-    Args:
-        weights: Parameter tensor (M x N)
-        gradient: Gradient tensor (M x N)
-        mask: Binary mask tensor (M x N)
-        lr: Learning rate
-        block_size: Block size for Triton kernel
-        
-    Returns:
-        Updated weights tensor
     """
     M, N = weights.shape
     

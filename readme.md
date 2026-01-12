@@ -164,6 +164,7 @@ python src/full_training/DPO_timing_baseline.py \
     --batch_size 4 \
     --subset_size 1000 \
     --save_model
+    --optimizer adamw
 ```
 
 ### GRPO Baseline
