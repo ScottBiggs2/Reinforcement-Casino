@@ -31,14 +31,15 @@ python src/warm_start/even_better_mask_finder.py \
 - Uses **Indexed Sparse AdamW** kernel for fast updates.
 - Supports `sgd`, `adamw`, and `sparse_adamw` optimizers.
 - **Usage:**
-  ```bash
-  python src/full_training/sparse_dpo_efficiency.py \
-    --model_name "google/gemma-3-270m-it" \
-    --mask "masks/sparsity_95.0pct_magnitude_step50_jaccard.json" \
-    --optimizer sparse_adamw \
-    --use_wandb \
-    --save_csv
-  ```
+```bash
+python src/full_training/sparse_dpo_efficiency.py \
+--model_name "google/gemma-3-270m-it" \
+--mask "masks/sparsity_95.0pct_magnitude_step50_jaccard.json" \
+--optimizer sparse_adamw \
+--use_wandb \\
+--save_csv \\
+--n_steps 50 
+```
 
 ### 2. `sparse_dpo_bsr.py` (formerly v4)
 **Focus:** Backprop Ablations & BSR Sparse MLP.

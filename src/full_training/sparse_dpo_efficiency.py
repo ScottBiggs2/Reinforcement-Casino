@@ -14,11 +14,15 @@ Key Features:
 """
 
 import os
+import sys
 import argparse
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
+
+# Add project root to sys.path to resolve 'src' imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.data_utils import load_dpo_dataset, dpo_collator_fn
