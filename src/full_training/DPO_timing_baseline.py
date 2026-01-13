@@ -201,7 +201,7 @@ def train_baseline(
         logging_steps=n_steps + 1,  # Disable logging
         report_to="none",
         remove_unused_columns=False,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=4,
         beta=0.1,
         max_length=1024,
         max_prompt_length=512,
@@ -291,7 +291,7 @@ if __name__ == "__main__":
                        help="Path to checkpoint (default: None = use base model)")
     parser.add_argument("--n_steps", type=int, default=10,
                        help="Number of training steps (default: 10)")
-    parser.add_argument("--batch_size", type=int, default=1,
+    parser.add_argument("--batch_size", type=int, default=4,
                        help="Batch size (default: 1)")
     parser.add_argument("--learning_rate", type=float, default=5e-5,
                        help="Learning rate (default: 5e-5)")
