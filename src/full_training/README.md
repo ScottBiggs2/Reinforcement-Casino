@@ -34,10 +34,10 @@ python src/warm_start/even_better_mask_finder.py \
 ```bash
 python src/full_training/sparse_dpo_efficiency.py \
 --model_name "google/gemma-3-270m-it" \
---mask "masks/sparsity_95.0pct_magnitude_step50_jaccard.json" \
+--mask "masks/sparsity_95.0pct_magnitude_step50.pt" \
 --optimizer sparse_adamw \
---use_wandb \\
---save_csv \\
+--use_wandb \
+--save_csv \
 --n_steps 50 
 ```
 
@@ -50,7 +50,7 @@ python src/full_training/sparse_dpo_efficiency.py \
   ```bash
   python src/full_training/sparse_dpo_bsr.py \
     --model_name "google/gemma-3-270m-it" \
-    --mask "masks/sparsity_95.0pct_magnitude_step50_jaccard.json" \
+    --mask "masks/sparsity_95.0pct_magnitude_step50.pt" \
     --optimizer sparse_adamw \
     --block_size_bsr 16 \
     --use_wandb

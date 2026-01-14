@@ -16,7 +16,16 @@ class SparseMaskManager:
         if not os.path.exists(mask_path):
             raise FileNotFoundError(f"Mask file not found: {mask_path}")
         
-        self.masks = torch.load(mask_path, map_location='cpu')
+        if mask_path.endswith('.json'):
+            raise ValueError(f"Mask path points to a JSON file ({mask_path}). Please provide the .pt PyTorch file containing the actual masks.")
+
+        try:
+            # Try safe load first
+            self.masks = torch.load(mask_path, map_location='cpu', weights_only=True)
+        except Exception:
+            # Fallback for older formats or complex dicts
+            print(f"Warning: safe load failed for {mask_path}, trying weights_only=False")
+            self.masks = torch.load(mask_path, map_location='cpu', weights_only=False)
         self.device = device
         
         if isinstance(self.masks, dict) and 'masks' in self.masks:
