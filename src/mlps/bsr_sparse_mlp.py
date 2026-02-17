@@ -39,20 +39,26 @@ class SparseLinearFunction(torch.autograd.Function):
             
         # SPARSE gradient w.r.t weight
         if ctx.needs_input_grad[1]:
+            # Flatten inputs for the kernel (handles 3D->2D: [B, S, D] -> [B*S, D])
+            # The kernel expects (batch_size, dim), so we merge batch and seq dims.
+            grad_output_flat = grad_output.reshape(-1, grad_output.shape[-1])
+            input_tensor_flat = input_tensor.reshape(-1, input_tensor.shape[-1])
+
             # Ensure contiguous for Triton
-            if not grad_output.is_contiguous():
-                grad_output = grad_output.contiguous()
-            if not input_tensor.is_contiguous():
-                input_tensor = input_tensor.contiguous()
+            if not grad_output_flat.is_contiguous():
+                grad_output_flat = grad_output_flat.contiguous()
+            if not input_tensor_flat.is_contiguous():
+                input_tensor_flat = input_tensor_flat.contiguous()
                 
             grad_weight = sparse_weight_gradient_triton(
-                grad_output, input_tensor, mask, 
+                grad_output_flat, input_tensor_flat, mask, 
                 block_size=block_size
             )
             
         # Bias gradient
         if ctx.has_bias and ctx.needs_input_grad[2]:
-            grad_bias = grad_output.sum(0)
+            # Sum over all dimensions except the last one (channel/feature dim)
+            grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(0)
             
         return grad_input, grad_weight, grad_bias, None, None
 

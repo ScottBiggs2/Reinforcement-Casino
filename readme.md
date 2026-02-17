@@ -150,6 +150,13 @@ python src/full_training/sparse_dpo_bsr.py \
   --optimizer sparse_adamw \
   --block_size_bsr 16 \
   --use_wandb
+
+python src/full_training/sparse_dpo_bsr.py \
+  --model_name "google/gemma-3-270m-it" \
+  --mask "masks/sparsity_97.5pct_magnitude_step50.pt" \
+  --optimizer sgd \
+  --block_size_bsr 16 \
+  --use_wandb
 ```
 
 ### Timing baselines (dense)
@@ -235,7 +242,7 @@ Script: `src/warm_start/even_better_mask_finder.py`.
 python src/warm_start/even_better_mask_finder.py \
   --delta_log_dir "delta_logs_google_gemma_3_270m_it" \
   --method magnitude \
-  --sparsity_percent 99.0 \
+  --sparsity_percent 97.5 \
   --target_step 50 \
   --compute_jaccard \
   --debug

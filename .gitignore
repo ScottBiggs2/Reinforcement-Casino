@@ -24,3 +24,4 @@ results/
 *.json
 *.log
 
+current_error.txt
