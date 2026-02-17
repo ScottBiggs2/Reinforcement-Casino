@@ -1,3 +1,11 @@
+import os
+import sys
+
+# Add project root to sys.path to resolve 'src' imports
+# Assumes script is at src/tests/test_bsr_backward_3d.py (2 levels deep)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 import torch
 import torch.nn as nn
