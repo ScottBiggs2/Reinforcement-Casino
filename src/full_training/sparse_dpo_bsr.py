@@ -55,7 +55,22 @@ def train(
         checkpoint_path = model_name
     
     if run_name is None:
-        run_name = f"sparse_dpo_bsr_{optimizer_type}_{sanitize_model_name(model_name)}"
+        # Construct a descriptive run name
+        parts = ["sparse_dpo"]
+        
+        # Optimizer info
+        if optimizer_type == "sparse_adamw":
+            parts.append("bsr_adamw")
+        else:
+            parts.append(optimizer_type)
+            
+        # Backprop info (always BSR in this script, but good to label)
+        parts.append("bsr_backprop")
+        
+        # Model info
+        parts.append(sanitize_model_name(model_name))
+        
+        run_name = "_".join(parts)
     
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
@@ -131,7 +146,8 @@ def train(
         batch_size=batch_size,
         grad_accum=grad_accum,
         run_name=run_name,
-        use_wandb=use_wandb
+        use_wandb=use_wandb,
+        wandb_project="huggingface"
     ))
     
     if save_csv:

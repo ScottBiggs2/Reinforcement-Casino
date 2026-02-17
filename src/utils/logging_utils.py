@@ -13,7 +13,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
     Schedule: Every 5 steps for first 25 steps, then every 25 steps after.
     """
     
-    def __init__(self, base_state, delta_log_dir, checkpoint_schedule, threshold, model_name, dataset_name, subset_size, learning_rate, batch_size, grad_accum, run_name=None, use_wandb=False):
+    def __init__(self, base_state, delta_log_dir, checkpoint_schedule, threshold, model_name, dataset_name, subset_size, learning_rate, batch_size, grad_accum, run_name=None, use_wandb=False, wandb_project=None):
         self.base_state = base_state
         self.delta_log_dir = delta_log_dir
         self.checkpoint_schedule = set(checkpoint_schedule)  # Use set for O(1) lookup
@@ -26,14 +26,16 @@ class FlexibleCheckpointCallback(TrainerCallback):
         self.grad_accum = grad_accum
         self.run_name = run_name or f"{model_name}_run"
         self.use_wandb = use_wandb
+        self.wandb_project = wandb_project
         
         os.makedirs(self.delta_log_dir, exist_ok=True)
         self.wandb_initialized = False
 
     def on_train_begin(self, args, state, control, **kwargs):
         if self.use_wandb and not self.wandb_initialized:
+            project_name = self.wandb_project if self.wandb_project else f"{self.model_name.replace('/', '_')}-dpo-subnetwork-emergence"
             wandb.init(
-                project=f"{self.model_name.replace('/', '_')}-dpo-subnetwork-emergence",
+                project=project_name,
                 name=self.run_name,
                 config={
                     "model_name": self.model_name,
