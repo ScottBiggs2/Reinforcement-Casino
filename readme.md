@@ -156,6 +156,7 @@ python src/full_training/sparse_dpo_bsr.py \
   --mask "masks/sparsity_97.5pct_magnitude_step50.pt" \
   --optimizer sgd \
   --block_size_bsr 16 \
+  --n_steps 100 \
   --use_wandb
 ```
 
