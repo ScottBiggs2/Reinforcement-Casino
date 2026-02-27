@@ -49,6 +49,10 @@ def train(
     use_wandb,
     save_csv,
     grad_accum,
+    max_grad_norm,
+    adam_beta1,
+    adam_beta2,
+    adam_eps,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -110,14 +114,22 @@ def train(
     if optimizer_type == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     elif optimizer_type == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer = torch.optim.AdamW(
+            model.parameters(), 
+            lr=learning_rate, 
+            betas=(adam_beta1, adam_beta2), 
+            eps=adam_eps
+        )
     elif optimizer_type == "sparse_adamw":
         optimizer = SparseAdamW(
             list(model.named_parameters()), 
             mask_manager, 
             lr=learning_rate, 
+            betas=(adam_beta1, adam_beta2),
+            eps=adam_eps,
             block_size=block_size_adam,
-            mlp_only=mlp_only
+            mlp_only=mlp_only,
+            max_grad_norm=max_grad_norm
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
@@ -166,6 +178,7 @@ def train(
         remove_unused_columns=False,
         bf16=True,
         gradient_checkpointing=True,
+        max_grad_norm=max_grad_norm,
     )
     
     trainer = DPOTrainer(
@@ -196,6 +209,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     
+    # Stability Tuning Parameters
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping")
+    parser.add_argument("--adam_beta1", type=float, default=0.9, help="Adam beta1")
+    parser.add_argument("--adam_beta2", type=float, default=0.999, help="Adam beta2")
+    parser.add_argument("--adam_eps", type=float, default=1e-8, help="Adam epsilon (increase to 1e-5 for stability)")
+    
     args = parser.parse_args()
     
     train(
@@ -214,4 +233,8 @@ if __name__ == "__main__":
         use_wandb=args.use_wandb,
         save_csv=args.save_csv,
         grad_accum=args.grad_accum,
+        max_grad_norm=args.max_grad_norm,
+        adam_beta1=args.adam_beta1,
+        adam_beta2=args.adam_beta2,
+        adam_eps=args.adam_eps,
     )
