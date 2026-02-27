@@ -14,10 +14,11 @@ class SparseLinearFunction(torch.autograd.Function):
     """
     
     @staticmethod
-    def forward(ctx, input, weight, bias, mask, block_size=16):
+    def forward(ctx, input, weight, bias, mask, block_size=16, use_tf32=False):
         ctx.save_for_backward(input, weight, mask)
         ctx.has_bias = bias is not None
         ctx.block_size = block_size
+        ctx.use_tf32 = use_tf32
         
         # Standard forward pass
         # Note: We assume the weight is already masked (or we don't care about forward sparsity for correctness here,
@@ -52,7 +53,8 @@ class SparseLinearFunction(torch.autograd.Function):
                 
             grad_weight = sparse_weight_gradient_triton(
                 grad_output_flat, input_tensor_flat, mask, 
-                block_size=block_size
+                block_size=block_size,
+                use_tf32=ctx.use_tf32
             )
             
         # Bias gradient
@@ -60,17 +62,18 @@ class SparseLinearFunction(torch.autograd.Function):
             # Sum over all dimensions except the last one (channel/feature dim)
             grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(0)
             
-        return grad_input, grad_weight, grad_bias, None, None
+        return grad_input, grad_weight, grad_bias, None, None, None
 
 
 class SparseLinearLayer(nn.Linear):
     """
     Drop-in replacement for nn.Linear that uses SparseLinearFunction for backward pass.
     """
-    def __init__(self, in_features, out_features, bias=True, mask=None, block_size=16):
+    def __init__(self, in_features, out_features, bias=True, mask=None, block_size=16, use_tf32=False):
         super().__init__(in_features, out_features, bias)
         self.register_buffer('mask', mask)
         self.block_size = block_size
+        self.use_tf32 = use_tf32
         
     def set_mask(self, mask):
         if mask.shape != self.weight.shape:
@@ -80,11 +83,11 @@ class SparseLinearLayer(nn.Linear):
     def forward(self, input):
         if self.mask is not None:
              # Pass block_size to the custom function
-             return SparseLinearFunction.apply(input, self.weight, self.bias, self.mask, self.block_size)
+             return SparseLinearFunction.apply(input, self.weight, self.bias, self.mask, self.block_size, self.use_tf32)
         else:
             return F.linear(input, self.weight, self.bias)
 
-def replace_linear_modules(model, mask_dict, block_size=16, verbose=True):
+def replace_linear_modules(model, mask_dict, block_size=16, use_tf32=False, verbose=True):
     """
     Recursively replace nn.Linear modules with SparseLinearLayer.
     
@@ -92,6 +95,7 @@ def replace_linear_modules(model, mask_dict, block_size=16, verbose=True):
         model: PyTorch model
         mask_dict: Dictionary mapping parameter names to masks
         block_size: Block size for sparse kernel
+        use_tf32: Whether to use TF32 for higher precision accumulation in the Triton kernel
     """
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
@@ -119,7 +123,8 @@ def replace_linear_modules(model, mask_dict, block_size=16, verbose=True):
                     module.out_features,
                     module.bias is not None,
                     mask=mask,
-                    block_size=block_size
+                    block_size=block_size,
+                    use_tf32=use_tf32
                 )
                 
                 # Copy weights/bias

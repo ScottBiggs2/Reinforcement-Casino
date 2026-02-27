@@ -110,7 +110,9 @@ def train(
                  if ('mlp' in n.lower() or not mlp_only) and 'weight' in n and mask_manager.has_mask(n)}
                  
     print(f"Injecting Sparse MLP BSR backward for {len(mask_dict)} layers...")
-    replace_linear_modules(model, mask_dict, block_size=block_size_bsr)
+    use_tf32_kernel = not disable_tf32
+    print(f"BSR Kernel TF32 Precision Enabled: {use_tf32_kernel}")
+    replace_linear_modules(model, mask_dict, block_size=block_size_bsr, use_tf32=use_tf32_kernel)
     
     # Optimizer Logic
     print(f"Initializing {optimizer_type}...")
