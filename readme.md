@@ -8,6 +8,59 @@ Reinforcement Learning training infrastructure with Triton-accelerated sparse op
 - **Cold start:** Not implemented. The `cold_start/` directory is for future cold-start training; no runnable pipeline yet.
 - **BSR backprop:** Not yet tested. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; correctness and performance are unvalidated.
 
+A note here: AdamW decays **all** weights (BSR AdamW does not), so using it with the mask decays frozen weights which is incorrect. 
+
+Junk, no learning evident. 
+```bash
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer sgd \
+  --use_wandb
+```
+
+Good but extremely unstable (work ongoing)
+```bash
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer sparse_adamw \
+  --use_wandb
+```
+
+Good but extremely unstable. Like BSR AdamW. Not tested at long range.
+```bash
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer adamw \
+  --use_wandb
+```
+
+Gradient clipping bsr test: 
+
+```bash 
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer sparse_adamw \
+  --use_wandb \
+  --max_grad_norm 0.5 \
+  --adam_eps 1e-6
+```
+
+DPO Beta noise reduction test:
+
+```bash
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer sparse_adamw \
+  --use_wandb \
+  --max_grad_norm 1.0 \
+  --dpo_beta 0.5
+```
+
 ---
 
 ## Prerequisites

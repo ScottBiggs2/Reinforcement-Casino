@@ -53,6 +53,9 @@ def train(
     adam_beta1,
     adam_beta2,
     adam_eps,
+    dpo_beta,
+    warmup_steps,
+    disable_tf32,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -134,6 +137,11 @@ def train(
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
         
+    if disable_tf32:
+        print("Disabling TF32 for strict fp32 accumulation precision.")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        
     # Checkpoint Schedule
     checkpoint_schedule = list(range(10, 50, 10)) + list(range(100, 250, 50))
     
@@ -179,6 +187,8 @@ def train(
         bf16=True,
         gradient_checkpointing=True,
         max_grad_norm=max_grad_norm,
+        beta=dpo_beta,
+        warmup_steps=warmup_steps,
     )
     
     trainer = DPOTrainer(
@@ -215,6 +225,11 @@ if __name__ == "__main__":
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="Adam beta2")
     parser.add_argument("--adam_eps", type=float, default=1e-8, help="Adam epsilon (increase to 1e-5 for stability)")
     
+    # Advanced Noise Reduction
+    parser.add_argument("--dpo_beta", type=float, default=0.1, help="DPO margin parameter (increase to 0.2-0.5 to bound updates)")
+    parser.add_argument("--warmup_steps", type=int, default=0, help="Linear warmup steps for LR scheduler")
+    parser.add_argument("--disable_tf32", action="store_true", help="Disable TF32 for strict fp32 math (slow but precise)")
+    
     args = parser.parse_args()
     
     train(
@@ -237,4 +252,7 @@ if __name__ == "__main__":
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
         adam_eps=args.adam_eps,
+        dpo_beta=args.dpo_beta,
+        warmup_steps=args.warmup_steps,
+        disable_tf32=args.disable_tf32,
     )
