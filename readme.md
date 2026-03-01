@@ -74,6 +74,20 @@ python src/full_training/sparse_dpo_bsr.py \
   --warmup_steps 10
 ```
 
+LR and Warmup Stabilisation WITHOUT TF32 (Ablation):
+
+```bash
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer sparse_adamw \
+  --use_wandb \
+  --max_grad_norm 1.0 \
+  --lr 5e-6 \
+  --warmup_steps 10 \
+  --disable_tf32
+```
+
 ---
 
 ## Prerequisites
