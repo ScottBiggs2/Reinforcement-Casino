@@ -61,6 +61,19 @@ python src/full_training/sparse_dpo_bsr.py \
   --dpo_beta 0.5
 ```
 
+LR and Warmup Stabilisation test:
+
+```bash
+python src/full_training/sparse_dpo_bsr.py \
+  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --n_steps 50 \
+  --optimizer sparse_adamw \
+  --use_wandb \
+  --max_grad_norm 1.0 \
+  --lr 5e-6 \
+  --warmup_steps 10
+```
+
 ---
 
 ## Prerequisites
