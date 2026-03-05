@@ -71,3 +71,4 @@ To fix this, our Triton kernel explicitly only loads index points that we know a
 The combination of BSR Early Exit (skipping VRAM reads for dense gradients) and Indexed Sparse AdamW (skipping VRAM read/writes for momentum) creates an optimal pipeline. 
 
 By disabling the TF32 upcasting mathematically, you revert to the raw `bfloat16` instructions mapped perfectly to Hopper/Ampere Tensor Cores, yielding the highest theoretical throughput for the backward pass.
+ 

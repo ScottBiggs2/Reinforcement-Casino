@@ -39,7 +39,7 @@ class SparseAdamW(torch.optim.Optimizer):
         self.mask_manager = mask_manager
         self.block_size = block_size
         self.mlp_only = mlp_only
-        self.max_grad_norm = 1.0 # Default clipping value for stability
+        self.max_grad_norm = max_grad_norm # Default clipping value for stability
         
         self.stats = {
             'sparse_steps': 0,
