@@ -170,6 +170,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_only", action="store_true", default=True)
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
+    parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
     
     args = parser.parse_args()
     
@@ -181,7 +182,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.lr,
         subset_size=args.subset_size,
-        run_name=None,
+        run_name=args.run_name,
         mlp_only=args.mlp_only,
         block_size=args.block_size,
         optimizer_type=args.optimizer,
