@@ -232,7 +232,7 @@ def main(args):
     # these from warm-start masks in downstream analysis
     model_sanitized = sanitize_model_name(args.model_name)
     output_file = args.output_file or (
-        f"masks/cold_start_{model_sanitized}_{args.dataset_name.replace('/', '_')}"
+        f"masks/cold_fisher_{model_sanitized}_{args.dataset_name.replace('/', '_')}"
         f"_sparsity{args.sparsity_percent}pct"
         f"_n{args.n_calibration_samples}.pt"
     )

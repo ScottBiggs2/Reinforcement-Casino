@@ -5,7 +5,7 @@ Reinforcement Learning training infrastructure with Triton-accelerated sparse op
 ## Implementation status
 
 - **GRPO rewards:** Not implemented. GRPO trainer and sparse GRPO scripts run, but reward computation is placeholder/stub.
-- **Cold start:** Not implemented. The `cold_start/` directory is for future cold-start training; no runnable pipeline yet.
+- **Cold start:** Partially implemented. Mask gathering scripts exist in `cold_start/` (Fisher, CAV, SNIP) which output standard mask formats for training.
 - **BSR backprop:** Not yet tested. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; correctness and performance are unvalidated.
 
 A note here: AdamW decays **all** weights (BSR AdamW does not), so using it with the mask decays frozen weights which is incorrect. 
@@ -13,7 +13,7 @@ A note here: AdamW decays **all** weights (BSR AdamW does not), so using it with
 Junk, no learning evident. 
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sgd \
   --use_wandb
@@ -22,7 +22,7 @@ python src/full_training/sparse_dpo_bsr.py \
 Good but extremely unstable (work ongoing)
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sparse_adamw \
   --use_wandb
@@ -31,7 +31,7 @@ python src/full_training/sparse_dpo_bsr.py \
 Good but extremely unstable. Like BSR AdamW. Not tested at long range.
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer adamw \
   --use_wandb
@@ -41,7 +41,7 @@ Gradient clipping bsr test:
 
 ```bash 
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sparse_adamw \
   --use_wandb \
@@ -53,7 +53,7 @@ DPO Beta noise reduction test:
 
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sparse_adamw \
   --use_wandb \
@@ -65,7 +65,7 @@ LR and Warmup Stabilisation test:
 
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sparse_adamw \
   --use_wandb \
@@ -78,7 +78,7 @@ LR and Warmup Stabilisation WITHOUT TF32 (Ablation):
 
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/sparsity_97.5pct_magnitude_step50.pt \
+  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sparse_adamw \
   --use_wandb \
@@ -178,7 +178,7 @@ Triton-accelerated sparse DPO with optimizer ablations (SGD, AdamW, Sparse AdamW
 |----------|------|---------|-------------|
 | `--model_name` | str | `google/gemma-3-270m-it` | Base model name |
 | `--checkpoint` | str | None | Checkpoint path (None = use `model_name`) |
-| `--mask` | str | `masks/top_10.0pct_momentum_w25_step25.pt` | Sparse mask file |
+| `--mask` | str | `masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt` | Sparse mask file |
 | `--n_steps` | int | 100 | Training steps |
 | `--batch_size` | int | 4 | Batch size |
 | `--grad_accum` | int | 4 | Gradient accumulation steps |
@@ -193,7 +193,7 @@ Triton-accelerated sparse DPO with optimizer ablations (SGD, AdamW, Sparse AdamW
 ```bash
 python src/full_training/sparse_dpo_efficiency.py \
   --model_name "google/gemma-3-270m-it" \
-  --mask "masks/sparsity_95.0pct_magnitude_step50.pt" \
+  --mask "masks/warm_magnitude_google_gemma_3_270m_it_sparsity95.0pct_step50.pt" \
   --optimizer sparse_adamw \
   --n_steps 50 \
   --use_wandb \
@@ -210,7 +210,7 @@ BSR sparse MLP layers with custom sparse autograd. **BSR backprop is not yet tes
 |----------|------|---------|-------------|
 | `--model_name` | str | `google/gemma-3-270m-it` | Base model name |
 | `--checkpoint` | str | None | Checkpoint path (None = use `model_name`) |
-| `--mask` | str | `masks/top_10.0pct_momentum_w25_step25.pt` | Sparse mask file |
+| `--mask` | str | `masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt` | Sparse mask file |
 | `--n_steps` | int | 10 | Training steps |
 | `--batch_size` | int | 1 | Batch size |
 | `--grad_accum` | int | 8 | Gradient accumulation steps |
@@ -226,14 +226,14 @@ BSR sparse MLP layers with custom sparse autograd. **BSR backprop is not yet tes
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
   --model_name "google/gemma-3-270m-it" \
-  --mask "masks/sparsity_95.0pct_magnitude_step50.pt" \
+  --mask "masks/warm_magnitude_google_gemma_3_270m_it_sparsity95.0pct_step50.pt" \
   --optimizer sparse_adamw \
   --block_size_bsr 16 \
   --use_wandb
 
 python src/full_training/sparse_dpo_bsr.py \
   --model_name "google/gemma-3-270m-it" \
-  --mask "masks/sparsity_97.5pct_magnitude_step50.pt" \
+  --mask "masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" \
   --optimizer sgd \
   --block_size_bsr 16 \
   --n_steps 100 \
@@ -291,10 +291,10 @@ Older Triton scripts; for new work prefer `src/full_training/sparse_dpo_efficien
 
 ```bash
 python src/magic/sparse_DPO_v2.py --model_name "google/gemma-3-270m-it" --checkpoint None \
-  --mask masks/top_10.0pct_momentum_w25_step25.pt --n_steps 50
+  --mask masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt --n_steps 50
 
 python src/magic/sparse_DPO_v3.py --model_name "meta-llama/Llama-3.2-3B-Instruct" --checkpoint None \
-  --mask masks/sparsity_97.5pct_fisher_step50.pt --n_steps 100 --batch_size 1 --subset_size 100 --learning_rate 5e-5
+  --mask masks/warm_fisher_meta_llama_llama_3_2_3b_instruct_sparsity97.5pct_step50.pt --n_steps 100 --batch_size 1 --subset_size 100 --learning_rate 5e-5
 ```
 
 ### Sparse GRPO (v2)
@@ -303,7 +303,7 @@ python src/magic/sparse_DPO_v3.py --model_name "meta-llama/Llama-3.2-3B-Instruct
 
 ```bash
 python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --checkpoint None \
-  --mask masks/top_10.0pct_momentum_w25_step25.pt --n_steps 50
+  --mask masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt --n_steps 50
 ```
 
 ## Mask finding
@@ -317,7 +317,7 @@ python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --check
 
 Script: `src/warm_start/even_better_mask_finder.py`.
 
-### Magnitude-based
+### Warm-start: Magnitude-based
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
@@ -328,8 +328,9 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard \
   --debug
 ```
+*Output:* `masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt`
 
-### Momentum-based
+### Warm-start: Momentum-based
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
@@ -340,8 +341,9 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard \
   --debug
 ```
+*Output:* `masks/warm_momentum_w5_meta_llama_llama_3_1_8b_instruct_sparsity97.5pct_step40.pt`
 
-### Fisher-based
+### Warm-start: Fisher-based
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
@@ -352,6 +354,37 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard \
   --debug
 ```
+*Output:* `masks/warm_fisher_meta_llama_llama_3_2_3b_instruct_sparsity97.5pct_step100.pt`
+
+### Cold-start: Fisher-based
+
+Computes task-specific importance using the diagonal Fisher Information over a target dataset's prompts. Requires no initial DPO training.
+
+```bash
+python src/cold_start/cold_mask_finder.py \
+  --model_name "google/gemma-3-270m-it" \
+  --dataset_name "qihoo360/Light-R1-DPOData" \
+  --sparsity_percent 95.0 \
+  --n_calibration_samples 512 \
+  --mlp_only
+```
+*Output:* `masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light_R1_DPOData_sparsity95.0pct_n512.pt`
+
+### Cold-start: CAV / Activation / SNIP
+
+Uses activation statistics or linear probes (CAVs) to determine parameter importance based on preference data. Requires no initial DPO training.
+
+```bash
+python src/cold_start/cav_cold_mask_finder.py \
+  --model_name "google/gemma-3-270m-it" \
+  --dataset_name "qihoo360/Light-R1-DPOData" \
+  --method cav \
+  --sparsity_percent 95.0 \
+  --subset_size 256 \
+  --num_batches 32 \
+  --mlp_only
+```
+*Output:* `masks/cold_cav_google_gemma_3_270m_it_sparsity95.0pct.pt`
 
 ## Checkpoint reconstruction
 

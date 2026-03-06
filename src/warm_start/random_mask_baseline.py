@@ -111,7 +111,7 @@ def main(args):
             print(f"  Expected by chance:                      {expected:.4f}")
             print(f"  Ratio (signal/noise):                    {j['aggregate_jaccard']/expected:.2f}x")
 
-    output_file = args.output_file or f"masks/random_sparsity{sparsity}pct_seed{args.seed}.pt"
+    output_file = args.output_file or f"masks/random_baseline_sparsity{sparsity}pct_seed{args.seed}.pt"
     metadata = {
         "method": "random_baseline",
         "sparsity_percent": sparsity,

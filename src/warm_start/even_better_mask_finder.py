@@ -399,7 +399,8 @@ def main(args):
     
     # Save masks
     step_suffix = f"_step{args.target_step}" if args.target_step else ""
-    output_file = args.output_file or f"masks/sparsity_{args.sparsity_percent}pct_{method_suffix}{step_suffix}.pt"
+    model_str = os.path.basename(os.path.normpath(delta_log_dir)).replace("delta_logs_", "")
+    output_file = args.output_file or f"masks/warm_{method_suffix}_{model_str}_sparsity{args.sparsity_percent}pct{step_suffix}.pt"
     
     metadata = {
         "method": args.method,
