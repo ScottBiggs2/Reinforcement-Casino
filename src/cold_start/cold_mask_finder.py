@@ -51,8 +51,11 @@ def sanitize_model_name(model_name: str) -> str:
 def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512, device="cuda"):
     """
     Load a small calibration set from the task DPO dataset.
-    Returns a list of (prompt_enc, chosen_enc) tuples for empirical Fisher computation.
-    Each element is a dict of tensors ready for the model.
+    Returns a list of encoded dicts with input_ids, attention_mask, and labels
+    (prompt tokens masked to -100, response tokens used for loss).
+
+    Mirrors the field extraction in data_utils.load_dpo_dataset exactly so the
+    same datasets that work for training also work here.
     """
     print(f"Loading calibration data from {dataset_name} ({n_samples} samples)...")
     ds = load_dataset(dataset_name, split="train")
@@ -66,7 +69,7 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
 
     pairs = []
     for rec in ds:
-        # Extract prompt
+        # --- Prompt extraction (same as data_utils.normalize_record) ---
         prompt_raw = rec.get("prompt", "")
         if isinstance(prompt_raw, list):
             prompt_text = "\n".join(
@@ -76,21 +79,13 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
         else:
             prompt_text = msg_to_text(prompt_raw).strip()
 
-        # Extract chosen response
-        chosen_raw = rec.get("chosen", "")
-        if isinstance(chosen_raw, list):
-            chosen_text = "\n".join(
-                m.get("value", "") for m in chosen_raw
-                if isinstance(m, dict) and m.get("from", "").lower() == "assistant"
-            ).strip()
-        else:
-            chosen_text = msg_to_text(chosen_raw).strip()
+        # --- Chosen extraction: accept whole field, identical to data_utils ---
+        chosen_text = msg_to_text(rec.get("chosen", "")).strip()
 
         if not prompt_text or not chosen_text:
             continue
 
-        # Encode the full prompt+chosen as a single sequence with labels
-        # Labels mask out the prompt portion so loss is computed only on the response
+        # Encode the full prompt+response sequence
         full_text = prompt_text + " " + chosen_text
         full_enc = tokenizer(
             full_text,
@@ -98,7 +93,6 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
             truncation=True,
             max_length=max_length,
         )
-
         prompt_enc = tokenizer(
             prompt_text,
             return_tensors="pt",
@@ -106,20 +100,20 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
             max_length=max_length,
         )
 
-        # Build labels: -100 for the prompt portion (ignored in loss), real IDs for chosen
+        # Build labels: -100 for prompt tokens (ignored in loss), real IDs for response
         prompt_len = prompt_enc["input_ids"].shape[1]
         labels = full_enc["input_ids"].clone()
-        labels[0, :prompt_len] = -100  # mask out prompt
+        labels[0, :prompt_len] = -100
 
-        entry = {
+        pairs.append({
             "input_ids": full_enc["input_ids"].to(device),
             "attention_mask": full_enc["attention_mask"].to(device),
             "labels": labels.to(device),
-        }
-        pairs.append(entry)
+        })
 
     print(f"  Loaded {len(pairs)} calibration (prompt, chosen) pairs")
     return pairs
+
 
 
 def compute_fisher_scores(
