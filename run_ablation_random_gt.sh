@@ -1,79 +1,118 @@
 #!/bin/bash
-# Random Baseline & Ground Truth Ablation: one BSR+SparseAdamW run per random mask, 100 steps.
-# These serve as the noise floor / SNR reference — if a mask trained with a random selection
-# performs similarly to a principled mask, the mask signal is weak.
-# WandB logging, no checkpoints.
-# Run from project dir: sbatch run_ablation_random_gt.sh
-#SBATCH --job-name=random_gt_ablation
-#SBATCH --output=logs/random_gt_ablation_%j.out
-#SBATCH --error=logs/random_gt_ablation_%j.err
-#SBATCH --partition=gpu
+#SBATCH --job-name=ablation_baseline
+#SBATCH --output=logs/ablation_baseline_%j.out
+#SBATCH --error=logs/ablation_baseline_%j.err
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --time=6:00:00
+#SBATCH --partition=gpu
 
-source ~/miniconda3/etc/profile.d/conda.sh || \
-  source ~/anaconda3/etc/profile.d/conda.sh || \
-  source /opt/conda/etc/profile.d/conda.sh
+set -e
+
+# Configuration
+MODEL="google/gemma-3-270m-it"
+SUBSET=256
+STEPS=100
+BATCH=4
+GRAD_ACCUM=4
+LR=5e-5
+SPARSITY=97.5
+LOG_DIR="delta_logs_google_gemma_3_270m_it"
+
+# Source conda and activate environment
+source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
 conda activate /scratch/biggs.s/conda_envs/rl_casino
 export PYTHONPATH=.
-mkdir -p logs
 
-MODEL="google/gemma-3-270m-it"
-N_STEPS=100
-LR=5e-6
-BATCH=2
-GRAD_ACCUM=4
+echo "Starting Random & Ground Truth Mask Ablation..."
 
-run_mask() {
-    local MASK=$1
-    local LABEL=$2
-    echo ""
-    echo "===> $LABEL"
-    python src/full_training/sparse_dpo_bsr.py \
+# --- 1. Baseline DPO Training (Self-Contained Kickoff) ---
+echo "=================================================="
+echo "1. Running Baseline DPO Training"
+echo "=================================================="
+python src/full_training/DPO_train.py --model_name "$MODEL"
+
+# --- 2. Generate Random Mask ---
+echo "=================================================="
+echo "2. Generating Random Mask"
+echo "=================================================="
+RANDOM_MASK="masks/random_sample_sparsity${SPARSITY}pct.pt"
+if [ ! -f "$RANDOM_MASK" ]; then
+    echo "Generating sample random mask..."
+    python3 src/utils/generate_random_mask.py \
         --model_name "$MODEL" \
-        --mask "$MASK" \
-        --n_steps $N_STEPS \
+        --sparsity_percent "$SPARSITY" \
+        --output_file "$RANDOM_MASK" \
+        --mlp_only
+else
+    echo "Random mask already exists at $RANDOM_MASK"
+fi
+
+# --- 3. Calculate GT Mask ---
+echo "=================================================="
+echo "3. Calculating GT Mask"
+echo "=================================================="
+echo "-> Ground Truth Mask"
+python src/warm_start/even_better_mask_finder.py \
+  --delta_log_dir "$LOG_DIR" \
+  --method magnitude \
+  --sparsity_percent $SPARSITY \
+  --target_step 500 \
+  --mlp_only \
+  --compute_jaccard 
+
+REF_MASK_GT="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step500.pt"
+
+echo ""
+echo "Comparing BSR-AdamW + Dense vs Sparse Backprop"
+
+run_mask_ablation() {
+    local MASK_PATH=$1
+    local MASK_NAME=$2
+    
+    if [ ! -f "$MASK_PATH" ]; then
+        echo "Warning: Mask not found at $MASK_PATH, skipping..."
+        return
+    fi
+
+    echo "----------------------------------------------------"
+    echo "Ablating Mask: $MASK_NAME"
+    echo "----------------------------------------------------"
+
+    # 1. Dense Backprop (Baseline)
+    echo "Running BSR-AdamW + Dense Backprop Baseline..."
+    python3 src/full_training/sparse_dpo_efficiency.py \
+        --model_name "$MODEL" \
+        --mask "$MASK_PATH" \
+        --n_steps $STEPS \
         --batch_size $BATCH \
         --grad_accum $GRAD_ACCUM \
         --lr $LR \
-        --dpo_beta 0.1 \
-        --max_grad_norm 1.0 \
-        --block_size_bsr 16 \
-        --block_size_adam 128 \
-        --optimizer sparse_adamw \
-        --mlp_only \
+        --subset_size $SUBSET \
+        --optimizer "sparse_adamw" \
         --use_wandb \
-        --run_name "ablation_random_${LABEL}"
+        --run_name "ablation_${MASK_NAME}_dense_bp"
+
+    # 2. Sparse Backprop (BSR)
+    echo "Running BSR-AdamW + Sparse Backprop (BSR)..."
+    python3 src/full_training/sparse_dpo_bsr.py \
+        --model_name "$MODEL" \
+        --mask "$MASK_PATH" \
+        --n_steps $STEPS \
+        --batch_size $BATCH \
+        --grad_accum $GRAD_ACCUM \
+        --lr $LR \
+        --subset_size $SUBSET \
+        --optimizer "sparse_adamw" \
+        --use_wandb \
+        --run_name "ablation_${MASK_NAME}_sparse_bp"
 }
 
-# Random baselines matched to each mask category
-# (same sparsity + structure as the real masks, but random parameter selection)
-run_mask \
-  "masks/random_baseline_vs_magnitude_sparsity97.5pct.pt" \
-  "vs_magnitude"
+# --- Baselines ---
+run_mask_ablation "$RANDOM_MASK" "random_baseline"
+run_mask_ablation "$REF_MASK_GT" "ground_truth_magnitude"
 
-run_mask \
-  "masks/random_baseline_vs_momentum_sparsity97.5pct.pt" \
-  "vs_momentum"
-
-run_mask \
-  "masks/random_baseline_vs_fisher_warm_sparsity97.5pct.pt" \
-  "vs_fisher_warm"
-
-run_mask \
-  "masks/random_baseline_vs_ground_truth_sparsity97.5pct.pt" \
-  "vs_ground_truth"
-
-run_mask \
-  "masks/random_baseline_vs_fisher_cold_sparsity97.5pct.pt" \
-  "vs_fisher_cold"
-
-run_mask \
-  "masks/random_baseline_vs_cav_cold_sparsity97.5pct.pt" \
-  "vs_cav_cold"
-
-echo ""
-echo "Random baseline + ground truth ablation complete!"
+echo "Random & GT Ablation Complete!"

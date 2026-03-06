@@ -1,69 +1,110 @@
 #!/bin/bash
-# Warm-Start Mask Ablation: one BSR+SparseAdamW run per warm mask, 100 steps.
-# Early sanity check only — WandB logging, no checkpoints.
-# Run from project dir: sbatch run_ablation_warm_masks.sh
-#SBATCH --job-name=warm_mask_ablation
-#SBATCH --output=logs/warm_mask_ablation_%j.out
-#SBATCH --error=logs/warm_mask_ablation_%j.err
-#SBATCH --partition=gpu
+#SBATCH --job-name=ablation_warm
+#SBATCH --output=logs/ablation_warm_%j.out
+#SBATCH --error=logs/ablation_warm_%j.err
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --mem=128G
-#SBATCH --time=03:00:00
+#SBATCH --time=6:00:00
+#SBATCH --partition=gpu
 
-source ~/miniconda3/etc/profile.d/conda.sh || \
-  source ~/anaconda3/etc/profile.d/conda.sh || \
-  source /opt/conda/etc/profile.d/conda.sh
+set -e
+
+# Configuration
+MODEL="google/gemma-3-270m-it"
+SUBSET=256
+STEPS=100
+BATCH=4
+GRAD_ACCUM=4
+LR=5e-5
+TARGET_STEP=50
+SPARSITY=97.5
+LOG_DIR="delta_logs_google_gemma_3_270m_it"
+
+# Source conda and activate environment
+source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
 conda activate /scratch/biggs.s/conda_envs/rl_casino
 export PYTHONPATH=.
-mkdir -p logs
 
-MODEL="google/gemma-3-270m-it"
-N_STEPS=100
-LR=5e-6
-BATCH=2
-GRAD_ACCUM=4
+echo "Generating Warm-Start Masks..."
 
-run_mask() {
-    local MASK=$1
-    local LABEL=$2
-    echo ""
-    echo "===> $LABEL"
-    python src/full_training/sparse_dpo_bsr.py \
+echo "-> Magnitude Mask"
+python src/warm_start/even_better_mask_finder.py \
+  --delta_log_dir "$LOG_DIR" \
+  --method magnitude \
+  --sparsity_percent $SPARSITY \
+  --target_step $TARGET_STEP \
+  --mlp_only \
+  --compute_jaccard 
+
+echo "-> Momentum Mask"
+python src/warm_start/even_better_mask_finder.py \
+  --delta_log_dir "$LOG_DIR" \
+  --method momentum \
+  --sparsity_percent $SPARSITY \
+  --target_step $TARGET_STEP \
+  --mlp_only \
+  --compute_jaccard 
+
+echo "-> Fisher Mask (Warm)"
+python src/warm_start/even_better_mask_finder.py \
+  --delta_log_dir "$LOG_DIR" \
+  --method fisher \
+  --sparsity_percent $SPARSITY \
+  --target_step $TARGET_STEP \
+  --mlp_only \
+  --compute_jaccard 
+
+echo "Starting Warm-Start Mask Ablation..."
+echo "Comparing Dense Backprop vs Sparse Backprop (BSR)"
+
+run_mask_ablation() {
+    local MASK_PATH=$1
+    local MASK_NAME=$2
+    
+    if [ ! -f "$MASK_PATH" ]; then
+        echo "Warning: Mask not found at $MASK_PATH, skipping..."
+        return
+    fi
+
+    echo "----------------------------------------------------"
+    echo "Ablating Mask: $MASK_NAME"
+    echo "----------------------------------------------------"
+
+    # 1. Dense Backprop (Baseline)
+    echo "Running Dense Backprop Baseline..."
+    python3 src/full_training/sparse_dpo_efficiency.py \
         --model_name "$MODEL" \
-        --mask "$MASK" \
-        --n_steps $N_STEPS \
+        --mask "$MASK_PATH" \
+        --n_steps $STEPS \
         --batch_size $BATCH \
         --grad_accum $GRAD_ACCUM \
         --lr $LR \
-        --dpo_beta 0.1 \
-        --max_grad_norm 1.0 \
-        --block_size_bsr 16 \
-        --block_size_adam 128 \
-        --optimizer sparse_adamw \
-        --mlp_only \
+        --subset_size $SUBSET \
+        --optimizer "sparse_adamw" \
         --use_wandb \
-        --run_name "ablation_warm_${LABEL}"
+        --run_name "ablation_${MASK_NAME}_dense_bp"
+
+    # 2. Sparse Backprop (BSR)
+    echo "Running Sparse Backprop (BSR)..."
+    python3 src/full_training/sparse_dpo_bsr.py \
+        --model_name "$MODEL" \
+        --mask "$MASK_PATH" \
+        --n_steps $STEPS \
+        --batch_size $BATCH \
+        --grad_accum $GRAD_ACCUM \
+        --lr $LR \
+        --subset_size $SUBSET \
+        --optimizer "sparse_adamw" \
+        --use_wandb \
+        --run_name "ablation_${MASK_NAME}_sparse_bp"
 }
 
-# Warm masks (step-50: our real cold-start-comparable checkpoint)
-run_mask \
-  "masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" \
-  "magnitude_step50"
+# --- Warm Start Masks ---
+run_mask_ablation "masks/warm_fisher_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" "warm_fisher_step50"
+run_mask_ablation "masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" "warm_magnitude_step50"
+run_mask_ablation "masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" "warm_momentum_step50"
 
-run_mask \
-  "masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" \
-  "momentum_step50"
-
-run_mask \
-  "masks/warm_fisher_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" \
-  "fisher_step50"
-
-# Ground truth: converged magnitude mask (performance ceiling reference)
-run_mask \
-  "masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct.pt" \
-  "magnitude_gt"
-
-echo ""
-echo "Warm-start ablation complete!"
+echo "Warm-Start Ablation Complete!"
