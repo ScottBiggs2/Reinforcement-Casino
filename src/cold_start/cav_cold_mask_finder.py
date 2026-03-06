@@ -531,7 +531,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_batches", type=int, default=32)
     parser.add_argument("--method", type=str, choices=["activation", "cav", "snip"], default="cav")
     parser.add_argument("--sparsity_percent", type=float, default=95.0)
-    parser.add_argument("--all_linear", action="store_true", help="Score all Linear weight matrices.")
+    parser.add_argument("--mlp_only", action="store_true", default=True,
+                        help="Only score MLP parameters (recommended, consistent with sparse backprop target)")
     parser.add_argument("--force_cpu", action="store_true")
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--reference_mask", type=str, default=None, help="Optional reference mask to compute Jaccard similarity against.")
@@ -544,5 +545,4 @@ if __name__ == "__main__":
     parser.add_argument("--debug_top_groups", type=int, default=20, help="Top-N groups to keep in debug summaries.")
 
     args = parser.parse_args()
-    args.mlp_only = not args.all_linear
     main(args)
