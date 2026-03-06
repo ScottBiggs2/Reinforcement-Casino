@@ -98,7 +98,8 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
-  --compare_to_reference
+  --compare_to_reference \
+  --output_file "masks/random_baseline_vs_ground_truth_sparsity${SPARSITY}pct.pt"
 
 echo "-> vs. Magnitude Mask (Warm)"
 REF_MASK="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step${TARGET_STEP}.pt"
@@ -106,7 +107,8 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
-  --compare_to_reference
+  --compare_to_reference \
+  --output_file "masks/random_baseline_vs_magnitude_sparsity${SPARSITY}pct.pt"
 
 echo "-> vs. Momentum Mask (Warm)"
 REF_MASK="masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step${TARGET_STEP}.pt"
@@ -114,7 +116,8 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
-  --compare_to_reference
+  --compare_to_reference \
+  --output_file "masks/random_baseline_vs_momentum_sparsity${SPARSITY}pct.pt"
 
 echo "-> vs. Fisher Mask (Warm)"
 REF_MASK="masks/warm_fisher_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step${TARGET_STEP}.pt"
@@ -122,15 +125,19 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
-  --compare_to_reference
+  --compare_to_reference \
+  --output_file "masks/random_baseline_vs_fisher_warm_sparsity${SPARSITY}pct.pt"
+
+DATASET_SANITIZED="${DATASET//\//_}"
 
 echo "-> vs. Fisher Mask (Cold)"
-REF_MASK="masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light_R1_DPOData_sparsity${SPARSITY}pct_n256.pt"
+REF_MASK="masks/cold_fisher_google_gemma_3_270m_it_${DATASET_SANITIZED}_sparsity${SPARSITY}pct_n256.pt"
 python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
-  --compare_to_reference
+  --compare_to_reference \
+  --output_file "masks/random_baseline_vs_fisher_cold_sparsity${SPARSITY}pct.pt"
 
 echo "-> vs. CAV/SNIP Mask (Cold)"
 REF_MASK="masks/cold_cav_google_gemma_3_270m_it_sparsity${SPARSITY}pct.pt"
@@ -138,7 +145,8 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
-  --compare_to_reference
+  --compare_to_reference \
+  --output_file "masks/random_baseline_vs_cav_cold_sparsity${SPARSITY}pct.pt"
 
 
 echo ""
