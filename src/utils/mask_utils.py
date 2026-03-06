@@ -107,16 +107,18 @@ def create_mask_from_scores_gpu_efficient(scores_dict, sparsity_percent, device=
 
 def compute_jaccard_similarity(pred_masks, true_masks):
     """
-    Computes Jaccard similarity between predicted and ground truth masks.
-    Uses GPU for faster computation.
+    Computes Jaccard similarity, spatial overlap, and cosine similarity
+    between predicted and reference masks. Uses GPU for faster computation.
     """
-    print("\n=== Computing Jaccard Similarity ===")
+    print("\n=== Computing Similarity Metrics ===")
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     per_layer_jaccard = {}
     total_intersection = 0
     total_union = 0
+    total_pred_kept = 0
+    total_true_kept = 0
     
     for name in pred_masks.keys():
         if name not in true_masks:
@@ -133,6 +135,8 @@ def compute_jaccard_similarity(pred_masks, true_masks):
         
         total_intersection += intersection
         total_union += union
+        total_pred_kept += pred.sum().item()
+        total_true_kept += true.sum().item()
         
         del pred, true
     
@@ -140,25 +144,34 @@ def compute_jaccard_similarity(pred_masks, true_masks):
     
     aggregate_jaccard = total_intersection / total_union if total_union > 0 else 0.0
     
+    # Calculate additional metrics
+    overlap_pred = total_intersection / total_pred_kept if total_pred_kept > 0 else 0.0
+    overlap_true = total_intersection / total_true_kept if total_true_kept > 0 else 0.0
+    cosine_similarity = total_intersection / ((total_pred_kept * total_true_kept) ** 0.5) if (total_pred_kept * total_true_kept) > 0 else 0.0
+    
     if len(per_layer_jaccard) > 0:
         mean_jaccard = sum(per_layer_jaccard.values()) / len(per_layer_jaccard)
         min_jaccard = min(per_layer_jaccard.values())
         max_jaccard = max(per_layer_jaccard.values())
         
-        print(f"Aggregate Jaccard Similarity: {aggregate_jaccard:.4f}")
-        print(f"Mean per-layer Jaccard: {mean_jaccard:.4f}")
-        print(f"Min per-layer Jaccard: {min_jaccard:.4f}")
-        print(f"Max per-layer Jaccard: {max_jaccard:.4f}")
+        print(f"Aggregate Jaccard Similarity:     {aggregate_jaccard:.4f}")
+        print(f"Overlap (Intersect / Pred_Size):  {overlap_pred:.4f} ({overlap_pred*100:.1f}%)")
+        print(f"Overlap (Intersect / True_Size):  {overlap_true:.4f} ({overlap_true*100:.1f}%)")
+        print(f"Global Cosine Similarity:         {cosine_similarity:.4f}")
+        print(f"Mean per-layer Jaccard:           {mean_jaccard:.4f}")
         
         return {
             "aggregate_jaccard": aggregate_jaccard,
             "mean_jaccard": mean_jaccard,
             "min_jaccard": min_jaccard,
             "max_jaccard": max_jaccard,
-            "per_layer": per_layer_jaccard
+            "per_layer": per_layer_jaccard,
+            "overlap_fraction_predicted": overlap_pred,
+            "overlap_fraction_reference": overlap_true,
+            "cosine_similarity": cosine_similarity
         }
     else:
-        print("No matching layers found for Jaccard computation.")
+        print("No matching layers found for similarity computation.")
         return None
 
 def save_masks(masks, output_file, metadata=None):

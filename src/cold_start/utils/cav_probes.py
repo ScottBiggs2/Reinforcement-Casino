@@ -48,8 +48,17 @@ def compute_cav_scores(
     lr: float,
     weight_decay: float,
     device: str,
+    normalize_per_layer: bool = True,
 ) -> Dict[str, torch.Tensor]:
-    """Per-layer CAV scores from labeled activations."""
+    """Per-layer CAV scores from labeled activations, with optional z-normalization.
+
+    Args:
+        normalize_per_layer: If True (recommended), z-score each layer's probe
+            weight scores before returning them. This counteracts the systematic
+            difference in raw activation magnitudes across depth — later layers
+            tend to produce larger activations, which inflates their raw CAV scores
+            and causes the global top-K threshold to over-select from late layers.
+    """
     scores: Dict[str, torch.Tensor] = {}
     for layer_name, (x, y) in labeled_activations.items():
         layer_scores = train_linear_probe(
@@ -61,4 +70,17 @@ def compute_cav_scores(
             device=device,
         )
         scores[layer_name] = layer_scores
+
+    if normalize_per_layer:
+        normalized: Dict[str, torch.Tensor] = {}
+        for layer_name, s in scores.items():
+            mean = s.mean()
+            std = s.std()
+            if std > 1e-12:
+                normalized[layer_name] = (s - mean) / std
+            else:
+                # Uniform probe weights → no discriminative signal in this layer
+                normalized[layer_name] = torch.zeros_like(s)
+        return normalized
+
     return scores

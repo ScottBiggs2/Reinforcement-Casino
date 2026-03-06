@@ -101,6 +101,7 @@ def collect_cav_scores(
     probe_epochs: int,
     probe_lr: float,
     probe_weight_decay: float,
+    normalize_per_layer: bool = True,
 ) -> Dict[str, torch.Tensor]:
     extractor = FeatureExtractor(model, mlp_only=mlp_only)
     model.eval()
@@ -115,11 +116,22 @@ def collect_cav_scores(
             rejected_ids = batch["rejected_input_ids"].to(device)
             rejected_mask = batch["rejected_attention_mask"].to(device)
 
-            extractor.collect_labeled_start(label=1)
+            # Compute where the response starts (end of prompt) for each sequence.
+            # We use the first position where the padding mask is 0 from the right
+            # as a proxy. In practice the prompt occupies the first N tokens.
+            chosen_len = chosen_mask.sum(dim=1)  # number of real tokens per sample
+            rejected_len = rejected_mask.sum(dim=1)
+
+            # Use per-batch majority prompt length as response_start_idx.
+            # This is a reasonable approximation when prompt lengths are similar.
+            chosen_resp_start = int(chosen_len.min().item() // 2)  # heuristic: assume ~half is prompt
+            rejected_resp_start = int(rejected_len.min().item() // 2)
+
+            extractor.collect_labeled_start(label=1, response_start_idx=chosen_resp_start)
             _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
             extractor.collect_stop()
 
-            extractor.collect_labeled_start(label=0)
+            extractor.collect_labeled_start(label=0, response_start_idx=rejected_resp_start)
             _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
             extractor.collect_stop()
 
@@ -130,6 +142,7 @@ def collect_cav_scores(
         lr=probe_lr,
         weight_decay=probe_weight_decay,
         device=device,
+        normalize_per_layer=normalize_per_layer,
     )
 
     weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
@@ -146,6 +159,7 @@ def collect_cav_scores_with_debug(
     probe_epochs: int,
     probe_lr: float,
     probe_weight_decay: float,
+    normalize_per_layer: bool = True,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Tuple[torch.Tensor, torch.Tensor]], Dict[str, torch.Tensor]]:
     extractor = FeatureExtractor(model, mlp_only=mlp_only)
     model.eval()
@@ -160,11 +174,14 @@ def collect_cav_scores_with_debug(
             rejected_ids = batch["rejected_input_ids"].to(device)
             rejected_mask = batch["rejected_attention_mask"].to(device)
 
-            extractor.collect_labeled_start(label=1)
+            chosen_resp_start = int(chosen_mask.sum(dim=1).min().item() // 2)
+            rejected_resp_start = int(rejected_mask.sum(dim=1).min().item() // 2)
+
+            extractor.collect_labeled_start(label=1, response_start_idx=chosen_resp_start)
             _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
             extractor.collect_stop()
 
-            extractor.collect_labeled_start(label=0)
+            extractor.collect_labeled_start(label=0, response_start_idx=rejected_resp_start)
             _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
             extractor.collect_stop()
 
@@ -175,6 +192,7 @@ def collect_cav_scores_with_debug(
         lr=probe_lr,
         weight_decay=probe_weight_decay,
         device=device,
+        normalize_per_layer=normalize_per_layer,
     )
 
     weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
@@ -444,6 +462,7 @@ def main(args):
                 probe_epochs=args.probe_epochs,
                 probe_lr=args.probe_lr,
                 probe_weight_decay=args.probe_weight_decay,
+                normalize_per_layer=not args.no_layer_norm,
             )
         else:
             score_dict = collect_cav_scores(
@@ -455,6 +474,7 @@ def main(args):
                 probe_epochs=args.probe_epochs,
                 probe_lr=args.probe_lr,
                 probe_weight_decay=args.probe_weight_decay,
+                normalize_per_layer=not args.no_layer_norm,
             )
     elif args.method == "snip":
         score_dict = compute_snip_scores(
@@ -540,6 +560,9 @@ if __name__ == "__main__":
     parser.add_argument("--probe_epochs", type=int, default=200)
     parser.add_argument("--probe_lr", type=float, default=1e-2)
     parser.add_argument("--probe_weight_decay", type=float, default=1e-4)
+    parser.add_argument("--no_layer_norm", action="store_true",
+                        help="Disable per-layer z-score normalization of CAV scores. "
+                             "Without normalization, later layers dominate mask selection.")
     parser.add_argument("--debug_out_dir", type=str, default=None, help="Write CAV/subnetwork debug report JSON to this directory.")
     parser.add_argument("--debug_eval_batches", type=int, default=8, help="Number of batches for debug ablation loss evaluation.")
     parser.add_argument("--debug_top_groups", type=int, default=20, help="Top-N groups to keep in debug summaries.")

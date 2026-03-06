@@ -73,12 +73,13 @@ echo "=================================================="
 echo "2. Generating Cold-Start Masks"
 echo "=================================================="
 
-echo "-> Fisher Mask (Cold)"
+echo "-> Fisher Mask (Cold, Improved)"
 python src/cold_start/cold_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
   --sparsity_percent $SPARSITY \
   --n_calibration_samples 256 \
+  --mini_batch_size 4 \
   --reference_mask "$REF_MASK_GT" \
   --mlp_only
 
