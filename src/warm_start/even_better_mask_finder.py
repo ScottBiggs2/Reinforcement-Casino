@@ -40,7 +40,13 @@ def load_deltas_streaming(delta_log_dir, target_step=None):
 
 
 
-def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, device='cuda'):
+def is_mlp_param(name):
+    # MLP layer name patterns -- covers LLaMA, Gemma, Mistral, Qwen naming conventions
+    MLP_KEYWORDS = ["gate_proj", "up_proj", "down_proj", "fc1", "fc2",
+                    "feed_forward", "ffn", "mlp.c_fc", "mlp.c_proj"]
+    return any(kw in name.lower() for kw in MLP_KEYWORDS)
+
+def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', mlp_only=False):
     """
     Computes ground truth mask by loading only the final checkpoint.
     """
@@ -52,7 +58,11 @@ def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, devic
     final_deltas = torch.load(final_path, map_location=device)
     
     # Compute scores directly on GPU
-    scores = {name: delta.abs() for name, delta in final_deltas.items()}
+    scores = {}
+    for name, delta in final_deltas.items():
+        if mlp_only and not is_mlp_param(name):
+            continue
+        scores[name] = delta.abs()
     
     masks = create_mask_from_scores_gpu_efficient(scores, sparsity_percent, device)
     
@@ -62,7 +72,7 @@ def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, devic
     return masks
 
 
-def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', debug=False):
+def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', debug=False, mlp_only=False):
     """
     Magnitude mask with streaming: accumulate on GPU, never load all checkpoints at once.
     """
@@ -80,7 +90,7 @@ def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent,
         
         # Initialize aggregated dict on first pass
         if param_names is None:
-            param_names = list(deltas.keys())
+            param_names = [name for name in deltas.keys() if not mlp_only or is_mlp_param(name)]
             for name in param_names:
                 aggregated[name] = torch.zeros_like(deltas[name], device=device)
         
@@ -107,7 +117,7 @@ def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent,
     return masks
 
 
-def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_size=5, device='cuda', debug=False):
+def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_size=5, device='cuda', debug=False, mlp_only=False):
     """
     Momentum mask with streaming: only keep previous checkpoint in memory.
     """
@@ -115,7 +125,7 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
     
     if len(steps_and_paths) < 2:
         print("Warning: Need at least 2 steps for momentum. Falling back to magnitude.")
-        return compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent, device)
+        return compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent, device, mlp_only=mlp_only)
     
     # Store recent velocities in a sliding window (on GPU)
     velocity_window = defaultdict(list)  # {param_name: [v_t-w, ..., v_t]}
@@ -129,7 +139,7 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
         curr_deltas = torch.load(delta_path, map_location=device)
         
         if param_names is None:
-            param_names = list(curr_deltas.keys())
+            param_names = [name for name in curr_deltas.keys() if not mlp_only or is_mlp_param(name)]
         
         if prev_deltas is not None:
             # Compute velocity: v_t = delta_t - delta_{t-1}
@@ -198,7 +208,7 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
     return masks
 
 
-def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cuda'):
+def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', mlp_only=False):
     """
     Fisher approximation with streaming: accumulate sum and sum-of-squares on GPU.
     Fisher ≈ Var[delta] + |E[delta]| = E[delta²] - E[delta]² + |E[delta]|
@@ -218,7 +228,7 @@ def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cud
         deltas = torch.load(delta_path, map_location=device)
         
         if param_names is None:
-            param_names = list(deltas.keys())
+            param_names = [name for name in deltas.keys() if not mlp_only or is_mlp_param(name)]
             for name in param_names:
                 sum_delta[name] = torch.zeros_like(deltas[name], device=device)
                 sum_delta_sq[name] = torch.zeros_like(deltas[name], device=device)
@@ -360,7 +370,7 @@ def main(args):
         print("Computing ground truth mask for Jaccard comparison...")
         print("="*60)
         all_steps = load_deltas_streaming(delta_log_dir, target_step=None)
-        ground_truth_masks = compute_ground_truth_mask_streaming(all_steps, args.sparsity_percent, device)
+        ground_truth_masks = compute_ground_truth_mask_streaming(all_steps, args.sparsity_percent, device, mlp_only=args.mlp_only)
     
     # Compute masks based on method
     print("\n" + "="*60)
@@ -368,15 +378,15 @@ def main(args):
     print("="*60)
     
     if args.method == "magnitude":
-        masks = compute_absolute_magnitude_mask_streaming(steps_and_paths, args.sparsity_percent, device, args.debug)
+        masks = compute_absolute_magnitude_mask_streaming(steps_and_paths, args.sparsity_percent, device, args.debug, mlp_only=args.mlp_only)
         method_suffix = "magnitude"
     
     elif args.method == "momentum":
-        masks = compute_momentum_mask_streaming(steps_and_paths, args.sparsity_percent, args.momentum_window, device, args.debug)
+        masks = compute_momentum_mask_streaming(steps_and_paths, args.sparsity_percent, args.momentum_window, device, args.debug, mlp_only=args.mlp_only)
         method_suffix = f"momentum_w{args.momentum_window}"
     
     elif args.method == "fisher":
-        masks = compute_fisher_mask_streaming(steps_and_paths, args.sparsity_percent, device)
+        masks = compute_fisher_mask_streaming(steps_and_paths, args.sparsity_percent, device, mlp_only=args.mlp_only)
         method_suffix = "fisher"
     
     else:
@@ -447,6 +457,7 @@ if __name__ == "__main__":
     parser.add_argument("--compute_jaccard", action="store_true")
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--mlp_only", action="store_true", help="Only score and compute masks for MLP parameters")
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU execution (slow but works without GPU)")
     
     args = parser.parse_args()

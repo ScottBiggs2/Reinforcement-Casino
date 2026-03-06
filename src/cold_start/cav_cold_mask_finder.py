@@ -390,7 +390,7 @@ def main(args):
     from src.utils.data_utils import dpo_collator_fn, load_dpo_dataset
 
     device = choose_device(args.force_cpu)
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
 
     print(f"Using device: {device}")
     print(f"Loading model: {args.model_name}")

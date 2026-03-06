@@ -36,6 +36,7 @@ python src/warm_start/even_better_mask_finder.py \
   --delta_log_dir "$LOG_DIR" \
   --method magnitude \
   --sparsity_percent $SPARSITY \
+  --mlp_only \
   --compute_jaccard 
 
 REF_MASK_GT="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct.pt"
@@ -46,6 +47,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method magnitude \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
+  --mlp_only \
   --compute_jaccard 
 
 echo "-> Momentum Mask"
@@ -54,6 +56,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method momentum \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
+  --mlp_only \
   --compute_jaccard 
 
 echo "-> Fisher Mask (Warm)"
@@ -62,6 +65,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method fisher \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
+  --mlp_only \
   --compute_jaccard 
 
 echo ""

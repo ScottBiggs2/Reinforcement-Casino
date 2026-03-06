@@ -16,9 +16,9 @@ GPU memory: 42.41 GB
 
 ✓ Using device: cuda
 Scanning deltas from: delta_logs_google_gemma_3_270m_it
-Found 7 delta files
+Found 10 delta files
 
-Found deltas for steps: [10, 20, 30, 40, 50, 100, 200]
+Found deltas for steps: [10, 20, 30, 40, 50, 100, 200, 300, 400, 500]
 
 ============================================================
 Computing ground truth mask for Jaccard comparison...
@@ -46,7 +46,7 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 3,053,876 (1.1%)
+  Actual keep: 3,053,888 (1.1%)
   Actual sparsity: 98.86% (target: 97.5%)
   Error: 1.36%
 
@@ -56,13 +56,16 @@ Computing magnitude mask...
 
 === Computing Absolute Magnitude Mask (target sparsity: 97.5%) ===
 Processing deltas in streaming fashion...
-  [1/7] Processing step 10...
-  [2/7] Processing step 20...
-  [3/7] Processing step 30...
-  [4/7] Processing step 40...
-  [5/7] Processing step 50...
-  [6/7] Processing step 100...
-  [7/7] Processing step 200...
+  [1/10] Processing step 10...
+  [2/10] Processing step 20...
+  [3/10] Processing step 30...
+  [4/10] Processing step 40...
+  [5/10] Processing step 50...
+  [6/10] Processing step 100...
+  [7/10] Processing step 200...
+  [8/10] Processing step 300...
+  [9/10] Processing step 400...
+  [10/10] Processing step 500...
 
 === Creating Exact Masks (target sparsity: 97.5%) ===
 Adding noise to break ties (on GPU)...
@@ -70,7 +73,7 @@ Sampling scores to estimate threshold (on GPU)...
 Total parameters: 268,098,176
 Target keep count: 6,702,454 (2.5%)
 Sampled 12,755,936 values for threshold estimation
-Estimated threshold: 0.0001583099
+Estimated threshold: 0.0002288818
 
 Applying per-layer masks...
   Processing layer 1/236
@@ -81,24 +84,24 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 2,866,414 (1.1%)
-  Actual sparsity: 98.93% (target: 97.5%)
-  Error: 1.43%
+  Actual keep: 3,247,339 (1.2%)
+  Actual sparsity: 98.79% (target: 97.5%)
+  Error: 1.29%
 
 === Verifying Masks ===
 ✓ All mask shapes verified
 
 === Computing Jaccard Similarity ===
-Aggregate Jaccard Similarity: 0.5930
-Mean per-layer Jaccard: 0.3385
+Aggregate Jaccard Similarity: 0.7308
+Mean per-layer Jaccard: 0.4086
 Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 1.0000
 
-Masks saved to: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step250.pt
+Masks saved to: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct.pt
 Total parameters: 268,098,176
-Kept parameters: 2,866,414
-Final sparsity: 98.93%
-Detailed Jaccard results saved to: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step250_jaccard.json
+Kept parameters: 3,247,339
+Final sparsity: 98.79%
+Detailed Jaccard results saved to: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_jaccard.json
 
 ✓ Mask generation complete!
 Peak GPU memory allocated: 10.24 GB
@@ -146,7 +149,7 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 3,053,883 (1.1%)
+  Actual keep: 3,053,865 (1.1%)
   Actual sparsity: 98.86% (target: 97.5%)
   Error: 1.36%
 
@@ -168,7 +171,7 @@ Sampling scores to estimate threshold (on GPU)...
 Total parameters: 268,098,176
 Target keep count: 6,702,454 (2.5%)
 Sampled 12,755,936 values for threshold estimation
-Estimated threshold: 0.0000915527
+Estimated threshold: 0.0000896454
 
 Applying per-layer masks...
   Processing layer 1/236
@@ -179,23 +182,23 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 2,846,754 (1.1%)
-  Actual sparsity: 98.94% (target: 97.5%)
-  Error: 1.44%
+  Actual keep: 2,866,734 (1.1%)
+  Actual sparsity: 98.93% (target: 97.5%)
+  Error: 1.43%
 
 === Verifying Masks ===
 ✓ All mask shapes verified
 
 === Computing Jaccard Similarity ===
-Aggregate Jaccard Similarity: 0.5132
-Mean per-layer Jaccard: 0.2941
+Aggregate Jaccard Similarity: 0.5164
+Mean per-layer Jaccard: 0.2958
 Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 1.0000
 
 Masks saved to: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt
 Total parameters: 268,098,176
-Kept parameters: 2,846,754
-Final sparsity: 98.94%
+Kept parameters: 2,866,734
+Final sparsity: 98.93%
 Detailed Jaccard results saved to: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50_jaccard.json
 
 ✓ Mask generation complete!
@@ -244,7 +247,7 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 3,049,160 (1.1%)
+  Actual keep: 3,053,881 (1.1%)
   Actual sparsity: 98.86% (target: 97.5%)
   Error: 1.36%
 
@@ -278,7 +281,7 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 3,101,117 (1.2%)
+  Actual keep: 3,103,819 (1.2%)
   Actual sparsity: 98.84% (target: 97.5%)
   Error: 1.34%
 
@@ -286,14 +289,14 @@ Verification:
 ✓ All mask shapes verified
 
 === Computing Jaccard Similarity ===
-Aggregate Jaccard Similarity: 0.5575
-Mean per-layer Jaccard: 0.3153
+Aggregate Jaccard Similarity: 0.5582
+Mean per-layer Jaccard: 0.3157
 Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 1.0000
 
 Masks saved to: masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity97.5pct_step50.pt
 Total parameters: 268,098,176
-Kept parameters: 3,101,117
+Kept parameters: 3,103,819
 Final sparsity: 98.84%
 Detailed Jaccard results saved to: masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity97.5pct_step50_jaccard.json
 
@@ -343,7 +346,7 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 3,055,278 (1.1%)
+  Actual keep: 3,056,295 (1.1%)
   Actual sparsity: 98.86% (target: 97.5%)
   Error: 1.36%
 
@@ -366,7 +369,7 @@ Sampling scores to estimate threshold (on GPU)...
 Total parameters: 268,098,176
 Target keep count: 6,702,454 (2.5%)
 Sampled 12,755,936 values for threshold estimation
-Estimated threshold: 0.0000168801
+Estimated threshold: 0.0000171662
 
 Applying per-layer masks...
   Processing layer 1/236
@@ -377,23 +380,23 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 6,702,454 (2.5%)
-  Actual keep: 2,862,946 (1.1%)
-  Actual sparsity: 98.93% (target: 97.5%)
-  Error: 1.43%
+  Actual keep: 2,850,838 (1.1%)
+  Actual sparsity: 98.94% (target: 97.5%)
+  Error: 1.44%
 
 === Verifying Masks ===
 ✓ All mask shapes verified
 
 === Computing Jaccard Similarity ===
-Aggregate Jaccard Similarity: 0.5121
-Mean per-layer Jaccard: 0.2930
+Aggregate Jaccard Similarity: 0.5104
+Mean per-layer Jaccard: 0.2921
 Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 1.0000
 
 Masks saved to: masks/warm_fisher_google_gemma_3_270m_it_sparsity97.5pct_step50.pt
 Total parameters: 268,098,176
-Kept parameters: 2,862,946
-Final sparsity: 98.93%
+Kept parameters: 2,850,838
+Final sparsity: 98.94%
 Detailed Jaccard results saved to: masks/warm_fisher_google_gemma_3_270m_it_sparsity97.5pct_step50_jaccard.json
 
 ✓ Mask generation complete!
@@ -423,8 +426,8 @@ Loading calibration data from qihoo360/Light-R1-DPOData (256 samples)...
   Normalizing by 256 samples...
   Fisher score stats:
     min:  0.000000e+00
-    max:  7.881766e+02
-    mean: 6.526631e-04
+    max:  8.035755e+02
+    mean: 6.268480e-04
     nonzero fraction: 0.9989
 
 === Creating Exact Masks (target sparsity: 97.5%) ===
@@ -433,7 +436,7 @@ Sampling scores to estimate threshold (on GPU)...
 Total parameters: 70,778,880
 Target keep count: 1,769,472 (2.5%)
 Sampled 5,400,000 values for threshold estimation
-Estimated threshold: 0.0001767221
+Estimated threshold: 0.0001735329
 
 Applying per-layer masks...
   Processing layer 1/54
@@ -441,14 +444,23 @@ Applying per-layer masks...
 
 Verification:
   Target keep: 1,769,472 (2.5%)
-  Actual keep: 1,764,101 (2.5%)
-  Actual sparsity: 97.51% (target: 97.5%)
-  Error: 0.01%
+  Actual keep: 1,768,897 (2.5%)
+  Actual sparsity: 97.50% (target: 97.5%)
+  Error: 0.00%
+
+Loading reference mask from: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct.pt
+
+=== Computing Jaccard Similarity ===
+Aggregate Jaccard Similarity: 0.0252
+Mean per-layer Jaccard: 0.0136
+Min per-layer Jaccard: 0.0000
+Max per-layer Jaccard: 0.0582
 
 Masks saved to: masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light-R1-DPOData_sparsity97.5pct_n256.pt
 Total parameters: 70,778,880
-Kept parameters: 1,764,101
-Final sparsity: 97.51%
+Kept parameters: 1,768,897
+Final sparsity: 97.50%
+Detailed Jaccard results saved to: masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light-R1-DPOData_sparsity97.5pct_n256_jaccard.json
 
 ✓ Cold-start mask generation complete!
 -> CAV Mask (Cold)
@@ -475,16 +487,25 @@ Verification:
   Actual sparsity: 100.00% (target: 97.5%)
   Error: 2.50%
 
+Loading reference mask from: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct.pt
+
+=== Computing Jaccard Similarity ===
+Aggregate Jaccard Similarity: 0.0000
+Mean per-layer Jaccard: 0.0000
+Min per-layer Jaccard: 0.0000
+Max per-layer Jaccard: 0.0000
+
 Masks saved to: masks/cold_cav_google_gemma_3_270m_it_sparsity97.5pct.pt
 Total parameters: 70,778,880
 Kept parameters: 0
 Final sparsity: 100.00%
+Detailed Jaccard results saved to: masks/cold_cav_google_gemma_3_270m_it_sparsity97.5pct_jaccard.json
 
 ==================================================
 3. Comparing Against Random Baseline Masks
 ==================================================
 -> vs. Ground Truth Mask
-Loading reference mask from: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step250.pt
+Loading reference mask from: masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct.pt
 
 === Generating Random Baseline Mask ===
   Sparsity target: 97.5%
@@ -515,12 +536,12 @@ Verification:
 === Jaccard vs Reference Mask ===
 
 === Computing Jaccard Similarity ===
-Aggregate Jaccard Similarity: 0.0076
-Mean per-layer Jaccard: 0.0066
+Aggregate Jaccard Similarity: 0.0082
+Mean per-layer Jaccard: 0.0070
 Min per-layer Jaccard: 0.0000
-Max per-layer Jaccard: 0.0178
+Max per-layer Jaccard: 0.0184
   Expected by chance:                      0.0127
-  Ratio (signal/noise):                    0.60x
+  Ratio (signal/noise):                    0.65x
 
 Masks saved to: masks/random_baseline_vs_ground_truth_sparsity97.5pct.pt
 Total parameters: 268,098,176
@@ -561,12 +582,12 @@ Verification:
 === Jaccard vs Reference Mask ===
 
 === Computing Jaccard Similarity ===
-Aggregate Jaccard Similarity: 0.0075
+Aggregate Jaccard Similarity: 0.0076
 Mean per-layer Jaccard: 0.0066
 Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 0.0178
   Expected by chance:                      0.0127
-  Ratio (signal/noise):                    0.59x
+  Ratio (signal/noise):                    0.60x
 
 Masks saved to: masks/random_baseline_vs_magnitude_sparsity97.5pct.pt
 Total parameters: 268,098,176
@@ -610,7 +631,7 @@ Verification:
 Aggregate Jaccard Similarity: 0.0080
 Mean per-layer Jaccard: 0.0067
 Min per-layer Jaccard: 0.0000
-Max per-layer Jaccard: 0.0179
+Max per-layer Jaccard: 0.0178
   Expected by chance:                      0.0127
   Ratio (signal/noise):                    0.63x
 
@@ -658,7 +679,7 @@ Mean per-layer Jaccard: 0.0066
 Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 0.0176
   Expected by chance:                      0.0127
-  Ratio (signal/noise):                    0.60x
+  Ratio (signal/noise):                    0.59x
 
 Masks saved to: masks/random_baseline_vs_fisher_warm_sparsity97.5pct.pt
 Total parameters: 268,098,176
@@ -698,10 +719,10 @@ Verification:
 === Computing Jaccard Similarity ===
 Aggregate Jaccard Similarity: 0.0126
 Mean per-layer Jaccard: 0.0070
-Min per-layer Jaccard: 0.0001
+Min per-layer Jaccard: 0.0000
 Max per-layer Jaccard: 0.0241
   Expected by chance:                      0.0127
-  Ratio (signal/noise):                    0.99x
+  Ratio (signal/noise):                    1.00x
 
 Masks saved to: masks/random_baseline_vs_fisher_cold_sparsity97.5pct.pt
 Total parameters: 70,778,880
