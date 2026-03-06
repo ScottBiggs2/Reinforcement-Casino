@@ -62,24 +62,74 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
     ds = ds.select(range(min(n_samples, len(ds))))
 
     def msg_to_text(x):
-        if isinstance(x, str): return x
-        if isinstance(x, dict): return x.get("value", "")
-        if isinstance(x, list): return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
+        """Robustly convert any DPO field value to plain text.
+        Handles: plain str, single dict ({'value':...} or {'content':...}),
+        and list of dicts (any common message key name).
+        """
+        if isinstance(x, str):
+            return x
+        if isinstance(x, dict):
+            # Try all common message-content key names
+            for key in ("value", "content", "text", "message"):
+                if key in x:
+                    return str(x[key])
+            # Last resort: join all string values
+            return " ".join(str(v) for v in x.values() if isinstance(v, str))
+        if isinstance(x, list):
+            parts = []
+            for m in x:
+                if isinstance(m, dict):
+                    for key in ("value", "content", "text", "message"):
+                        if key in m:
+                            parts.append(str(m[key]))
+                            break
+                elif isinstance(m, str):
+                    parts.append(m)
+            return "\n".join(parts)
         return str(x)
+
+    # Debug: print the raw structure of the very first record so we can verify
+    # the field format on whatever dataset version is cached on this machine.
+    first = next(iter(ds))
+    print(f"  [DEBUG] Dataset columns: {list(first.keys())}")
+    for col in ("prompt", "chosen", "rejected"):
+        val = first.get(col, "<MISSING>")
+        print(f"  [DEBUG] '{col}' -> type={type(val).__name__}, ", end="")
+        if isinstance(val, list) and val:
+            elem = val[0]
+            print(f"list[0] type={type(elem).__name__}, ", end="")
+            if isinstance(elem, dict):
+                print(f"keys={list(elem.keys())}, preview={repr(str(elem))[:120]}")
+            else:
+                print(f"preview={repr(str(elem))[:120]}")
+        elif isinstance(val, str):
+            print(f"preview={repr(val[:120])}")
+        else:
+            print(f"value={repr(val)[:120]}")
 
     pairs = []
     for rec in ds:
-        # --- Prompt extraction (same as data_utils.normalize_record) ---
+        # --- Prompt extraction (same logic as data_utils.normalize_record) ---
         prompt_raw = rec.get("prompt", "")
         if isinstance(prompt_raw, list):
-            prompt_text = "\n".join(
-                m.get("value", "") for m in prompt_raw
-                if isinstance(m, dict) and m.get("from", "").lower() != "assistant"
-            ).strip()
+            # Filter out assistant/gpt turns; keep human/user/system inputs
+            human_parts = []
+            for m in prompt_raw:
+                if isinstance(m, dict):
+                    role = m.get("from", m.get("role", "")).lower()
+                    if role not in ("assistant", "gpt"):
+                        for key in ("value", "content", "text", "message"):
+                            if key in m:
+                                human_parts.append(str(m[key]))
+                                break
+            prompt_text = "\n".join(human_parts).strip()
+            if not prompt_text:
+                # Fallback: full msg_to_text if role filtering removed everything
+                prompt_text = msg_to_text(prompt_raw).strip()
         else:
             prompt_text = msg_to_text(prompt_raw).strip()
 
-        # --- Chosen extraction: accept whole field, identical to data_utils ---
+        # --- Chosen extraction: accept whole field ---
         chosen_text = msg_to_text(rec.get("chosen", "")).strip()
 
         if not prompt_text or not chosen_text:
@@ -113,6 +163,7 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
 
     print(f"  Loaded {len(pairs)} calibration (prompt, chosen) pairs")
     return pairs
+
 
 
 
