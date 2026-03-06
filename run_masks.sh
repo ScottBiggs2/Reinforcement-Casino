@@ -36,8 +36,9 @@ python src/warm_start/even_better_mask_finder.py \
   --delta_log_dir "$LOG_DIR" \
   --method magnitude \
   --sparsity_percent $SPARSITY \
-  --target_step 250 \
   --compute_jaccard 
+
+REF_MASK_GT="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct.pt"
 
 echo "-> Magnitude Mask"
 python src/warm_start/even_better_mask_finder.py \
@@ -74,6 +75,7 @@ python src/cold_start/cold_mask_finder.py \
   --dataset_name "$DATASET" \
   --sparsity_percent $SPARSITY \
   --n_calibration_samples 256 \
+  --reference_mask "$REF_MASK_GT" \
   --mlp_only
 
 echo "-> CAV Mask (Cold)"
@@ -84,6 +86,7 @@ python src/cold_start/cav_cold_mask_finder.py \
   --sparsity_percent $SPARSITY \
   --subset_size 256 \
   --num_batches 16 \
+  --reference_mask "$REF_MASK_GT" \
   --mlp_only
 
 echo ""
@@ -93,7 +96,7 @@ echo "=================================================="
 # We use the magnitude mask as the reference to extract parameter shapes
 
 echo "-> vs. Ground Truth Mask"
-REF_MASK="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step250.pt"
+REF_MASK="$REF_MASK_GT"
 python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
