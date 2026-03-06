@@ -54,103 +54,65 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
     Returns a list of encoded dicts with input_ids, attention_mask, and labels
     (prompt tokens masked to -100, response tokens used for loss).
 
-    Mirrors the field extraction in data_utils.load_dpo_dataset exactly so the
-    same datasets that work for training also work here.
+    Dataset schema (qihoo360/Light-R1-DPOData):
+        'conversations': list of {"from": "human"|"gpt", "value": str}
+        'chosen':        dict  {"from": "gpt", "value": str}
+        'rejected':      dict  {"from": "gpt", "value": str}
+    The prompt is the human turn(s) from 'conversations'; chosen is the response.
     """
     print(f"Loading calibration data from {dataset_name} ({n_samples} samples)...")
     ds = load_dataset(dataset_name, split="train")
     ds = ds.select(range(min(n_samples, len(ds))))
 
-    def msg_to_text(x):
-        """Robustly convert any DPO field value to plain text.
-        Handles: plain str, single dict ({'value':...} or {'content':...}),
-        and list of dicts (any common message key name).
-        """
-        if isinstance(x, str):
-            return x
-        if isinstance(x, dict):
-            # Try all common message-content key names
-            for key in ("value", "content", "text", "message"):
-                if key in x:
-                    return str(x[key])
-            # Last resort: join all string values
-            return " ".join(str(v) for v in x.values() if isinstance(v, str))
-        if isinstance(x, list):
-            parts = []
-            for m in x:
-                if isinstance(m, dict):
-                    for key in ("value", "content", "text", "message"):
-                        if key in m:
-                            parts.append(str(m[key]))
-                            break
-                elif isinstance(m, str):
-                    parts.append(m)
-            return "\n".join(parts)
-        return str(x)
+    def extract_prompt(rec):
+        """Extract the human/user prompt from the conversations field."""
+        convs = rec.get("conversations", None)
+        if convs and isinstance(convs, list):
+            human_parts = [
+                m["value"] for m in convs
+                if isinstance(m, dict)
+                and m.get("from", m.get("role", "")).lower() in ("human", "user", "system")
+                and "value" in m
+            ]
+            if human_parts:
+                return "\n".join(human_parts).strip()
+        # Fallback: try the 'prompt' column (other datasets)
+        prompt_raw = rec.get("prompt", "")
+        if isinstance(prompt_raw, str):
+            return prompt_raw.strip()
+        return ""
 
-    # Debug: print the raw structure of the very first record so we can verify
-    # the field format on whatever dataset version is cached on this machine.
-    first = next(iter(ds))
-    print(f"  [DEBUG] Dataset columns: {list(first.keys())}")
-    for col in ("prompt", "chosen", "rejected"):
-        val = first.get(col, "<MISSING>")
-        print(f"  [DEBUG] '{col}' -> type={type(val).__name__}, ", end="")
-        if isinstance(val, list) and val:
-            elem = val[0]
-            print(f"list[0] type={type(elem).__name__}, ", end="")
-            if isinstance(elem, dict):
-                print(f"keys={list(elem.keys())}, preview={repr(str(elem))[:120]}")
-            else:
-                print(f"preview={repr(str(elem))[:120]}")
-        elif isinstance(val, str):
-            print(f"preview={repr(val[:120])}")
-        else:
-            print(f"value={repr(val)[:120]}")
+    def extract_chosen(rec):
+        """Extract the preferred response text."""
+        chosen = rec.get("chosen", "")
+        if isinstance(chosen, dict):
+            return chosen.get("value", "").strip()
+        if isinstance(chosen, str):
+            return chosen.strip()
+        if isinstance(chosen, list):
+            # list of message dicts — take any gpt/assistant turn
+            parts = [m["value"] for m in chosen if isinstance(m, dict) and "value" in m]
+            return "\n".join(parts).strip()
+        return ""
 
     pairs = []
     for rec in ds:
-        # --- Prompt extraction (same logic as data_utils.normalize_record) ---
-        prompt_raw = rec.get("prompt", "")
-        if isinstance(prompt_raw, list):
-            # Filter out assistant/gpt turns; keep human/user/system inputs
-            human_parts = []
-            for m in prompt_raw:
-                if isinstance(m, dict):
-                    role = m.get("from", m.get("role", "")).lower()
-                    if role not in ("assistant", "gpt"):
-                        for key in ("value", "content", "text", "message"):
-                            if key in m:
-                                human_parts.append(str(m[key]))
-                                break
-            prompt_text = "\n".join(human_parts).strip()
-            if not prompt_text:
-                # Fallback: full msg_to_text if role filtering removed everything
-                prompt_text = msg_to_text(prompt_raw).strip()
-        else:
-            prompt_text = msg_to_text(prompt_raw).strip()
-
-        # --- Chosen extraction: accept whole field ---
-        chosen_text = msg_to_text(rec.get("chosen", "")).strip()
+        prompt_text = extract_prompt(rec)
+        chosen_text = extract_chosen(rec)
 
         if not prompt_text or not chosen_text:
             continue
 
-        # Encode the full prompt+response sequence
+        # Encode the full prompt+response sequence with response-only labels
         full_text = prompt_text + " " + chosen_text
         full_enc = tokenizer(
-            full_text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=max_length,
+            full_text, return_tensors="pt", truncation=True, max_length=max_length,
         )
         prompt_enc = tokenizer(
-            prompt_text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=max_length,
+            prompt_text, return_tensors="pt", truncation=True, max_length=max_length,
         )
 
-        # Build labels: -100 for prompt tokens (ignored in loss), real IDs for response
+        # Mask prompt tokens so loss is computed only over the chosen response
         prompt_len = prompt_enc["input_ids"].shape[1]
         labels = full_enc["input_ids"].clone()
         labels[0, :prompt_len] = -100
@@ -163,6 +125,7 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
 
     print(f"  Loaded {len(pairs)} calibration (prompt, chosen) pairs")
     return pairs
+
 
 
 

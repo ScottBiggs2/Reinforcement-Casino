@@ -55,18 +55,26 @@ class FeatureExtractor:
             if not torch.is_tensor(output):
                 return
 
-            # Response-only pooling: restrict to positions >= response_start_idx
-            # when collecting labeled activations for CAV. Prompt tokens are
-            # identical for chosen and rejected, so they add no discriminative
-            # signal and dilute the probe's training features.
-            if (
-                self._collect_mode == "labeled"
-                and self._response_start_idx is not None
-                and output.dim() >= 3
-            ):
-                output = output[:, self._response_start_idx:, :]
+            # Response-only pooling logic for CAV
+            # Discard prompt tokens as they carry no discriminative preference signal.
+            if self._collect_mode == "labeled" and output.dim() >= 3:
+                if isinstance(self._response_start_idx, torch.Tensor):
+                    # Handle per-example slicing
+                    pooled_list = []
+                    for i in range(output.shape[0]):
+                        start = self._response_start_idx[i].item()
+                        example_output = output[i, start:, :]
+                        pooled_list.append(_pool_hidden(example_output.unsqueeze(0)))
+                    pooled = torch.cat(pooled_list, dim=0)
+                elif self._response_start_idx is not None:
+                    # Single index fallback
+                    output = output[:, self._response_start_idx:, :]
+                    pooled = _pool_hidden(output)
+                else:
+                    pooled = _pool_hidden(output)
+            else:
+                pooled = _pool_hidden(output)
 
-            pooled = _pool_hidden(output)
             if pooled.numel() == 0:
                 return
 
@@ -91,15 +99,13 @@ class FeatureExtractor:
         self._current_label = None
         self._response_start_idx = None
 
-    def collect_labeled_start(self, label: int, response_start_idx: Optional[int] = None) -> None:
+    def collect_labeled_start(self, label: int, response_start_idx: Optional[torch.Tensor] = None) -> None:
         """Begin collecting labeled activations for CAV probe training.
 
         Args:
             label: Class label (1 = chosen/preferred, 0 = rejected).
-            response_start_idx: Token index at which the response begins.
-                Activations from prompt tokens [0, response_start_idx) are
-                discarded since they are identical for chosen and rejected
-                and carry no preference-discriminative signal.
+            response_start_idx: Token index (int) or tensor of indices (one per example)
+                at which the response begins. Positions before this are discarded.
         """
         self._collect_mode = "labeled"
         self._current_label = int(label)

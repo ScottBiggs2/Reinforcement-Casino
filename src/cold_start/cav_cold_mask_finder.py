@@ -171,17 +171,17 @@ def collect_cav_scores_with_debug(
 
             chosen_ids = batch["chosen_input_ids"].to(device)
             chosen_mask = batch["chosen_attention_mask"].to(device)
+            chosen_plens = batch["chosen_prompt_lens"].to(device)
+            
             rejected_ids = batch["rejected_input_ids"].to(device)
             rejected_mask = batch["rejected_attention_mask"].to(device)
+            rejected_plens = batch["rejected_prompt_lens"].to(device)
 
-            chosen_resp_start = int(chosen_mask.sum(dim=1).min().item() // 2)
-            rejected_resp_start = int(rejected_mask.sum(dim=1).min().item() // 2)
-
-            extractor.collect_labeled_start(label=1, response_start_idx=chosen_resp_start)
+            extractor.collect_labeled_start(label=1, response_start_idx=chosen_plens)
             _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
             extractor.collect_stop()
 
-            extractor.collect_labeled_start(label=0, response_start_idx=rejected_resp_start)
+            extractor.collect_labeled_start(label=0, response_start_idx=rejected_plens)
             _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
             extractor.collect_stop()
 
@@ -405,7 +405,7 @@ def write_debug_reports(
 
 
 def main(args):
-    from src.utils.data_utils import dpo_collator_fn, load_dpo_dataset
+    from src.utils.data_utils import concatenated_dpo_collator_fn, load_dpo_dataset
 
     device = choose_device(args.force_cpu)
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
@@ -432,7 +432,7 @@ def main(args):
         split=args.split,
     )
 
-    collator = partial(dpo_collator_fn, tokenizer=tokenizer)
+    collator = partial(concatenated_dpo_collator_fn, tokenizer=tokenizer)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
