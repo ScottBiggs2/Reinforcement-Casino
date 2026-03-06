@@ -60,8 +60,8 @@ DELTA_LOG_DIR = f"./delta_logs_{MODEL_NAME_SANITIZED}"
 # )
 
 CHECKPOINT_SCHEDULE = (
-    list(range(10, 50, 10)) +  # [5, 10, 15, 20, 25]
-    list(range(100, 501, 100))  # [50, 75, 100]
+    list(range(10, 51, 10)) +  # [10, 20, 30, 40, 50]
+    list(range(100, 251, 50))  # [100, 150, 200, 250]
 )
 
 
