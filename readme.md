@@ -19,36 +19,6 @@ python src/full_training/sparse_dpo_bsr.py \
   --use_wandb
 ```
 
-Good but extremely unstable (work ongoing)
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer sparse_adamw \
-  --use_wandb
-```
-
-Good but extremely unstable. Like BSR AdamW. Not tested at long range.
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer adamw \
-  --use_wandb
-```
-
-Gradient clipping bsr test: 
-
-```bash 
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer sparse_adamw \
-  --use_wandb \
-  --max_grad_norm 0.5 \
-  --adam_eps 1e-6
-```
-
 DPO Beta noise reduction test:
 
 ```bash

@@ -61,12 +61,12 @@ DELTA_LOG_DIR = f"./delta_logs_{MODEL_NAME_SANITIZED}"
 
 CHECKPOINT_SCHEDULE = (
     list(range(10, 50, 10)) +  # [5, 10, 15, 20, 25]
-    list(range(100, 250, 50))  # [50, 75, 100]
+    list(range(100, 501, 100))  # [50, 75, 100]
 )
 
 
-THRESHOLD = 1e-3
-NUM_STEPS = 250
+THRESHOLD = 1e-5 # appendix A in Mukherjee et al 2025
+NUM_STEPS = 500
 SUBSET_SIZE = None  # reduce for faster bring-up
 
 WANDB_PROJECT = f"{MODEL_NAME_SANITIZED}-dpo-subnetwork-emergence"
