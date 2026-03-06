@@ -10,7 +10,12 @@
 #SBATCH --time=6:00:00
 #SBATCH --partition=gpu
 
-set -e
+# Source conda and activate environment
+source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
+conda activate /scratch/biggs.s/conda_envs/rl_casino
+
+# Set up PYTHONPATH
+export PYTHONPATH=.
 
 # Configuration
 MODEL="google/gemma-3-270m-it"
@@ -19,11 +24,6 @@ STEPS=100
 BATCH=4
 GRAD_ACCUM=4
 LR=5e-5
-
-# Source conda and activate environment
-source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
-export PYTHONPATH=.
 
 echo "Starting Cold-Start Mask Ablation..."
 echo "Comparing Dense Backprop vs Sparse Backprop (BSR)"

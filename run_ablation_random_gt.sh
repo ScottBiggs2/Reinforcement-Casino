@@ -10,7 +10,12 @@
 #SBATCH --time=6:00:00
 #SBATCH --partition=gpu
 
-set -e
+# Source conda and activate environment
+source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
+conda activate /scratch/biggs.s/conda_envs/rl_casino
+
+# Set up PYTHONPATH
+export PYTHONPATH=.
 
 # Configuration
 MODEL="google/gemma-3-270m-it"
@@ -21,11 +26,6 @@ GRAD_ACCUM=4
 LR=5e-5
 SPARSITY=97.5
 LOG_DIR="delta_logs_google_gemma_3_270m_it"
-
-# Source conda and activate environment
-source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
-export PYTHONPATH=.
 
 echo "Starting Random & Ground Truth Mask Ablation..."
 
