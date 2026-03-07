@@ -56,7 +56,8 @@ def train(
     if run_name is None:
         run_name = f"sparse_dpo_efficiency_{optimizer_type}_{sanitize_model_name(model_name)}"
     
-    wandb_project = f"{sanitize_model_name(model_name)}-dpo-subnetwork-emergence"
+    wandb_project = "huggingface"
+    os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
     
@@ -140,7 +141,8 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=1,
-        report_to="none", # We handle wandb manually in callback
+        report_to="wandb" if use_wandb else "none",
+        run_name=run_name,
         remove_unused_columns=False,
         bf16=True,
         gradient_checkpointing=True,

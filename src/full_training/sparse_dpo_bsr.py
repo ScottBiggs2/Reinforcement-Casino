@@ -79,7 +79,8 @@ def train(
         
         run_name = "_".join(parts)
     
-    wandb_project = f"{sanitize_model_name(model_name)}-dpo-subnetwork-emergence"
+    wandb_project = "huggingface"
+    os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
     
@@ -184,7 +185,7 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=1,
-        report_to="wandb" if use_wandb else "none",
+        report_to=["wandb"] if use_wandb else [],
         run_name=run_name,
         remove_unused_columns=False,
         bf16=True,

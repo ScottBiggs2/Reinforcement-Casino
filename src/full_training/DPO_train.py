@@ -71,7 +71,8 @@ THRESHOLD = 1e-5 # appendix A in Mukherjee et al 2025
 NUM_STEPS = 500
 SUBSET_SIZE = None  # reduce for faster bring-up
 
-WANDB_PROJECT = f"{MODEL_NAME_SANITIZED}-dpo-subnetwork-emergence"
+WANDB_PROJECT = "huggingface"
+os.environ["WANDB_PROJECT"] = WANDB_PROJECT
 WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_lightR1_flexible_checkpoints"
 
 print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
