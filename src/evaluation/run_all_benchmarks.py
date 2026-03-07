@@ -18,11 +18,17 @@ from evaluation.mmlu_evaluator import evaluate_mmlu
 from evaluation.math_evaluator import evaluate_math
 from evaluation.squad_evaluator import evaluate_squad
 from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
+from evaluation.gsm8k_evaluator import evaluate_gsm8k
+from evaluation.coding_evaluator import evaluate_coding
+from evaluation.ifeval_evaluator import evaluate_ifeval
 
 
 BENCHMARKS = {
     "mmlu": evaluate_mmlu,
     "math": evaluate_math,
+    "gsm8k": evaluate_gsm8k,
+    "coding": evaluate_coding,
+    "ifeval": evaluate_ifeval,
     "squad": evaluate_squad,
     "gpqa": evaluate_gpqa_diamond,
     "gpqa_diamond": evaluate_gpqa_diamond,
@@ -130,7 +136,7 @@ def run_all_benchmarks(
         Dictionary mapping benchmark names to their results
     """
     if benchmarks is None:
-        benchmarks = ["mmlu", "math", "squad", "gpqa_diamond"]
+        benchmarks = ["mmlu", "math", "gsm8k", "coding", "ifeval", "squad", "gpqa_diamond"]
 
     # Ensure output directory exists before running any benchmarks or writing summary
     if output_dir:
@@ -212,6 +218,22 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                     print(f"{benchmark_name.upper()}: Could not extract accuracy (check verbose output)")
                     # Debug: show what we found
                     print(f"  Available keys in results: {list(math_results.keys()) if isinstance(math_results, dict) else 'N/A'}")
+        elif benchmark_name == "gsm8k":
+            if "results" in benchmark_results and "gsm8k" in benchmark_results["results"]:
+                gsm8k_data = benchmark_results["results"]["gsm8k"]
+                acc = gsm8k_data.get("exact_match,none", gsm8k_data.get("acc,none", 0))
+                print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+        elif benchmark_name == "coding":
+            if "results" in benchmark_results:
+                for task, task_results in benchmark_results["results"].items():
+                    pass_at_1 = task_results.get("pass@1", task_results.get("acc", 0))
+                    print(f"CODING ({task}): pass@1 = {pass_at_1:.4f}")
+        elif benchmark_name == "ifeval":
+            if "results" in benchmark_results and "ifeval" in benchmark_results["results"]:
+                ifeval_data = benchmark_results["results"]["ifeval"]
+                strict = ifeval_data.get("prompt_level_strict_acc,none", 0)
+                loose = ifeval_data.get("prompt_level_loose_acc,none", 0)
+                print(f"{benchmark_name.upper()}: Strict Acc = {strict:.4f}, Loose Acc = {loose:.4f}")
         elif benchmark_name == "squad":
             if "exact_match" in benchmark_results:
                 em = benchmark_results['exact_match']
@@ -313,7 +335,7 @@ Examples:
     
     # Handle "all" benchmarks
     if "all" in args.benchmarks:
-        benchmarks_to_run = ["mmlu", "math", "squad", "gpqa_diamond"]
+        benchmarks_to_run = ["mmlu", "math", "gsm8k", "coding", "ifeval", "squad", "gpqa_diamond"]
     else:
         benchmarks_to_run = args.benchmarks
     
