@@ -33,27 +33,11 @@ echo "Starting Random & Ground Truth Mask Ablation..."
 echo "=================================================="
 echo "1. Running Baseline DPO Training"
 echo "=================================================="
-python src/full_training/DPO_train.py --model_name "$MODEL"
+python src/full_training/DPO_train.py --model_name "$MODEL" --use_wandb --run_name "ablation_baseline_dpo"
 
-# --- 2. Generate Random Mask ---
+# --- 2. Calculate GT Mask ---
 echo "=================================================="
-echo "2. Generating Random Mask"
-echo "=================================================="
-RANDOM_MASK="masks/random_sample_sparsity${SPARSITY}pct.pt"
-if [ ! -f "$RANDOM_MASK" ]; then
-    echo "Generating sample random mask..."
-    python3 src/utils/generate_random_mask.py \
-        --model_name "$MODEL" \
-        --sparsity_percent "$SPARSITY" \
-        --output_file "$RANDOM_MASK" \
-        --mlp_only
-else
-    echo "Random mask already exists at $RANDOM_MASK"
-fi
-
-# --- 3. Calculate GT Mask ---
-echo "=================================================="
-echo "3. Calculating GT Mask"
+echo "2. Calculating GT Mask"
 echo "=================================================="
 echo "-> Ground Truth Mask"
 python src/warm_start/even_better_mask_finder.py \
@@ -65,6 +49,20 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard 
 
 REF_MASK_GT="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step500.pt"
+
+# --- 3. Generate Truly Random Mask ---
+echo "=================================================="
+echo "3. Generating Random Mask"
+echo "=================================================="
+RANDOM_MASK="masks/random_sample_sparsity${SPARSITY}pct.pt"
+
+echo "Generating independent random mask (no reference)..."
+python3 src/utils/generate_random_mask.py \
+    --model_name "$MODEL" \
+    --sparsity_percent "$SPARSITY" \
+    --output_file "$RANDOM_MASK" \
+    --mlp_only \
+    --compare_mask "$REF_MASK_GT"
 
 echo ""
 echo "Comparing BSR-AdamW + Dense vs Sparse Backprop"

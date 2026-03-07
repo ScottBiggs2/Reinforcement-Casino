@@ -56,6 +56,7 @@ def train(
     if run_name is None:
         run_name = f"sparse_dpo_efficiency_{optimizer_type}_{sanitize_model_name(model_name)}"
     
+    wandb_project = f"{sanitize_model_name(model_name)}-dpo-subnetwork-emergence"
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
     
@@ -124,7 +125,8 @@ def train(
         batch_size=batch_size,
         grad_accum=grad_accum,
         run_name=run_name,
-        use_wandb=use_wandb
+        use_wandb=use_wandb,
+        wandb_project=wandb_project
     ))
     
     if save_csv:

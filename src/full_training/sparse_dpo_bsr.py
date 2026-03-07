@@ -79,6 +79,7 @@ def train(
         
         run_name = "_".join(parts)
     
+    wandb_project = f"{sanitize_model_name(model_name)}-dpo-subnetwork-emergence"
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
     
@@ -169,7 +170,7 @@ def train(
         grad_accum=grad_accum,
         run_name=run_name,
         use_wandb=use_wandb,
-        wandb_project="huggingface"
+        wandb_project=wandb_project
     ))
     
     if save_csv:

@@ -44,6 +44,8 @@ parser.add_argument(
     default="google/gemma-3-270m-it",
     help="HuggingFace model name to load (default: google/gemma-3-270m-it)"
 )
+parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB")
+parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
 args = parser.parse_args()
 
 MODEL_NAME = args.model_name
@@ -70,7 +72,7 @@ NUM_STEPS = 500
 SUBSET_SIZE = None  # reduce for faster bring-up
 
 WANDB_PROJECT = f"{MODEL_NAME_SANITIZED}-dpo-subnetwork-emergence"
-WANDB_RUN_NAME = f"{MODEL_NAME_SANITIZED}_lightR1_flexible_checkpoints"
+WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_lightR1_flexible_checkpoints"
 
 print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 
@@ -162,7 +164,7 @@ model.config.use_cache = False  # Trainer compat
 cfg = DPOConfig(
     output_dir=OUTPUT_DIR,
     run_name=WANDB_RUN_NAME,
-    report_to=["wandb"],
+    report_to=["wandb"] if args.use_wandb else [],
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=5e-6,
@@ -220,7 +222,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
         self.wandb_initialized = False
 
     def on_train_begin(self, args, state, control, **kwargs):
-        if not self.wandb_initialized:
+        if not self.wandb_initialized and "wandb" in args.report_to:
             wandb.init(
                 project=WANDB_PROJECT,
                 name=args.run_name,
