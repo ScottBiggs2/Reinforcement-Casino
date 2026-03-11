@@ -37,6 +37,7 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_gpqa_diamond(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 0,
     limit: Optional[int] = None,
     device: Optional[str] = None,

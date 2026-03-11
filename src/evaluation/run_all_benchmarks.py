@@ -285,6 +285,12 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
     parser = argparse.ArgumentParser(
         description="Run LLM benchmark evaluations",
         formatter_class=argparse.RawDescriptionHelpFormatter,

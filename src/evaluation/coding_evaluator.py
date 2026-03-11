@@ -128,9 +128,12 @@ def evaluate_coding(
     # Attempt to run with code execution allowed if the version supports it
     try:
         results = simple_evaluate(**eval_kwargs, allow_code_execution=True)
-    except TypeError:
-        # Fallback for older versions that don't have allow_code_execution
-        results = simple_evaluate(**eval_kwargs)
+    except TypeError as e:
+        if "allow_code_execution" in str(e):
+            # Fallback for older versions that don't have allow_code_execution
+            results = simple_evaluate(**eval_kwargs)
+        else:
+            raise e
         
     if verbose and "results" in results:
         print("\n" + "=" * 60)

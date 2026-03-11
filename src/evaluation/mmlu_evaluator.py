@@ -14,6 +14,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # from crashing the entire suite.
 
 try:
+    from lm_eval import simple_evaluate
+    LM_EVAL_AVAILABLE = True
+except ImportError:
+    LM_EVAL_AVAILABLE = False
+
+try:
     from transformers import AutoTokenizer
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
