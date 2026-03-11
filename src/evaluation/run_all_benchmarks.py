@@ -9,6 +9,7 @@ try:
     multiprocessing.set_start_method('spawn', force=True)
 except RuntimeError:
     pass
+print(f"Multiprocessing start method: {multiprocessing.get_start_method()}")
 
 import os
 import sys
