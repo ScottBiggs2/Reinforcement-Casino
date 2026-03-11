@@ -1,0 +1,21 @@
+# Evaluation environment specific dependencies
+# These are isolated from the main project to avoid version conflicts
+
+# Core project dependencies (pinned for stability)
+numpy==2.2.3
+protobuf==6.31.1
+torch==2.9.0
+torchvision==0.24.0
+
+# vLLM (pinned for torch 2.9.0)
+vllm==0.11.1
+
+# Evaluation Harness Core
+lm-eval>=0.4.0
+evaluate>=0.4.0
+rouge-score>=0.0.4
+
+# Specialized requirements
+langdetect
+pybind11
+numexpr
