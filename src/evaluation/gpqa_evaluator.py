@@ -180,18 +180,13 @@ def evaluate_gpqa_diamond(
             for config in configs_to_try:
                 try:
                     eval_kwargs = {
-                        "model": "hf",
+                        "model": model, # Use passed-in backend
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,
                         "limit": limit,
                         "batch_size": batch_size,
                         "device": device,
-                        # Set generation parameters for proper evaluation
-                        "gen_kwargs": {
-                            "temperature": 0.0,  # Deterministic for fair evaluation
-                            "max_gen_toks": 256,  # Sufficient for GPQA answers
-                        }
                     }
                     eval_kwargs.update(config)
                     results = simple_evaluate(**eval_kwargs)

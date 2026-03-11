@@ -198,7 +198,7 @@ def evaluate_math(
                     
                     # Build kwargs for simple_evaluate
                     eval_kwargs = {
-                        "model": "hf",
+                        "model": model,
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,

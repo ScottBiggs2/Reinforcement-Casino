@@ -218,11 +218,12 @@ def evaluate_squad_with_hf_evaluate(
 
 def evaluate_squad_with_lm_eval(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 0,
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 8,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -364,7 +365,7 @@ def evaluate_squad_with_lm_eval(
             for config in configs_to_try:
                 try:
                     eval_kwargs = {
-                        "model": "hf",
+                        "model": model,
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,
@@ -450,6 +451,11 @@ def evaluate_squad(
     # Only forward arguments the target evaluator knows how to handle
     signature = inspect.signature(target)
     accepted_params = set(signature.parameters.keys()) - {"model_path"}
+    
+    # Map 'model' to 'model' for target function
+    if "model" in kwargs and "model" in accepted_params:
+        kwargs["model"] = kwargs["model"]
+        
     filtered_kwargs = {
         key: value for key, value in kwargs.items() if key in accepted_params
     }

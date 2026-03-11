@@ -190,11 +190,6 @@ def evaluate_mmlu(
                     "limit": limit,
                     "batch_size": batch_size,
                     "device": device,
-                    # Set generation parameters for proper evaluation
-                    "gen_kwargs": {
-                        "temperature": 0.0,  # Deterministic for fair evaluation
-                        "max_gen_toks": 256,  # Sufficient for MMLU answers
-                    }
                 }
                 eval_kwargs.update(config)
                 results = simple_evaluate(**eval_kwargs)
