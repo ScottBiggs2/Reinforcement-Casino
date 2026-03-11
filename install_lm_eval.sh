@@ -19,8 +19,13 @@ pip install rouge-score || {
     }
 }
 
-# Step 3: Install other dependencies that might be needed
-echo "Step 3: Installing build dependencies and fixing version conflicts..."
+# Step 3: Install other dependencies and resolve conflicts
+echo "Step 3: Forcefully removing incompatible versions and fixing conflicts..."
+
+# Force remove versions that might have been partially installed/cached
+pip uninstall -y vllm torchvision 2>/dev/null || true
+
+# Re-install basic build dependencies
 pip install pybind11 numexpr langdetect
 
 # Step 4: Fix evaluation environment conflicts
