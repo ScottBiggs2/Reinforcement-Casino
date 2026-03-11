@@ -20,11 +20,24 @@ pip install rouge-score || {
 }
 
 # Step 3: Install other dependencies that might be needed
-echo "Step 3: Installing build dependencies..."
+echo "Step 3: Installing build dependencies and fixing version conflicts..."
 pip install pybind11 numexpr langdetect
 
-# Step 4: Try installing lm-eval
-echo "Step 4: Installing lm-eval..."
+# Step 4: Fix evaluation environment conflicts
+echo "Step 4: Fixing version conflicts for evaluation environment..."
+# 1. Torchvision must match torch 2.9.0
+pip install torchvision==0.24.0 --no-deps 
+# 2. Fix protobuf for vLLM compatibility (avoiding 6.31.x)
+pip install protobuf==5.29.6
+# 3. Fix numpy for numba compatibility
+pip install "numpy<2.3"
+
+# Step 5: Try installing vLLM for 5-10x speedup
+echo "Step 5: Installing vLLM (pinned to 0.11.1 for torch 2.9.0)..."
+pip install vllm==0.11.1 --no-build-isolation || echo "Warning: vLLM installation failed, using Transformers fallback."
+
+# Step 6: Try installing lm-eval
+echo "Step 6: Installing lm-eval..."
 if ! pip install lm-eval; then
     echo "Standard installation failed, trying from source..."
     echo "Cloning lm-evaluation-harness repository..."
