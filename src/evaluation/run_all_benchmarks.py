@@ -96,9 +96,8 @@ def run_benchmark(
     if evaluator is None:
         raise ValueError(f"Could not find or load evaluator for: {benchmark_name}")
 
-    try:
-        # Drop kwargs that are not accepted by the evaluator
-        evaluator_signature = inspect.signature(evaluator)
+    # Drop kwargs that are not accepted by the evaluator
+    evaluator_signature = inspect.signature(evaluator)
     accepts_var_kwargs = any(
         param.kind == inspect.Parameter.VAR_KEYWORD
         for param in evaluator_signature.parameters.values()
