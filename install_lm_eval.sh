@@ -5,8 +5,9 @@ set -e
 
 echo "Installing lm-eval with Python 3.11 compatibility fixes..."
 
-# Step 1: Upgrade pip and setuptools
-echo "Step 1: Upgrading pip and setuptools..."
+# Step 1: Upgrade pip and setuptools and clear cache
+echo "Step 1: Upgrading pip and clearing cache..."
+pip cache purge || true
 pip install --upgrade pip setuptools wheel
 
 # Step 2: Install rouge-score separately (often causes build issues)
@@ -23,7 +24,8 @@ pip install rouge-score || {
 echo "Step 3: Forcefully removing incompatible versions and fixing conflicts..."
 
 # Force remove versions that might have been partially installed/cached by previous attempts
-# This is critical to prevent "vllm 0.17.0" ghosts from crashing the env
+# This is critical to prevent "vllm 0.17.0" and "torchvision 0.25.0" ghosts from crashing the env
+echo "Cleaning up 'ghost' packages (vllm, torchvision)..."
 pip uninstall -y vllm torchvision 2>/dev/null || true
 
 # Re-install basic build dependencies
@@ -33,18 +35,21 @@ pip install pybind11 numexpr langdetect
 echo "Step 4: Fixing version conflicts for evaluation environment..."
 # 1. Torchvision must match torch 2.9.0
 pip install torchvision==0.24.0 --no-deps 
-# 2. Fix protobuf for vLLM 0.11.1 compatibility (vLLM 0.11.1 works with 5.x or specific 6.x)
-# We found protobuf 5.29.6 is safe for vLLM 0.11.1
+# 2. Fix protobuf for vLLM 0.11.1 compatibility
 pip install protobuf==5.29.6
-# 3. Fix numpy for numba compatibility (since we reverted the main requirements.txt)
+# 3. Handle numpy/numba constraint for this environment
 pip install "numpy<2.3"
 
-# Step 5: Try installing vLLM for 5-10x speedup
-echo "Step 5: Installing vLLM (pinned to 0.11.1 for torch 2.9.0)..."
+# Step 5: Install Eval Harness Core
+echo "Step 5: Installing evaluation harness core (moved from requirements.txt)..."
+pip install evaluate rouge-score
+
+# Step 6: Try installing vLLM for 5-10x speedup
+echo "Step 6: Installing vLLM (pinned to 0.11.1 for torch 2.9.0)..."
 pip install vllm==0.11.1 --no-build-isolation || echo "Warning: vLLM installation failed, using Transformers fallback."
 
-# Step 6: Try installing lm-eval
-echo "Step 6: Installing lm-eval..."
+# Step 7: Try installing lm-eval
+echo "Step 7: Installing lm-eval..."
 if ! pip install lm-eval; then
     echo "Standard installation failed, trying from source..."
     echo "Cloning lm-evaluation-harness repository..."
