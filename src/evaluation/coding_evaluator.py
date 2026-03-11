@@ -74,15 +74,21 @@ def evaluate_coding(
         print(f"CODING EVALUATION: {tasks}")
         print("=" * 60)
     
-    # Auto-detect dtype
-    if dtype is None:
-        dtype_str = "float16" if torch.cuda.is_available() else "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if model == "vllm":
+            device = "cuda" # vLLM always uses cuda
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Auto-detect dtype
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16" # Common for vLLM
+        else:
+            dtype_str = "float16" if device == "cuda" and torch.cuda.is_available() else "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates
     if apply_chat_template is None:
@@ -126,14 +132,18 @@ def evaluate_coding(
         eval_kwargs["apply_chat_template"] = True
         
     # Attempt to run with code execution allowed if the version supports it
+    # We use a more robust way to check for the argument to avoid the crash in the worker
+    import inspect
+    sig = inspect.signature(simple_evaluate)
+    if "allow_code_execution" in sig.parameters:
+        eval_kwargs["allow_code_execution"] = True
+
     try:
-        results = simple_evaluate(**eval_kwargs, allow_code_execution=True)
-    except TypeError as e:
-        if "allow_code_execution" in str(e):
-            # Fallback for older versions that don't have allow_code_execution
-            results = simple_evaluate(**eval_kwargs)
-        else:
-            raise e
+        results = simple_evaluate(**eval_kwargs)
+    except Exception as e:
+        if verbose:
+            print(f"Error in simple_evaluate: {e}")
+        raise e
         
     if verbose and "results" in results:
         print("\n" + "=" * 60)

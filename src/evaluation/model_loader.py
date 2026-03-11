@@ -27,15 +27,6 @@ def load_model_and_tokenizer(
     Returns:
         Tuple of (model, tokenizer)
     """
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype = torch.float16
-        elif torch.backends.mps.is_available():
-            dtype = torch.float16
-        else:
-            dtype = torch.float32
-    
     # Auto-detect device if not specified
     if device is None:
         if torch.cuda.is_available():
@@ -44,6 +35,15 @@ def load_model_and_tokenizer(
             device = "mps"
         else:
             device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if device == "cuda" and torch.cuda.is_available():
+            dtype = torch.float16
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype = torch.float16
+        else:
+            dtype = torch.float32
     
     # Convert to absolute path if it's a local path
     if os.path.exists(model_path):

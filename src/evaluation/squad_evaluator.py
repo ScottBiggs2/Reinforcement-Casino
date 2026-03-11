@@ -70,12 +70,6 @@ def evaluate_squad_with_hf_evaluate(
     try:
         if verbose:
             print("Attempting to load as QuestionAnswering model...")
-        if dtype is None:
-            if torch.cuda.is_available():
-                dtype = torch.float16
-            else:
-                dtype = torch.float32
-        
         if device is None:
             if torch.cuda.is_available():
                 device = "cuda"
@@ -83,6 +77,14 @@ def evaluate_squad_with_hf_evaluate(
                 device = "mps"
             else:
                 device = "cpu"
+        
+        if dtype is None:
+            if device == "cuda" and torch.cuda.is_available():
+                dtype = torch.float16
+            elif device == "mps" and torch.backends.mps.is_available():
+                dtype = torch.float16
+            else:
+                dtype = torch.float32
         
         model = AutoModelForQuestionAnswering.from_pretrained(
             model_path,
@@ -254,25 +256,29 @@ def evaluate_squad_with_lm_eval(
         print("SQuAD EVALUATION (lm-evaluation-harness)")
         print("=" * 60)
     
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype_str = "float16"
-        elif torch.backends.mps.is_available():
-            dtype_str = "float16"
-        else:
-            dtype_str = "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device if not specified
     if device is None:
-        if torch.cuda.is_available():
+        if model == "vllm":
+            device = "cuda"
+        elif torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        elif device == "cuda" and torch.cuda.is_available():
+            dtype_str = "float16"
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates

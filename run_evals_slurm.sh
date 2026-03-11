@@ -91,6 +91,11 @@ echo "================================"
 # Required for HumanEval/MBPP coding benchmarks
 export HF_ALLOW_CODE_EVAL=1
 
+# ENSURE CUDA MULTIPROCESSING USES SPAWN
+# This is critical to prevent "Cannot re-initialize CUDA in forked subprocess"
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
+export CUDA_MODULE_LOADING=LAZY
+
 # We use the environment's python directly
 $PYTHON_BIN src/evaluation/run_all_benchmarks.py \
   --output_dir "results/eval_${SLURM_JOB_ID}" \

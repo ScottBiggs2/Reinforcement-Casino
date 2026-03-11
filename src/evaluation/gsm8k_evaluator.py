@@ -74,18 +74,21 @@ def evaluate_gsm8k(
         print("GSM8K EVALUATION")
         print("=" * 60)
     
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype_str = "float16"
-        else:
-            dtype_str = "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device if not specified
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if model == "vllm":
+            device = "cuda"
+        else:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        else:
+            dtype_str = "float16" if device == "cuda" and torch.cuda.is_available() else "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates for instruct/chat models
     if apply_chat_template is None:
