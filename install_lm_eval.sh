@@ -22,7 +22,8 @@ pip install rouge-score || {
 # Step 3: Install other dependencies and resolve conflicts
 echo "Step 3: Forcefully removing incompatible versions and fixing conflicts..."
 
-# Force remove versions that might have been partially installed/cached
+# Force remove versions that might have been partially installed/cached by previous attempts
+# This is critical to prevent "vllm 0.17.0" ghosts from crashing the env
 pip uninstall -y vllm torchvision 2>/dev/null || true
 
 # Re-install basic build dependencies
@@ -32,9 +33,10 @@ pip install pybind11 numexpr langdetect
 echo "Step 4: Fixing version conflicts for evaluation environment..."
 # 1. Torchvision must match torch 2.9.0
 pip install torchvision==0.24.0 --no-deps 
-# 2. Fix protobuf for vLLM compatibility (avoiding 6.31.x)
+# 2. Fix protobuf for vLLM 0.11.1 compatibility (vLLM 0.11.1 works with 5.x or specific 6.x)
+# We found protobuf 5.29.6 is safe for vLLM 0.11.1
 pip install protobuf==5.29.6
-# 3. Fix numpy for numba compatibility
+# 3. Fix numpy for numba compatibility (since we reverted the main requirements.txt)
 pip install "numpy<2.3"
 
 # Step 5: Try installing vLLM for 5-10x speedup
