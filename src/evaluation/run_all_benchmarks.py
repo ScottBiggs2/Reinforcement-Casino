@@ -3,6 +3,13 @@ Unified evaluation runner for all LLM benchmarks.
 Supports running individual benchmarks or all benchmarks at once.
 """
 
+import multiprocessing
+try:
+    # This MUST be the first thing that happens to fix the vLLM CUDA conflict
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
+
 import os
 import sys
 import argparse
@@ -285,12 +292,6 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
 
 
 if __name__ == "__main__":
-    import multiprocessing
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass
-        
     parser = argparse.ArgumentParser(
         description="Run LLM benchmark evaluations",
         formatter_class=argparse.RawDescriptionHelpFormatter,
