@@ -18,6 +18,13 @@ except ImportError:
     print("Warning: lm-evaluation-harness not installed.")
 
 try:
+    import langdetect
+    LANGDETECT_AVAILABLE = True
+except ImportError:
+    LANGDETECT_AVAILABLE = False
+    print("Warning: langdetect not installed. IFEval requires it.")
+
+try:
     from transformers import AutoTokenizer
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
@@ -37,10 +44,11 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_ifeval(
     model_path: str,
+    model: str = "hf",
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 1,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -50,10 +58,11 @@ def evaluate_ifeval(
     
     Args:
         model_path: Path to model (HuggingFace ID or local path)
+        model: Model backend ("hf" or "vllm")
         limit: Limit number of examples (None = all)
         device: Device to run on
         dtype: Model dtype
-        batch_size: Batch size
+        batch_size: Batch size (can be "auto")
         trust_remote_code: Whether to trust remote code
         apply_chat_template: Whether to apply the model's chat template
         
@@ -100,7 +109,7 @@ def evaluate_ifeval(
         print(f"Chat template: {apply_chat_template}")
     
     eval_kwargs = {
-        "model": "hf",
+        "model": model,
         "model_args": base_model_args_str,
         "tasks": ["ifeval"],
         "num_fewshot": 0, # IFEval is 0-shot

@@ -21,7 +21,7 @@ pip install rouge-score || {
 
 # Step 3: Install other dependencies that might be needed
 echo "Step 3: Installing build dependencies..."
-pip install pybind11 numexpr
+pip install pybind11 numexpr langdetect
 
 # Step 4: Try installing lm-eval
 echo "Step 4: Installing lm-eval..."

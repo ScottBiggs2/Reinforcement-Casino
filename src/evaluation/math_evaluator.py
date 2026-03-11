@@ -37,11 +37,12 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_math(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 4,
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 8,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -51,11 +52,12 @@ def evaluate_math(
     
     Args:
         model_path: Path to model (HuggingFace ID or local path)
+        model: Model backend ("hf" or "vllm")
         num_fewshot: Number of few-shot examples (default: 4)
         limit: Limit number of examples (None = all)
         device: Device to run on (auto-detect if None)
         dtype: Model dtype (auto-detect if None)
-        batch_size: Batch size for evaluation
+        batch_size: Batch size for evaluation (can be "auto")
         trust_remote_code: Whether to trust remote code
         apply_chat_template: Whether to apply the model's chat template (auto for instruct/chat if None)
         
@@ -157,8 +159,8 @@ def evaluate_math(
         print("MATH: Running...", end=" ", flush=True)
     
     # Try common task aliases in case the installed lm-eval version uses different names
-    # Note: User requested standard MATH, so we prioritize 'math' and remove 'hendrycks_math500' fallback
-    task_candidates = ["math"]
+    # Task names vary across lm-eval versions (v0.3.0 vs v0.4.x)
+    task_candidates = ["math", "hendrycks_math", "minerva_math"]
     results = None
     task_errors = []
     

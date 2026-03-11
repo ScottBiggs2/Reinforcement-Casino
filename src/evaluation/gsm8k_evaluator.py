@@ -34,11 +34,12 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_gsm8k(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 5,
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 8,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -48,11 +49,12 @@ def evaluate_gsm8k(
     
     Args:
         model_path: Path to model (HuggingFace ID or local path)
+        model: Model backend ("hf" or "vllm")
         num_fewshot: Number of few-shot examples (default: 5)
         limit: Limit number of examples (None = all)
         device: Device to run on (auto-detect if None)
         dtype: Model dtype (auto-detect if None)
-        batch_size: Batch size for evaluation
+        batch_size: Batch size for evaluation (can be "auto")
         trust_remote_code: Whether to trust remote code
         apply_chat_template: Whether to apply the model's chat template
         
@@ -109,7 +111,7 @@ def evaluate_gsm8k(
             print(f"Limiting to {limit} examples")
     
     eval_kwargs = {
-        "model": "hf",
+        "model": model,
         "model_args": base_model_args_str,
         "tasks": "gsm8k",
         "num_fewshot": num_fewshot,

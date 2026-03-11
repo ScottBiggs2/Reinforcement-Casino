@@ -387,3 +387,46 @@ Scripts sanitize HuggingFace model names for paths:
 - **Checkpoint schedules:** Configurable step schedules control when deltas are written.
 - **Wandb:** Runs log to Wandb with model-specific project names when enabled.
 - **Sparse training:** Triton kernels only update non-zero mask elements for speed at high sparsity.
+
+## Evaluation
+
+The project includes a comprehensive evaluation harness based on `lm-evaluation-harness`.
+
+### Supported Benchmarks
+- **MMLU**: General knowledge and reasoning.
+- **MATH**: Advanced mathematical problem solving (Standard MATH task).
+- **GSM8K**: Grade school math word problems.
+- **HumanEval / MBPP**: Coding proficiency (pass@1).
+- **IFEval**: Instruction following capabilities.
+- **SQuAD**: Reading comprehension.
+- **GPQA**: Graduate-level science questions.
+
+### Execution
+
+#### Unified Runner
+Run all or specific benchmarks using the unified runner:
+```bash
+python src/evaluation/run_all_benchmarks.py \
+  --model_path "meta-llama/Llama-3.1-8B-Instruct" \
+  --benchmarks mmlu,math,gsm8k \
+  --batch_size auto \
+  --use_vllm
+```
+
+#### Environment Variables
+Certain benchmarks and models require environment variables:
+- **`HF_TOKEN`**: Required for gated models like Llama 3.1.
+- **`HF_ALLOW_CODE_EVAL=1`**: Required for HumanEval and MBPP to execute model-generated code.
+
+### Speed Optimizations
+Evaluation can be slow. To maximize throughput:
+1. **Use vLLM**: Pass `--use_vllm` to use the vLLM backend (requires `pip install vllm`). This is significantly faster than the default `hf` backend.
+2. **Auto Batching**: Use `--batch_size auto` to automatically find the largest batch size that fits in GPU memory.
+3. **Limit Samples**: Use `--limit N` (e.g., `--limit 100`) to run a representative subset for faster iteration.
+
+### Slurm Integration
+Submit a full evaluation job to a GPU cluster:
+```bash
+sbatch run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
+```
+*Note: Edit `run_evals_slurm.sh` to ensure `HF_TOKEN` is exported.*

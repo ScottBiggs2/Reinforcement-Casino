@@ -23,6 +23,12 @@ echo "Evaluation started at: $(date)"
 echo "Running on node: $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 
+# Evaluation settings
+# Set LIMIT to a number (e.g. 100) for faster testing, or "" for full evaluation
+LIMIT="" 
+# Set BATCH_SIZE to "auto" (recommended) or a specific integer
+BATCH_SIZE="auto"
+
 # Check for HF Token (required for gated Llama 3.1 models)
 if [ -z "$HF_TOKEN" ]; then
     echo "WARNING: HF_TOKEN is not set. Accessing gated models (Llama 3.1) may fail."
@@ -62,18 +68,39 @@ $PYTHON_BIN -m pip install -r requirements.txt -q
 bash install_lm_eval.sh
 $PYTHON_BIN -c "import lm_eval; print(f'lm-eval: {lm_eval.__version__}')"
 
+# Try installing vLLM for 5-10x speedup (highly recommended for A100/H100)
+echo "Checking for vLLM..."
+if ! $PYTHON_BIN -c "import vllm" 2>/dev/null; then
+    echo "vLLM not found, attempting to install..."
+    $PYTHON_BIN -m pip install vllm -q || echo "Warning: vLLM installation failed, falling back to standard hf backend."
+fi
+
+# Determine if we should use vLLM
+VLLM_ARG=""
+if $PYTHON_BIN -c "import vllm" 2>/dev/null; then
+    echo "✓ Using vLLM backend"
+    VLLM_ARG="--use_vllm"
+else
+    echo "⚠ Using standard Transformers backend"
+fi
+
 echo "================================"
 echo "Running All Benchmarks"
 echo "================================"
 
 # IMPORTANT: For gated models like Llama 3.1, ensure HF_TOKEN is set
-# If not already in your environment, uncomment and add it here:
 # export HF_TOKEN="your_token_here"
+
+# Required for HumanEval/MBPP coding benchmarks
+export HF_ALLOW_CODE_EVAL=1
 
 # We use the environment's python directly
 $PYTHON_BIN src/evaluation/run_all_benchmarks.py \
   --output_dir "results/eval_${SLURM_JOB_ID}" \
+  --batch_size "$BATCH_SIZE" \
+  ${LIMIT:+--limit "$LIMIT"} \
   --verbose \
+  $VLLM_ARG \
   "$@"
 
 echo "================================"
