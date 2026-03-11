@@ -83,12 +83,22 @@ def run_benchmark(
     Returns:
         Dictionary with evaluation results
     """
+    # Print versions for debugging
+    try:
+        import torch
+        import vllm
+        import transformers
+        print(f"Versions: torch={torch.__version__}, vllm={vllm.__version__}, transformers={transformers.__version__}")
+    except ImportError:
+        pass
+
     evaluator = get_evaluator(benchmark_name)
     if evaluator is None:
         raise ValueError(f"Could not find or load evaluator for: {benchmark_name}")
 
-    # Drop kwargs that are not accepted by the evaluator to avoid unexpected errors
-    evaluator_signature = inspect.signature(evaluator)
+    try:
+        # Drop kwargs that are not accepted by the evaluator
+        evaluator_signature = inspect.signature(evaluator)
     accepts_var_kwargs = any(
         param.kind == inspect.Parameter.VAR_KEYWORD
         for param in evaluator_signature.parameters.values()
@@ -126,6 +136,11 @@ def run_benchmark(
     # Pass verbose flag to evaluator
     if "verbose" not in filtered_kwargs:
         filtered_kwargs["verbose"] = verbose
+    
+    if verbose:
+        print(f"DEBUG: Running {benchmark_name} with filtered_kwargs:")
+        for k, v in filtered_kwargs.items():
+            print(f"  - {k}: {v} (type: {type(v)})")
     
     try:
         results = evaluator(model_path=model_path, **filtered_kwargs)
@@ -223,9 +238,12 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 for key, value in mmlu_results.items():
                     if "mmlu" in key.lower():
                         if isinstance(value, dict):
-                            acc = value.get("acc", value.get("acc,none", 0))
-                            if acc:
+                            acc = value.get("acc", value.get("acc,none"))
+                            if acc is not None:
                                 print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                                break
+                            else:
+                                print(f"{benchmark_name.upper()}: Accuracy = N/A")
                                 break
         elif benchmark_name == "math":
             if "results" in benchmark_results:

@@ -205,6 +205,8 @@ def evaluate_mmlu(
                 results = simple_evaluate(**eval_kwargs)
                 break
             except TypeError as e:
+                import traceback
+                traceback.print_exc()
                 if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                     if verbose:
                         print(f"Chat template config not supported: {config}; retrying without it.")

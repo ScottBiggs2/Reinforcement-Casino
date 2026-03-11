@@ -61,7 +61,7 @@ echo "Environment Check"
 echo "================================"
 which python
 python --version
-python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+python -c "import torch; import vllm; import transformers; print(f'PyTorch: {torch.__version__}, vLLM: {vllm.__version__}, Transformers: {transformers.__version__}')"
 
 # Install/Verify lm-eval inside the env using the dedicated eval requirements
 # (The main requirements.txt is for training systems; eval_requirements.txt handles the harness)

@@ -430,3 +430,33 @@ Submit a full evaluation job to a GPU cluster:
 sbatch run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
 ```
 *Note: Edit `run_evals_slurm.sh` to ensure `HF_TOKEN` is exported.*
+
+### Model Loading Examples
+
+The evaluation harness supports loading models "naturally" via standard HuggingFace paths or local checkpoint directories.
+
+#### 1. Stock HuggingFace Models
+To evaluate a base model directly from HuggingFace:
+```bash
+python src/evaluation/run_all_benchmarks.py \
+  --model_path "meta-llama/Llama-3.1-8B-Instruct" \
+  --use_vllm
+```
+
+#### 2. Sparse-Tuned Models (Single-Unit Checkpoints)
+When models are trained using `sparse_dpo_bsr.py` or `sparse_dpo_efficiency.py`, they save full HuggingFace-compatible checkpoints. Point the runner to the checkpoint directory:
+```bash
+python src/evaluation/run_all_benchmarks.py \
+  --model_path "./results/sparse_dpo_run/checkpoints/checkpoint-50" \
+  --use_vllm
+```
+
+#### 3. DPO Evaluation with Masks (Legacy Deltas)
+If you need to evaluate a model by manually applying a sparse mask to weight deltas (legacy format), use the dedicated DPO evaluation utility:
+```bash
+python src/evaluation/DPO_evaluation.py \
+  --model_name_or_path "google/gemma-3-270m-it" \
+  --checkpoint_path "./results/dpo_dense_run/final_model" \
+  --mask_path "./masks/top_10.0_percent_mask.pt"
+```
+*Note: This utility now uses `SparseMaskManager` for robust and consistent mask application.*

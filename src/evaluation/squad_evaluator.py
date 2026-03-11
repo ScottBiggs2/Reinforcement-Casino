@@ -125,8 +125,8 @@ def evaluate_squad_with_hf_evaluate(
         print(f"\nLoading SQuAD {split} dataset...")
     dataset = load_dataset("squad", split=split)
     if limit:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    if verbose:
+        if limit is not None:
+            dataset = dataset.select(range(min(limit, len(dataset))))
         print(f"Loaded {len(dataset)} examples")
     
     # Load SQuAD metric
