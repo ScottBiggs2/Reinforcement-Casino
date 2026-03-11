@@ -12,9 +12,6 @@ venv/
 .DS_Store
 */.DS_Store
 
-.ipynb_checkpoints/
-*/.ipynb_checkpoints/
-
 */__pycache__/
 *.pyc
 *.cpython-*
@@ -26,15 +23,3 @@ results/
 *.pth
 *.json
 *.log
-
-logs/
-checkpoints*/
-delta_logs*/
-*.safetensors
-*.bin
-
-reconstructed_checkpoints/
-
-masks/
-*.out
-*.err
