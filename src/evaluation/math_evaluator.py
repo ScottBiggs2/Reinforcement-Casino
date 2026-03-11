@@ -10,12 +10,8 @@ import torch
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-try:
-    from lm_eval import simple_evaluate
-    LM_EVAL_AVAILABLE = True
-except ImportError:
-    LM_EVAL_AVAILABLE = False
-    print("Warning: lm-evaluation-harness not installed. Install with: pip install lm-eval")
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
 
 try:
     from transformers import AutoTokenizer
@@ -138,6 +134,12 @@ def evaluate_math(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
+    # Lazy import for stability
+    try:
+        from lm_eval import simple_evaluate
+    except ImportError:
+        raise ImportError("lm-evaluation-harness is required for MATH evaluation.")
+        
     # Build model_args string for lm-eval
     # lm-eval's from_pretrained will automatically detect and use .safetensors files
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]

@@ -7,9 +7,8 @@ import sys
 import inspect
 from typing import Dict, Any, Optional, List
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForQuestionAnswering
-from datasets import load_dataset
-import evaluate
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -114,6 +113,10 @@ def evaluate_squad_with_hf_evaluate(
         )
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+    
+    # Lazy imports
+    from datasets import load_dataset
+    import evaluate
     
     # Load SQuAD dataset
     if verbose:
@@ -339,6 +342,11 @@ def evaluate_squad_with_lm_eval(
         print("SQuAD: Running...", end=" ", flush=True)
     
     task_candidates = ["squad", "squad_v2", "squad_completion"]
+    
+    # Lazy imports for stability
+    from lm_eval import simple_evaluate
+    import evaluate
+    
     results = None
     task_errors = []
     

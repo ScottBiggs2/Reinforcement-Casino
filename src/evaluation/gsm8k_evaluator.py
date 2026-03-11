@@ -7,12 +7,8 @@ import torch
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-try:
-    from lm_eval import simple_evaluate
-    LM_EVAL_AVAILABLE = True
-except ImportError:
-    LM_EVAL_AVAILABLE = False
-    print("Warning: lm-evaluation-harness not installed. Install with: pip install lm-eval")
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
 
 try:
     from transformers import AutoTokenizer
@@ -127,6 +123,9 @@ def evaluate_gsm8k(
     if apply_chat_template:
         eval_kwargs["apply_chat_template"] = True
         eval_kwargs["fewshot_as_multiturn"] = True
+    
+    # Lazy import for stability
+    from lm_eval import simple_evaluate
         
     results = simple_evaluate(**eval_kwargs)
     

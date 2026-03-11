@@ -14,24 +14,45 @@ from pathlib import Path
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from evaluation.mmlu_evaluator import evaluate_mmlu
-from evaluation.math_evaluator import evaluate_math
-from evaluation.squad_evaluator import evaluate_squad
-from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
-from evaluation.gsm8k_evaluator import evaluate_gsm8k
-from evaluation.coding_evaluator import evaluate_coding
-from evaluation.ifeval_evaluator import evaluate_ifeval
+# Evaluators are imported lazily inside BENCHMARKS to prevent dependency issues 
+# in one benchmark from crashing the entire suite.
+
+
+def get_evaluator(name):
+    """Lazy-load evaluators to avoid dependency crashes at startup."""
+    if name == "mmlu":
+        from evaluation.mmlu_evaluator import evaluate_mmlu
+        return evaluate_mmlu
+    elif name == "math":
+        from evaluation.math_evaluator import evaluate_math
+        return evaluate_math
+    elif name == "gsm8k":
+        from evaluation.gsm8k_evaluator import evaluate_gsm8k
+        return evaluate_gsm8k
+    elif name == "coding":
+        from evaluation.coding_evaluator import evaluate_coding
+        return evaluate_coding
+    elif name == "ifeval":
+        from evaluation.ifeval_evaluator import evaluate_ifeval
+        return evaluate_ifeval
+    elif name == "squad":
+        from evaluation.squad_evaluator import evaluate_squad
+        return evaluate_squad
+    elif name in ["gpqa", "gpqa_diamond"]:
+        from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
+        return evaluate_gpqa_diamond
+    return None
 
 
 BENCHMARKS = {
-    "mmlu": evaluate_mmlu,
-    "math": evaluate_math,
-    "gsm8k": evaluate_gsm8k,
-    "coding": evaluate_coding,
-    "ifeval": evaluate_ifeval,
-    "squad": evaluate_squad,
-    "gpqa": evaluate_gpqa_diamond,
-    "gpqa_diamond": evaluate_gpqa_diamond,
+    "mmlu": "mmlu",
+    "math": "math",
+    "gsm8k": "gsm8k",
+    "coding": "coding",
+    "ifeval": "ifeval",
+    "squad": "squad",
+    "gpqa": "gpqa_diamond",
+    "gpqa_diamond": "gpqa_diamond",
 }
 
 
@@ -54,13 +75,9 @@ def run_benchmark(
     Returns:
         Dictionary with evaluation results
     """
-    if benchmark_name not in BENCHMARKS:
-        raise ValueError(
-            f"Unknown benchmark: {benchmark_name}. "
-            f"Available: {list(BENCHMARKS.keys())}"
-        )
-    
-    evaluator = BENCHMARKS[benchmark_name]
+    evaluator = get_evaluator(benchmark_name)
+    if evaluator is None:
+        raise ValueError(f"Could not find or load evaluator for: {benchmark_name}")
 
     # Drop kwargs that are not accepted by the evaluator to avoid unexpected errors
     evaluator_signature = inspect.signature(evaluator)

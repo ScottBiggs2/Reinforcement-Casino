@@ -68,20 +68,16 @@ $PYTHON_BIN -m pip install -r requirements.txt -q
 bash install_lm_eval.sh
 $PYTHON_BIN -c "import lm_eval; print(f'lm-eval: {lm_eval.__version__}')"
 
-# Try installing vLLM for 5-10x speedup (highly recommended for A100/H100)
+# Try using vLLM for 5-10x speedup (highly recommended for A100/H100)
+# To use this, you must have installed it manually: pip install vllm
 echo "Checking for vLLM..."
-if ! $PYTHON_BIN -c "import vllm" 2>/dev/null; then
-    echo "vLLM not found, attempting to install..."
-    $PYTHON_BIN -m pip install vllm -q || echo "Warning: vLLM installation failed, falling back to standard hf backend."
-fi
-
-# Determine if we should use vLLM
 VLLM_ARG=""
 if $PYTHON_BIN -c "import vllm" 2>/dev/null; then
     echo "✓ Using vLLM backend"
     VLLM_ARG="--use_vllm"
 else
-    echo "⚠ Using standard Transformers backend"
+    echo "⚠ vLLM not found or incompatible. Using standard Transformers backend."
+    echo "  (To enable vLLM, ensure 'vllm' is installed in your env and compatible with your CUDA version)"
 fi
 
 echo "================================"

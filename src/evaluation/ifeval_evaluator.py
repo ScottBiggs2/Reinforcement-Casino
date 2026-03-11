@@ -125,6 +125,13 @@ def evaluate_ifeval(
     if apply_chat_template:
         eval_kwargs["apply_chat_template"] = True
         
+    # Lazy imports for stability
+    from lm_eval import simple_evaluate
+    try:
+        import langdetect
+    except ImportError:
+        pass
+        
     results = simple_evaluate(**eval_kwargs)
     
     if verbose and "results" in results and "ifeval" in results["results"]:
