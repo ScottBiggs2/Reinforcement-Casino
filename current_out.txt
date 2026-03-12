@@ -32,7 +32,7 @@ Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
 Chat template: True
 Generation params: temperature=0.0, max_gen_toks=256
-WARNING 03-11 20:59:47 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:14 config.py:1668] Casting torch.bfloat16 to torch.float16.
 
 Error running mmlu: '<' not supported between instances of 'int' and 'NoneType'
 
@@ -63,7 +63,7 @@ Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
 Chat template: True
 Generation params: temperature=0.0, max_gen_toks=512
-WARNING 03-11 20:59:54 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:21 config.py:1668] Casting torch.bfloat16 to torch.float16.
 
 Error running math: '<' not supported between instances of 'int' and 'NoneType'
 
@@ -90,7 +90,7 @@ GSM8K EVALUATION
 Running GSM8K evaluation with 5-shot learning...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-11 20:59:54 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:21 config.py:1668] Casting torch.bfloat16 to torch.float16.
 
 Error running gsm8k: '<' not supported between instances of 'int' and 'NoneType'
 
@@ -117,7 +117,7 @@ CODING EVALUATION: humaneval,mbpp
 Running coding evaluation for tasks: humaneval,mbpp
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-11 20:59:55 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:21 config.py:1668] Casting torch.bfloat16 to torch.float16.
 Error in simple_evaluate: '<' not supported between instances of 'int' and 'NoneType'
 
 Error running coding: '<' not supported between instances of 'int' and 'NoneType'
@@ -145,7 +145,7 @@ IFEVAL EVALUATION
 Running IFEval evaluation...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-11 20:59:55 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:21 config.py:1668] Casting torch.bfloat16 to torch.float16.
 
 Error running ifeval: '<' not supported between instances of 'int' and 'NoneType'
 
@@ -174,7 +174,7 @@ Final decision: apply_chat_template = True
 Running SQuAD evaluation...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
-WARNING 03-11 21:00:00 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:26 config.py:1668] Casting torch.bfloat16 to torch.float16.
 
 Error running squad: '<' not supported between instances of 'int' and 'NoneType'
 
@@ -203,13 +203,13 @@ Final decision: apply_chat_template = True
 Running GPQA Diamond evaluation with 0-shot learning...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
-WARNING 03-11 21:00:00 config.py:1668] Casting torch.bfloat16 to torch.float16.
+WARNING 03-11 22:11:26 config.py:1668] Casting torch.bfloat16 to torch.float16.
 
 Error running gpqa_diamond: '<' not supported between instances of 'int' and 'NoneType'
 
 Failed to run gpqa_diamond: '<' not supported between instances of 'int' and 'NoneType'
 
-Summary saved to: results/eval_5001333/all_benchmarks_summary.json
+Summary saved to: results/eval_5006710/all_benchmarks_summary.json
 
 ================================================================================
 EVALUATION SUMMARY
@@ -222,6 +222,6 @@ IFEVAL: ERROR - '<' not supported between instances of 'int' and 'NoneType'
 SQUAD: ERROR - '<' not supported between instances of 'int' and 'NoneType'
 GPQA_DIAMOND: ERROR - '<' not supported between instances of 'int' and 'NoneType'
 ================================
-Evaluation finished at: Wed Mar 11 09:00:01 PM EDT 2026
-Results saved to: results/eval_5001333
+Evaluation finished at: Wed Mar 11 10:11:27 PM EDT 2026
+Results saved to: results/eval_5006710
 ================================

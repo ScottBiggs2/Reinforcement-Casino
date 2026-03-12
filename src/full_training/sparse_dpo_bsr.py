@@ -27,7 +27,7 @@ from src.utils.mask_manager import SparseMaskManager
 from src.utils.data_utils import load_dpo_dataset, dpo_collator_fn
 from src.utils.logging_utils import FlexibleCheckpointCallback, CSVLoggerCallback
 from src.optimizers.sparse_adamw import SparseAdamW
-from src.mlps.bsr_sparse_mlp import replace_linear_modules
+from src.mlps.bsr_sparse_mlp import replace_linear_modules, restore_linear_modules
 
 def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
@@ -55,7 +55,9 @@ def train(
     adam_eps,
     dpo_beta,
     warmup_steps,
+    warmup_steps,
     disable_tf32,
+    save_model,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -206,6 +208,23 @@ def train(
     
     trainer.train()
 
+    # Final Saving and Cleanup
+    if save_model:
+        print(f"\nTraining complete. Saving final model to {run_dir}/final_model...")
+        # For BSR, we must restore the linear modules to dense (preserving weights)
+        # so that the checkpoint is a standard HF-compatible model.
+        restore_linear_modules(model)
+        
+        final_save_dir = os.path.join(run_dir, "final_model")
+        os.makedirs(final_save_dir, exist_ok=True)
+        
+        # Save the model and tokenizer
+        trainer.save_model(final_save_dir)
+        tokenizer.save_pretrained(final_save_dir)
+        print(f"✓ Full checkpoint saved to {final_save_dir}")
+    else:
+        print("\nTraining complete. Skipping final model saving as requested.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
@@ -223,6 +242,14 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
+    
+    def str2bool(v):
+        if isinstance(v, bool): return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'): return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
+        else: raise argparse.ArgumentTypeError('Boolean value expected.')
+        
+    parser.add_argument("--save_model", type=str2bool, default=True, help="Save final model checkpoint (default: True)")
     
     # Stability Tuning Parameters
     parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping")
@@ -260,4 +287,5 @@ if __name__ == "__main__":
         dpo_beta=args.dpo_beta,
         warmup_steps=args.warmup_steps,
         disable_tf32=args.disable_tf32,
+        save_model=args.save_model,
     )

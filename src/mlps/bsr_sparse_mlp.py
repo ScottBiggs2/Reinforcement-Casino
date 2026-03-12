@@ -142,3 +142,35 @@ def replace_linear_modules(model, mask_dict, block_size=16, use_tf32=False, verb
                 attr_name = parts[-1]
                 
                 setattr(parent, attr_name, sparse_layer)
+
+def restore_linear_modules(model, verbose=True):
+    """
+    Recursively replace SparseLinearLayer modules back with standard nn.Linear.
+    This allows for normal saving/loading with standard HuggingFace tools.
+    """
+    for name, module in model.named_modules():
+        if isinstance(module, SparseLinearLayer):
+            if verbose:
+                print(f"Restoring {name} to standard nn.Linear")
+            
+            # Create replacement
+            dense_layer = nn.Linear(
+                module.in_features,
+                module.out_features,
+                module.bias is not None
+            )
+            
+            # Copy weights/bias
+            dense_layer.weight.data = module.weight.data
+            if module.bias is not None:
+                dense_layer.bias.data = module.bias.data
+            
+            # Replace in parent
+            parts = name.split('.')
+            parent = model
+            if len(parts) > 1:
+                for part in parts[:-1]:
+                    parent = getattr(parent, part)
+            attr_name = parts[-1]
+            
+            setattr(parent, attr_name, dense_layer)

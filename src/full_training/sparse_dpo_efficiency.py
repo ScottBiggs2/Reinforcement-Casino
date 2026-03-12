@@ -48,6 +48,7 @@ def train(
     use_wandb,
     save_csv,
     grad_accum,
+    save_model,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -159,6 +160,18 @@ def train(
     
     trainer.train()
 
+    # Final Saving
+    if save_model:
+        print(f"\nTraining complete. Saving final model to {run_dir}/final_model...")
+        final_save_dir = os.path.join(run_dir, "final_model")
+        os.makedirs(final_save_dir, exist_ok=True)
+        
+        trainer.save_model(final_save_dir)
+        tokenizer.save_pretrained(final_save_dir)
+        print(f"✓ Full checkpoint saved to {final_save_dir}")
+    else:
+        print("\nTraining complete. Skipping final model saving as requested.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
@@ -175,6 +188,14 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
+    
+    def str2bool(v):
+        if isinstance(v, bool): return v
+        if v.lower() in ('yes', 'true', 't', 'y', '1'): return True
+        elif v.lower() in ('no', 'false', 'f', 'n', '0'): return False
+        else: raise argparse.ArgumentTypeError('Boolean value expected.')
+        
+    parser.add_argument("--save_model", type=str2bool, default=True, help="Save final model checkpoint (default: True)")
     
     args = parser.parse_args()
     
@@ -193,4 +214,5 @@ if __name__ == "__main__":
         use_wandb=args.use_wandb,
         save_csv=args.save_csv,
         grad_accum=args.grad_accum,
+        save_model=args.save_model,
     )

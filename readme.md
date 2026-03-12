@@ -443,20 +443,20 @@ python src/evaluation/run_all_benchmarks.py \
   --use_vllm
 ```
 
-#### 2. Sparse-Tuned Models (Single-Unit Checkpoints)
-When models are trained using `sparse_dpo_bsr.py` or `sparse_dpo_efficiency.py`, they save full HuggingFace-compatible checkpoints. Point the runner to the checkpoint directory:
+#### 2. Sparse-Tuned Models (Natural Loading)
+Models trained with `sparse_dpo_bsr.py` or `sparse_dpo_efficiency.py` automatically save a full, HF-compatible checkpoint to `{run_dir}/final_model` upon completion. You can evaluate these just like any other model:
 ```bash
 python src/evaluation/run_all_benchmarks.py \
-  --model_path "./results/sparse_dpo_run/checkpoints/checkpoint-50" \
+  --model_path "./results/sparse_dpo_run/final_model" \
   --use_vllm
 ```
 
-#### 3. DPO Evaluation with Masks (Legacy Deltas)
-If you need to evaluate a model by manually applying a sparse mask to weight deltas (legacy format), use the dedicated DPO evaluation utility:
+#### 3. DPO Evaluation (Diagnostic & Comparison)
+The dedicated `DPO_evaluation.py` utility allows for direct comparison between a base model and a fine-tuned checkpoint. It now defaults to natural loading of "single unit" checkpoints:
 ```bash
+# Evaluate a full sparse checkpoint directly
 python src/evaluation/DPO_evaluation.py \
   --model_name_or_path "google/gemma-3-270m-it" \
-  --checkpoint_path "./results/dpo_dense_run/final_model" \
-  --mask_path "./masks/top_10.0_percent_mask.pt"
+  --checkpoint_path "./results/run_name/final_model"
 ```
-*Note: This utility now uses `SparseMaskManager` for robust and consistent mask application.*
+If you specifically want to verify the sparsity logic, you can still pass a `--mask_path` to dynamically reconstruct the masked model for diagnostic comparison.

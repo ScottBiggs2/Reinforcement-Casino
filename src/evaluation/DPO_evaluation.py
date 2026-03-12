@@ -29,7 +29,7 @@ from src.utils.mask_manager import SparseMaskManager
 def load_models(args):
     """
     Loads the models for evaluation.
-    Supports loading models as 'single units' from checkpoints.
+    Optimized for 'single unit' checkpoints where weights are stored naturally.
     """
     # Determine device and dtype
     if torch.cuda.is_available():
@@ -41,40 +41,29 @@ def load_models(args):
 
     # Load tokenizer
     print(f"Loading tokenizer from {args.model_name_or_path}...")
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     # 1. Load default (base) model
-    print("Loading default model (base)...")
-    default_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype)
+    print(f"Loading base model from {args.model_name_or_path}...")
+    default_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype, trust_remote_code=True)
 
-    # 2. Load DPO fine-tuned model (Dense)
+    # 2. Load DPO fine-tuned model (Dense / Single Unit)
     dpo_model = None
     if args.checkpoint_path and os.path.exists(args.checkpoint_path):
-        print(f"Loading DPO model from {args.checkpoint_path}...")
-        dpo_model = AutoModelForCausalLM.from_pretrained(args.checkpoint_path, torch_dtype=dtype)
+        print(f"Loading DPO/Sparse model from {args.checkpoint_path}...")
+        # Natural loading: HF automatically handles .safetensors and full weights.
+        dpo_model = AutoModelForCausalLM.from_pretrained(args.checkpoint_path, torch_dtype=dtype, trust_remote_code=True)
+        print("✓ Model loaded successfully as single unit.")
     else:
-        print(f"Warning: DPO checkpoint path '{args.checkpoint_path}' not found.")
+        print(f"Note: No checkpoint path provided or valid. Skipping DPO model.")
 
-    # 3. Load Masked Model
-    # Consistent pattern: Check if a dedicated masked model directory exists, 
-    # otherwise we can optionally apply a mask to the DPO model's deltas.
+    # 3. Load Masked Model (Legacy / Diagnostic)
     masked_model = None
-    
-    # NEW: Check if a "masked_model" directory exists (modern single-unit save)
-    # For now, we'll look in a 'masked_model' subdirectory of the checkpoint or as passed
-    masked_model_path = getattr(args, 'masked_model_path', None)
-    
-    if masked_model_path and os.path.exists(masked_model_path):
-        print(f"Loading masked model as single unit from {masked_model_path}...")
-        masked_model = AutoModelForCausalLM.from_pretrained(masked_model_path, torch_dtype=dtype)
-    elif args.mask_path and os.path.exists(args.mask_path) and dpo_model is not None:
-        print(f"Constructing masked model dynamically from Base + Masked Deltas...")
-        # Fallback to old dynamic reconstruction if .pt mask is provided
-        masked_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype)
-        
-        # Use SparseMaskManager for consistency
+    if args.mask_path and os.path.exists(args.mask_path) and dpo_model is not None:
+        print(f"Diagnostic: Applying mask dynamically to DPO model to verify sparsity logic...")
+        masked_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype, trust_remote_code=True)
         mask_manager = SparseMaskManager(args.mask_path, device='cpu')
         
         with torch.no_grad():
@@ -82,14 +71,10 @@ def load_models(args):
             for name, param in masked_model.named_parameters():
                 mask = mask_manager.get_mask(name)
                 if mask is not None:
-                    # Apply mask to delta
+                    # Apply mask to delta (DPO - Base)
                     delta = dpo_params[name].data - param.data
-                    masked_delta = delta * mask.to(param.device)
-                    param.data += masked_delta
-                    
-        print("✓ Dynamic masked model constructed.")
-    else:
-        print("Warning: Skipping masked model (no path provided or missing base/dpo).")
+                    param.data += (delta * mask.to(param.device)).to(param.dtype)
+        print("✓ Dynamic masked model constructed for comparison.")
         
     return tokenizer, default_model, dpo_model, masked_model
 
