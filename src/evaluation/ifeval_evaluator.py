@@ -105,9 +105,18 @@ def evaluate_ifeval(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
-    base_model_args_str = f"pretrained={model_path},dtype={dtype_str}"
+    base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
-        base_model_args_str += ",trust_remote_code=True"
+        base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
+    base_model_args_str = ",".join(base_model_args_parts)
     
     if verbose:
         print(f"\nRunning IFEval evaluation...")
@@ -121,24 +130,26 @@ def evaluate_ifeval(
         "num_fewshot": 0, # IFEval is 0-shot
         "limit": limit,
         "batch_size": batch_size,
-        "device": device,
         "gen_kwargs": {
             "temperature": 0.0,
             "max_gen_toks": 1024, # IFEval responses can be long
         }
     }
     
+    # Only pass device for non-vllm models (vllm handles devices internally)
+    if model != "vllm":
+        eval_kwargs["device"] = device
+    
     if apply_chat_template:
         eval_kwargs["apply_chat_template"] = True
-        
-    # Lazy imports for stability
-    from lm_eval import simple_evaluate
     try:
-        import langdetect
-    except ImportError:
-        pass
-        
-    results = simple_evaluate(**eval_kwargs)
+        # Filter out None values to prevent library-level crashes on comparisons
+        filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+        results = simple_evaluate(**filtered_eval_kwargs)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise e
     
     if verbose and "results" in results and "ifeval" in results["results"]:
         ifeval_data = results["results"]["ifeval"]

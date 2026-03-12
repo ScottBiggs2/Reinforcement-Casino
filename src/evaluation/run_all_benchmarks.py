@@ -155,7 +155,9 @@ def run_benchmark(
         
         return results
     except Exception as e:
+        import traceback
         print(f"\nError running {benchmark_name}: {e}")
+        traceback.print_exc()
         raise
 
 

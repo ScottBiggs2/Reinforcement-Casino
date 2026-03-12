@@ -4,6 +4,8 @@
 env/
 venv/
 
+# I wonder what happens when you ignore the .gitignore? 
+
 # Environment variables
 .env
 .env.*

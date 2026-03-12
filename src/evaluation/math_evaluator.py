@@ -155,6 +155,14 @@ def evaluate_math(
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
     base_model_args_str = ",".join(base_model_args_parts)
     
     # Run evaluation using lm-evaluation-harness
@@ -214,19 +222,25 @@ def evaluate_math(
                         "num_fewshot": num_fewshot,
                         "limit": limit,
                         "batch_size": batch_size,
-                        "device": device,
                         # Set generation parameters for proper evaluation
                         "gen_kwargs": {
                             "temperature": 0.0,  # Deterministic for fair evaluation
                             "max_gen_toks": 512,  # Sufficient for MATH answers
                         }
                     }
+                    # Only pass device for non-vllm models (vllm handles devices internally)
+                    if model != "vllm":
+                        eval_kwargs["device"] = device
+                        
                     # Add chat template config if specified
                     eval_kwargs.update(config)
                     
-                    results = simple_evaluate(**eval_kwargs)
+                    # Filter out None values to prevent library-level crashes on comparisons
+                    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+                    
+                    results = simple_evaluate(**filtered_eval_kwargs)
                 break
-            except TypeError as e:
+            except Exception as e:
                 import traceback
                 traceback.print_exc()
                 if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
@@ -236,10 +250,7 @@ def evaluate_math(
                             "retrying without it."
                         )
                     continue
-                raise
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
+                
                 # Fall back only when the task name is missing in this lm-eval build
                 if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
                     task_errors.append(str(e))

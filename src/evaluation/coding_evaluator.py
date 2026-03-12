@@ -102,9 +102,18 @@ def evaluate_coding(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
-    base_model_args_str = f"pretrained={model_path},dtype={dtype_str}"
+    base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
-        base_model_args_str += ",trust_remote_code=True"
+        base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
+    base_model_args_str = ",".join(base_model_args_parts)
     
     if verbose:
         print(f"\nRunning coding evaluation for tasks: {tasks}")
@@ -120,13 +129,16 @@ def evaluate_coding(
         "num_fewshot": num_fewshot,
         "limit": limit,
         "batch_size": batch_size,
-        "device": device,
         "gen_kwargs": {
             "temperature": 0.0,
             "max_gen_toks": 512,
             "do_sample": False,
         }
     }
+    
+    # Only pass device for non-vllm models (vllm handles devices internally)
+    if model != "vllm":
+        eval_kwargs["device"] = device
     
     if apply_chat_template:
         eval_kwargs["apply_chat_template"] = True
@@ -139,10 +151,14 @@ def evaluate_coding(
         eval_kwargs["allow_code_execution"] = True
 
     try:
-        results = simple_evaluate(**eval_kwargs)
+        # Filter out None values to prevent library-level crashes on comparisons
+        filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+        results = simple_evaluate(**filtered_eval_kwargs)
     except Exception as e:
+        import traceback
         if verbose:
             print(f"Error in simple_evaluate: {e}")
+        traceback.print_exc()
         raise e
         
     if verbose and "results" in results:
