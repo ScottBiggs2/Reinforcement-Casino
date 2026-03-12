@@ -153,6 +153,8 @@ def evaluate_gpqa_diamond(
         base_model_args_parts.append("max_model_len=4096")
         # Disable chunked prefill which can cause NoneType errors in 0.6.3
         base_model_args_parts.append("enable_chunked_prefill=False")
+        # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
+        base_model_args_parts.append("max_num_batched_tokens=4096")
         
     base_model_args_str = ",".join(base_model_args_parts)
     
