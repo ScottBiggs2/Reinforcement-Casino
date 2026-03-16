@@ -306,7 +306,7 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 for key, data in gpqa_results.items():
                     if "gpqa" in key.lower() or "diamond" in key.lower():
                         if isinstance(data, dict):
-                            acc = data.get("acc,none", data.get("acc", 0))
+                            acc = data.get("acc_norm,none", data.get("acc_norm", data.get("acc,none", data.get("acc", 0))))
                             print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
                             break
 

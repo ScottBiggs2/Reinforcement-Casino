@@ -163,7 +163,6 @@ def evaluate_coding(
             if verbose:
                 print("Task marked as unsafe, retrying with confirm_run_unsafe_code=True...")
             # Set the environment variable just in case
-            import os
             os.environ["HF_ALLOW_CODE_EVAL"] = "1"
             
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True

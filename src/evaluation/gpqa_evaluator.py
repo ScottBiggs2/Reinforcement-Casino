@@ -249,7 +249,7 @@ def evaluate_gpqa_diamond(
         for key, value in gpqa_results.items():
             if "gpqa" in key.lower() or "diamond" in key.lower():
                 if isinstance(value, dict):
-                    acc = value.get("acc", value.get("acc,none", 0))
+                    acc = value.get("acc_norm,none", value.get("acc_norm", value.get("acc,none", value.get("acc", 0))))
                     if acc:
                         if verbose:
                             print("\n" + "=" * 60)
