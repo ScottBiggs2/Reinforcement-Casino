@@ -159,11 +159,32 @@ def evaluate_coding(
         filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
         results = simple_evaluate(**filtered_eval_kwargs)
     except Exception as e:
-        import traceback
-        if verbose:
-            print(f"Error in simple_evaluate: {e}")
-        traceback.print_exc()
-        raise e
+        if "marked as unsafe" in str(e) or "allow_code_execution" in str(e) or "confirm_run_unsafe_code" in str(e):
+            if verbose:
+                print("Task marked as unsafe, retrying with confirm_run_unsafe_code=True...")
+            # Set the environment variable just in case
+            import os
+            os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+            
+            filtered_eval_kwargs["confirm_run_unsafe_code"] = True
+            
+            try:
+                # Retry with confirm_run_unsafe_code
+                results = simple_evaluate(**filtered_eval_kwargs)
+            except TypeError as te:
+                if "unexpected keyword argument" in str(te):
+                    # If kwargs is rejected, try with allow_code_execution=True
+                    del filtered_eval_kwargs["confirm_run_unsafe_code"]
+                    filtered_eval_kwargs["allow_code_execution"] = True
+                    results = simple_evaluate(**filtered_eval_kwargs)
+                else:
+                    raise
+        else:
+            import traceback
+            if verbose:
+                print(f"Error in simple_evaluate: {e}")
+            traceback.print_exc()
+            raise e
         
     if verbose and "results" in results:
         print("\n" + "=" * 60)

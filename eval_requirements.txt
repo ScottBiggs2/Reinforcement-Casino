@@ -23,3 +23,5 @@ accelerate==1.1.1
 langdetect
 pybind11
 numexpr
+immutabledict
+immutabledict

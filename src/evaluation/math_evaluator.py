@@ -247,11 +247,21 @@ def evaluate_math(
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
+                
+                # Check for known chat template or fewshot issues
+                error_msg = str(e)
+                chat_template_errors = [
+                    "apply_chat_template",
+                    "fewshot_as_multiturn",
+                    "Answer is not a string",
+                    "AssertionError"
+                ]
+                
+                if any(err in error_msg or (isinstance(e, AssertionError) and "Answer is not a string" in error_msg) for err in chat_template_errors) or isinstance(e, AssertionError):
                     if verbose:
                         print(
-                            f"Chat template config not supported: {config}; "
-                            "retrying without it."
+                            f"Chat template config or mult-turn fewshot not supported: {config}; "
+                            "retrying with simpler config."
                         )
                     continue
                 
