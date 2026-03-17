@@ -163,7 +163,7 @@ def evaluate_gsm8k(
     gsm8k_score = None
     if "results" in results and "gsm8k" in results["results"]:
         task_result = results["results"]["gsm8k"]
-        for acc_key in ["exact_match,none", "exact_match", "acc,none", "acc"]:
+        for acc_key in ["exact_match,strict-match", "exact_match,flexible-extract", "exact_match,none", "exact_match", "acc,none", "acc"]:
             if acc_key in task_result:
                 gsm8k_score = task_result[acc_key]
                 break

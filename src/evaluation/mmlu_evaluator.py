@@ -7,6 +7,13 @@ import sys
 from typing import Dict, Any, Optional
 import torch
 
+# IMPORTANT WORKAROUND for Python 3.11 Dataclass / Pydantic Poison Bug
+# We MUST import datasets BEFORE vLLM or lm_eval is loaded
+try:
+    import datasets
+except ImportError:
+    pass
+
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 

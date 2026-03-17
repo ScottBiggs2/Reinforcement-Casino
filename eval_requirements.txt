@@ -16,7 +16,8 @@ vllm==0.6.3.post1
 lm-eval==0.4.11
 evaluate==0.4.0
 rouge-score==0.1.2
-datasets<3.0.0
+datasets
+pydantic>=2.8.0
 accelerate==1.1.1
 
 # Specialized requirements

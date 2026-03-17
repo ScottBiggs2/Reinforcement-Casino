@@ -27,3 +27,4 @@ results/
 *.log
 
 current_error.txt
+current_out.txt

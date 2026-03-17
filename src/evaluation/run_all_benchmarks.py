@@ -26,30 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # in one benchmark from crashing the entire suite.
 
 
-def get_evaluator(name):
-    """Lazy-load evaluators to avoid dependency crashes at startup."""
-    if name == "mmlu":
-        from evaluation.mmlu_evaluator import evaluate_mmlu
-        return evaluate_mmlu
-    elif name == "math":
-        from evaluation.math_evaluator import evaluate_math
-        return evaluate_math
-    elif name == "gsm8k":
-        from evaluation.gsm8k_evaluator import evaluate_gsm8k
-        return evaluate_gsm8k
-    elif name == "coding":
-        from evaluation.coding_evaluator import evaluate_coding
-        return evaluate_coding
-    elif name == "ifeval":
-        from evaluation.ifeval_evaluator import evaluate_ifeval
-        return evaluate_ifeval
-    elif name == "squad":
-        from evaluation.squad_evaluator import evaluate_squad
-        return evaluate_squad
-    elif name in ["gpqa", "gpqa_diamond"]:
-        from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
-        return evaluate_gpqa_diamond
-    return None
+
 
 
 BENCHMARKS = {
@@ -72,93 +49,117 @@ def run_benchmark(
     **kwargs
 ) -> Dict[str, Any]:
     """
-    Run a single benchmark evaluation.
-    
-    Args:
-        benchmark_name: Name of the benchmark to run
-        model_path: Path to model (HuggingFace ID or local path)
-        output_dir: Directory to save results (optional)
-        **kwargs: Additional arguments for the benchmark evaluator
-        
-    Returns:
-        Dictionary with evaluation results
+    Run a single benchmark evaluation inside an isolated subprocess.
     """
-    # Print versions for debugging
-    try:
-        import torch
-        import vllm
-        import transformers
-        print(f"Versions: torch={torch.__version__}, vllm={vllm.__version__}, transformers={transformers.__version__}")
-    except ImportError:
-        pass
+    import subprocess
+    import json
+    import tempfile
+    
+    if verbose:
+        print(f"\n{'='*80}")
+        print(f"Running {benchmark_name.upper()} benchmark (Subprocess Isolated)")
+        print(f"{'='*80}\n")
+        
+    # Set up temp file to intercept the results so we don't have to parse stdout
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_file:
+        tmp_results_path = tmp_file.name
 
-    evaluator = get_evaluator(benchmark_name)
-    if evaluator is None:
-        raise ValueError(f"Could not find or load evaluator for: {benchmark_name}")
+    # Import target dynamically for the wrapper execution script
+    import_module = f"evaluation.{benchmark_name}_evaluator"
+    if benchmark_name in ["gpqa", "gpqa_diamond"]:
+        import_module = "evaluation.gpqa_evaluator"
+        func_name = "evaluate_gpqa_diamond"
+    else:
+        func_name = f"evaluate_{benchmark_name}"
+        
+    # Build subprocess injection
+    script_code = f"""
+import sys
+import json
+import os
+import traceback
+import inspect
 
-    # Drop kwargs that are not accepted by the evaluator
-    evaluator_signature = inspect.signature(evaluator)
+sys.path.append({repr(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))})
+
+try:
+    from {import_module} import {func_name}
+    
+    # Introspect exactly what arguments this evaluator accepts so we don't throw an unexpected keyword arg
+    raw_kwargs = {repr(kwargs)}
+    evaluator_signature = inspect.signature({func_name})
     accepts_var_kwargs = any(
         param.kind == inspect.Parameter.VAR_KEYWORD
         for param in evaluator_signature.parameters.values()
     )
+    
     if accepts_var_kwargs:
-        filtered_kwargs = kwargs
-        ignored_kwargs = {}
+        filtered_kwargs = raw_kwargs
     else:
-        filtered_kwargs = {
+        filtered_kwargs = {{
             key: value
-            for key, value in kwargs.items()
+            for key, value in raw_kwargs.items()
             if key in evaluator_signature.parameters
-        }
-        # Explicitly pass model type if accepted
-        if "model" in evaluator_signature.parameters and "model" in kwargs:
-            filtered_kwargs["model"] = kwargs["model"]
+        }}
+        if "model" in evaluator_signature.parameters and "model" in raw_kwargs:
+            filtered_kwargs["model"] = raw_kwargs["model"]
             
-        ignored_kwargs = {
-            key: value
-            for key, value in kwargs.items()
-            if key not in evaluator_signature.parameters
-        }
-
-    if ignored_kwargs and verbose:
-        print(
-            f"Ignoring unsupported arguments for {benchmark_name}: "
-            f"{list(ignored_kwargs.keys())}"
-        )
-    
-    if verbose:
-        print(f"\n{'='*80}")
-        print(f"Running {benchmark_name.upper()} benchmark")
-        print(f"{'='*80}\n")
-    
-    # Pass verbose flag to evaluator
     if "verbose" not in filtered_kwargs:
-        filtered_kwargs["verbose"] = verbose
-    
-    if verbose:
+        filtered_kwargs["verbose"] = {repr(verbose)}
+        
+    if {repr(verbose)}:
         print(f"DEBUG: Running {benchmark_name} with filtered_kwargs:")
         for k, v in filtered_kwargs.items():
-            print(f"  - {k}: {v} (type: {type(v)})")
+            print(f"  - {{k}}: {{v}} (type: {{type(v)}})")
+    
+    results = {func_name}(model_path={repr(model_path)}, **filtered_kwargs)
+    
+    # Write to transport file
+    with open({repr(tmp_results_path)}, 'w') as f:
+        json.dump(results, f, default=str)
+except Exception as e:
+    traceback.print_exc()
+    sys.exit(1)
+"""
     
     try:
-        results = evaluator(model_path=model_path, **filtered_kwargs)
+        # Run process
+        result = subprocess.run(
+            [sys.executable, "-c", script_code],
+            capture_output=False,
+            check=True
+        )
         
-        # Save results if output directory is specified
-        if output_dir:
+        # Load results from the transport file
+        with open(tmp_results_path, 'r') as f:
+            try:
+                results = json.load(f)
+            except json.JSONDecodeError:
+                results = {"error": "Subprocess script failed to dump valid JSON."}
+                
+        # Save formal results if output directory is specified
+        if output_dir and "error" not in results:
             os.makedirs(output_dir, exist_ok=True)
             output_file = os.path.join(output_dir, f"{benchmark_name}_results.json")
             with open(output_file, 'w') as f:
                 json.dump(results, f, indent=2, default=str)
             if verbose:
                 print(f"\nResults saved to: {output_file}")
-        
-        return results
+                
+    except subprocess.CalledProcessError as e:
+        print(f"\nError running {benchmark_name} subprocess: Returns non-zero exit code {e.returncode}")
+        results = {"error": f"Subprocess crashed: {str(e)}"}
     except Exception as e:
+        print(f"\nError orchestrating {benchmark_name}: {e}")
         import traceback
-        print(f"\nError running {benchmark_name}: {e}")
         traceback.print_exc()
-        raise
+        results = {"error": str(e)}
+    finally:
+        # Cleanup
+        if os.path.exists(tmp_results_path):
+            os.remove(tmp_results_path)
+            
+    return results
 
 
 def run_all_benchmarks(
@@ -270,7 +271,7 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 # Look for gsm8k or any key containing gsm8k
                 for key, data in gsm8k_results.items():
                     if "gsm8k" in key.lower() and isinstance(data, dict):
-                        acc = data.get("exact_match,none", data.get("exact_match", data.get("acc,none", data.get("acc", 0))))
+                        acc = data.get("exact_match,strict-match", data.get("exact_match,flexible-extract", data.get("exact_match,none", data.get("exact_match", data.get("acc,none", data.get("acc", 0))))))
                         print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
                         break
         elif benchmark_name == "coding":
@@ -292,7 +293,7 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 squad_results = benchmark_results["results"]
                 for key, data in squad_results.items():
                     if "squad" in key.lower() and isinstance(data, dict):
-                        exact_match = data.get("exact_match,none", data.get("exact_match", 0))
+                        exact_match = data.get("exact_match,none", data.get("exact_match", data.get("contains,none", 0)))
                         f1 = data.get("f1,none", data.get("f1", 0))
                         print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
                         break

@@ -434,18 +434,19 @@ def evaluate_squad_with_lm_eval(
     # Extract and print key metrics
     if "results" in results:
         squad_results = results["results"]
-        if "squad" in squad_results:
-            squad_data = squad_results["squad"]
-            exact_match = squad_data.get("exact_match,none", 0)
-            f1 = squad_data.get("f1,none", 0)
-            if verbose:
-                print("\n" + "=" * 60)
-                print("SQuAD RESULTS")
-                print("=" * 60)
-                print(f"\nExact Match: {exact_match:.4f}")
-                print(f"F1 Score: {f1:.4f}")
-            else:
-                print(f"Exact Match: {exact_match:.4f}, F1: {f1:.4f}")
+        for key, data in squad_results.items():
+            if "squad" in key.lower() and isinstance(data, dict):
+                exact_match = data.get("exact_match,none", data.get("exact_match", data.get("contains,none", 0)))
+                f1 = data.get("f1,none", data.get("f1", 0))
+                if verbose:
+                    print("\n" + "=" * 60)
+                    print("SQuAD RESULTS")
+                    print("=" * 60)
+                    print(f"\nExact Match: {exact_match:.4f}")
+                    print(f"F1 Score: {f1:.4f}")
+                else:
+                    print(f"Exact Match: {exact_match:.4f}, F1: {f1:.4f}")
+                break
     
     return results
 
