@@ -164,8 +164,9 @@ def evaluate_math(
         base_model_args_parts.append("enable_chunked_prefill=False")
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
         base_model_args_parts.append("max_num_batched_tokens=4096")
-        # Explicitly set max_num_seqs because lm-eval defaults it to None, crashing 0.6.3
-        base_model_args_parts.append("max_num_seqs=256")
+        # Limit max_num_seqs and memory to avoid OOM
+        base_model_args_parts.append("max_num_seqs=64")
+        base_model_args_parts.append("gpu_memory_utilization=0.8")
         
     base_model_args_str = ",".join(base_model_args_parts)
     

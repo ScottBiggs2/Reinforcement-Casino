@@ -1,6 +1,6 @@
-Evaluation started at: Mon Mar 16 05:16:37 PM EDT 2026
+Evaluation started at: Tue Mar 17 03:00:53 PM EDT 2026
 Running on node: d1028
-Job ID: 5115570
+Job ID: 5158237
 WARNING: HF_TOKEN is not set. Accessing gated models (Llama 3.1) may fail.
 ================================
 Environment Check
@@ -51,30 +51,32 @@ Collecting rouge-score==0.1.2 (from -r eval_requirements.txt (line 18))
   Getting requirements to build wheel: finished with status 'done'
   Preparing metadata (pyproject.toml): started
   Preparing metadata (pyproject.toml): finished with status 'done'
-Collecting datasets<3.0.0 (from -r eval_requirements.txt (line 19))
-  Downloading datasets-2.21.0-py3-none-any.whl.metadata (21 kB)
-Collecting accelerate==1.1.1 (from -r eval_requirements.txt (line 20))
+Collecting datasets (from -r eval_requirements.txt (line 19))
+  Downloading datasets-4.8.2-py3-none-any.whl.metadata (19 kB)
+Collecting pydantic>=2.8.0 (from -r eval_requirements.txt (line 20))
+  Downloading pydantic-2.12.5-py3-none-any.whl.metadata (90 kB)
+Collecting accelerate==1.1.1 (from -r eval_requirements.txt (line 21))
   Downloading accelerate-1.1.1-py3-none-any.whl.metadata (19 kB)
-Collecting langdetect (from -r eval_requirements.txt (line 23))
+Collecting langdetect (from -r eval_requirements.txt (line 24))
   Downloading langdetect-1.0.9.tar.gz (981 kB)
-     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 981.5/981.5 kB 8.6 MB/s  0:00:00
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 981.5/981.5 kB 9.2 MB/s  0:00:00
   Installing build dependencies: started
   Installing build dependencies: finished with status 'done'
   Getting requirements to build wheel: started
   Getting requirements to build wheel: finished with status 'done'
   Preparing metadata (pyproject.toml): started
   Preparing metadata (pyproject.toml): finished with status 'done'
-Collecting pybind11 (from -r eval_requirements.txt (line 24))
+Collecting pybind11 (from -r eval_requirements.txt (line 25))
   Downloading pybind11-3.0.2-py3-none-any.whl.metadata (10 kB)
-Collecting numexpr (from -r eval_requirements.txt (line 25))
+Collecting numexpr (from -r eval_requirements.txt (line 26))
   Downloading numexpr-2.14.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (9.0 kB)
-Collecting immutabledict (from -r eval_requirements.txt (line 26))
+Collecting immutabledict (from -r eval_requirements.txt (line 27))
   Downloading immutabledict-4.3.1-py3-none-any.whl.metadata (3.5 kB)
-Collecting sympy (from -r eval_requirements.txt (line 27))
+Collecting sympy (from -r eval_requirements.txt (line 28))
   Downloading sympy-1.14.0-py3-none-any.whl.metadata (12 kB)
-Collecting math_verify (from -r eval_requirements.txt (line 28))
+Collecting math_verify (from -r eval_requirements.txt (line 29))
   Downloading math_verify-0.9.0-py3-none-any.whl.metadata (1.6 kB)
-Collecting antlr4-python3-runtime==4.11 (from -r eval_requirements.txt (line 29))
+Collecting antlr4-python3-runtime==4.11 (from -r eval_requirements.txt (line 30))
   Downloading antlr4_python3_runtime-4.11.0-py3-none-any.whl.metadata (291 bytes)
 Collecting filelock (from torch==2.4.0->-r eval_requirements.txt (line 8))
   Downloading filelock-3.25.2-py3-none-any.whl.metadata (2.0 kB)
@@ -137,11 +139,9 @@ Collecting py-cpuinfo (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13
 Collecting aiohttp (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading aiohttp-3.13.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.1 kB)
 Collecting openai>=1.40.0 (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading openai-2.28.0-py3-none-any.whl.metadata (29 kB)
+  Downloading openai-2.29.0-py3-none-any.whl.metadata (29 kB)
 Collecting uvicorn[standard] (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading uvicorn-0.42.0-py3-none-any.whl.metadata (6.7 kB)
-Collecting pydantic>=2.9 (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading pydantic-2.12.5-py3-none-any.whl.metadata (90 kB)
 Collecting prometheus-client>=0.18.0 (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading prometheus_client-0.24.1-py3-none-any.whl.metadata (2.1 kB)
 Collecting prometheus-fastapi-instrumentator>=7.0.0 (from vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
@@ -224,12 +224,6 @@ Collecting interegular>=0.3.2 (from lm-format-enforcer==0.10.6->vllm==0.6.3.post
   Downloading interegular-0.3.3-py37-none-any.whl.metadata (3.0 kB)
 Collecting nvidia-nvjitlink-cu12 (from nvidia-cusolver-cu12==11.4.5.107->torch==2.4.0->-r eval_requirements.txt (line 8))
   Downloading nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl.metadata (1.7 kB)
-Collecting pyarrow>=15.0.0 (from datasets<3.0.0->-r eval_requirements.txt (line 19))
-  Downloading pyarrow-23.0.1-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (3.1 kB)
-Collecting dill (from lm-eval==0.4.11->-r eval_requirements.txt (line 16))
-  Downloading dill-0.3.8-py3-none-any.whl.metadata (10 kB)
-Collecting fsspec (from torch==2.4.0->-r eval_requirements.txt (line 8))
-  Downloading fsspec-2024.6.1-py3-none-any.whl.metadata (11 kB)
 Collecting hf-xet<2.0.0,>=1.1.3 (from huggingface-hub<1.0,>=0.23.2->transformers==4.46.3->-r eval_requirements.txt (line 10))
   Downloading hf_xet-1.4.2-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (4.9 kB)
 Collecting lark (from outlines<0.1,>=0.0.43->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
@@ -264,9 +258,25 @@ Collecting idna<4,>=2.5 (from requests->transformers==4.46.3->-r eval_requiremen
   Downloading idna-3.11-py3-none-any.whl.metadata (8.4 kB)
 Collecting certifi>=2017.4.17 (from requests->transformers==4.46.3->-r eval_requirements.txt (line 10))
   Downloading certifi-2026.2.25-py3-none-any.whl.metadata (2.5 kB)
-Collecting mpmath<1.4,>=1.1.0 (from sympy->-r eval_requirements.txt (line 27))
+Collecting pyarrow>=21.0.0 (from datasets->-r eval_requirements.txt (line 19))
+  Downloading pyarrow-23.0.1-cp311-cp311-manylinux_2_28_x86_64.whl.metadata (3.1 kB)
+Collecting httpx<1.0.0 (from datasets->-r eval_requirements.txt (line 19))
+  Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
+Collecting anyio (from httpx<1.0.0->datasets->-r eval_requirements.txt (line 19))
+  Downloading anyio-4.12.1-py3-none-any.whl.metadata (4.3 kB)
+Collecting httpcore==1.* (from httpx<1.0.0->datasets->-r eval_requirements.txt (line 19))
+  Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
+Collecting h11>=0.16 (from httpcore==1.*->httpx<1.0.0->datasets->-r eval_requirements.txt (line 19))
+  Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+Collecting annotated-types>=0.6.0 (from pydantic>=2.8.0->-r eval_requirements.txt (line 20))
+  Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
+Collecting pydantic-core==2.41.5 (from pydantic>=2.8.0->-r eval_requirements.txt (line 20))
+  Downloading pydantic_core-2.41.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (7.3 kB)
+Collecting typing-inspection>=0.4.2 (from pydantic>=2.8.0->-r eval_requirements.txt (line 20))
+  Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
+Collecting mpmath<1.4,>=1.1.0 (from sympy->-r eval_requirements.txt (line 28))
   Downloading mpmath-1.3.0-py3-none-any.whl.metadata (8.6 kB)
-Collecting latex2sympy2_extended==1.11.0 (from math_verify->-r eval_requirements.txt (line 28))
+Collecting latex2sympy2_extended==1.11.0 (from math_verify->-r eval_requirements.txt (line 29))
   Downloading latex2sympy2_extended-1.11.0-py3-none-any.whl.metadata (5.3 kB)
 Collecting aiohappyeyeballs>=2.5.0 (from aiohttp->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading aiohappyeyeballs-2.6.1-py3-none-any.whl.metadata (5.9 kB)
@@ -284,36 +294,22 @@ Collecting yarl<2.0,>=1.17.0 (from aiohttp->vllm==0.6.3.post1->-r eval_requireme
   Downloading yarl-1.23.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (79 kB)
 Collecting starlette>=0.46.0 (from fastapi!=0.113.*,!=0.114.0,>=0.107.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading starlette-0.52.1-py3-none-any.whl.metadata (6.3 kB)
-Collecting typing-inspection>=0.4.2 (from fastapi!=0.113.*,!=0.114.0,>=0.107.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
 Collecting annotated-doc>=0.0.2 (from fastapi!=0.113.*,!=0.114.0,>=0.107.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)
 Collecting pydantic-extra-types>=2.10.5 (from pydantic-extra-types[pycountry]>=2.10.5->mistral-common>=1.4.4->mistral-common[opencv]>=1.4.4->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading pydantic_extra_types-2.11.1-py3-none-any.whl.metadata (4.2 kB)
-Collecting annotated-types>=0.6.0 (from pydantic>=2.9->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
-Collecting pydantic-core==2.41.5 (from pydantic>=2.9->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading pydantic_core-2.41.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (7.3 kB)
 Collecting jsonschema-specifications>=2023.03.6 (from jsonschema->outlines<0.1,>=0.0.43->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl.metadata (2.9 kB)
 Collecting rpds-py>=0.25.0 (from jsonschema->outlines<0.1,>=0.0.43->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading rpds_py-0.30.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.1 kB)
 Collecting opencv-python-headless>=4.0.0 (from mistral-common[opencv]>=1.4.4->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading opencv_python_headless-4.13.0.92-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
-Collecting anyio<5,>=3.5.0 (from openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading anyio-4.12.1-py3-none-any.whl.metadata (4.3 kB)
 Collecting distro<2,>=1.7.0 (from openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading distro-1.9.0-py3-none-any.whl.metadata (6.8 kB)
-Collecting httpx<1,>=0.23.0 (from openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
 Collecting jiter<1,>=0.10.0 (from openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading jiter-0.13.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (5.2 kB)
 Collecting sniffio (from openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading sniffio-1.3.1-py3-none-any.whl.metadata (3.9 kB)
-Collecting httpcore==1.* (from httpx<1,>=0.23.0->openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
-Collecting h11>=0.16 (from httpcore==1.*->httpx<1,>=0.23.0->openai>=1.40.0->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
-  Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
 INFO: pip is looking at multiple versions of opencv-python-headless to determine which version is compatible with other requirements. This could take a while.
 Collecting opencv-python-headless>=4.0.0 (from mistral-common[opencv]>=1.4.4->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading opencv_python_headless-4.13.0.90-cp37-abi3-manylinux_2_28_x86_64.whl.metadata (19 kB)
@@ -341,11 +337,6 @@ Collecting zipp>=3.20 (from importlib-metadata->vllm==0.6.3.post1->-r eval_requi
   Downloading zipp-3.23.0-py3-none-any.whl.metadata (3.6 kB)
 Collecting MarkupSafe>=2.0 (from jinja2->torch==2.4.0->-r eval_requirements.txt (line 8))
   Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
-INFO: pip is looking at multiple versions of multiprocess to determine which version is compatible with other requirements. This could take a while.
-Collecting multiprocess (from evaluate==0.4.0->-r eval_requirements.txt (line 17))
-  Downloading multiprocess-0.70.18-py311-none-any.whl.metadata (7.5 kB)
-  Downloading multiprocess-0.70.17-py311-none-any.whl.metadata (7.2 kB)
-  Downloading multiprocess-0.70.16-py311-none-any.whl.metadata (7.2 kB)
 Collecting llvmlite<0.47,>=0.46.0dev0 (from numba->outlines<0.1,>=0.0.43->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading llvmlite-0.46.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (5.0 kB)
 Collecting python-dateutil>=2.8.2 (from pandas->evaluate==0.4.0->-r eval_requirements.txt (line 17))
@@ -379,18 +370,18 @@ Collecting watchfiles>=0.20 (from uvicorn[standard]->vllm==0.6.3.post1->-r eval_
 Collecting websockets>=10.4 (from uvicorn[standard]->vllm==0.6.3.post1->-r eval_requirements.txt (line 13))
   Downloading websockets-16.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
 Downloading numpy-1.26.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (18.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 18.3/18.3 MB 35.0 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 18.3/18.3 MB 36.8 MB/s  0:00:00
 Downloading protobuf-5.27.2-cp38-abi3-manylinux2014_x86_64.whl (309 kB)
 Downloading torch-2.4.0-cp311-cp311-manylinux1_x86_64.whl (797.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 797.3/797.3 MB 121.2 MB/s  0:00:05
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 797.3/797.3 MB 164.2 MB/s  0:00:08
 Downloading torchvision-0.19.0-cp311-cp311-manylinux1_x86_64.whl (7.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.0/7.0 MB 98.0 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.0/7.0 MB 162.7 MB/s  0:00:00
 Downloading transformers-4.46.3-py3-none-any.whl (10.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.0/10.0 MB 184.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10.0/10.0 MB 134.7 MB/s  0:00:00
 Downloading vllm-0.6.3.post1-cp38-abi3-manylinux1_x86_64.whl (194.8 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 194.8/194.8 MB 81.9 MB/s  0:00:02
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 194.8/194.8 MB 83.6 MB/s  0:00:02
 Downloading lm_eval-0.4.11-py3-none-any.whl (8.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.7/8.7 MB 226.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.7/8.7 MB 116.9 MB/s  0:00:00
 Downloading evaluate-0.4.0-py3-none-any.whl (81 kB)
 Downloading accelerate-1.1.1-py3-none-any.whl (333 kB)
 Downloading antlr4_python3_runtime-4.11.0-py3-none-any.whl (144 kB)
@@ -398,121 +389,122 @@ Downloading compressed_tensors-0.6.0-py3-none-any.whl (92 kB)
 Downloading gguf-0.10.0-py3-none-any.whl (71 kB)
 Downloading lm_format_enforcer-0.10.6-py3-none-any.whl (43 kB)
 Downloading nvidia_cublas_cu12-12.1.3.1-py3-none-manylinux1_x86_64.whl (410.6 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 410.6/410.6 MB 259.8 MB/s  0:00:01
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 410.6/410.6 MB 142.0 MB/s  0:00:02
 Downloading nvidia_cuda_cupti_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (14.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 14.1/14.1 MB 271.0 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 14.1/14.1 MB 162.5 MB/s  0:00:00
 Downloading nvidia_cuda_nvrtc_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (23.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 23.7/23.7 MB 267.3 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 23.7/23.7 MB 123.8 MB/s  0:00:00
 Downloading nvidia_cuda_runtime_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (823 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 823.6/823.6 kB 543.2 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 823.6/823.6 kB 161.4 MB/s  0:00:00
 Downloading nvidia_cudnn_cu12-9.1.0.70-py3-none-manylinux2014_x86_64.whl (664.8 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 664.8/664.8 MB 259.8 MB/s  0:00:02
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 664.8/664.8 MB 77.5 MB/s  0:00:06
 Downloading nvidia_cufft_cu12-11.0.2.54-py3-none-manylinux1_x86_64.whl (121.6 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 121.6/121.6 MB 261.2 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 121.6/121.6 MB 19.5 MB/s  0:00:06
 Downloading nvidia_curand_cu12-10.3.2.106-py3-none-manylinux1_x86_64.whl (56.5 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 56.5/56.5 MB 260.8 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 56.5/56.5 MB 23.2 MB/s  0:00:02
 Downloading nvidia_cusolver_cu12-11.4.5.107-py3-none-manylinux1_x86_64.whl (124.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 124.2/124.2 MB 230.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 124.2/124.2 MB 38.1 MB/s  0:00:03
 Downloading nvidia_cusparse_cu12-12.1.0.106-py3-none-manylinux1_x86_64.whl (196.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 196.0/196.0 MB 260.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 196.0/196.0 MB 55.8 MB/s  0:00:03
 Downloading nvidia_nccl_cu12-2.20.5-py3-none-manylinux2014_x86_64.whl (176.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 176.2/176.2 MB 261.2 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 176.2/176.2 MB 34.1 MB/s  0:00:05
 Downloading nvidia_nvtx_cu12-12.1.105-py3-none-manylinux1_x86_64.whl (99 kB)
 Downloading triton-3.0.0-1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (209.4 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 209.4/209.4 MB 164.2 MB/s  0:00:01
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 209.4/209.4 MB 67.5 MB/s  0:00:03
 Downloading xformers-0.0.27.post2-cp311-cp311-manylinux2014_x86_64.whl (20.8 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 20.8/20.8 MB 84.0 MB/s  0:00:00
-Downloading datasets-2.21.0-py3-none-any.whl (527 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 527.3/527.3 kB 494.6 MB/s  0:00:00
-Downloading dill-0.3.8-py3-none-any.whl (116 kB)
-Downloading fsspec-2024.6.1-py3-none-any.whl (177 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 20.8/20.8 MB 73.4 MB/s  0:00:00
 Downloading huggingface_hub-0.36.2-py3-none-any.whl (566 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 566.4/566.4 kB 449.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 566.4/566.4 kB 105.5 MB/s  0:00:00
 Downloading hf_xet-1.4.2-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.2/4.2 MB 288.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.2/4.2 MB 72.1 MB/s  0:00:00
 Downloading outlines-0.0.46-py3-none-any.whl (101 kB)
 Downloading responses-0.18.0-py3-none-any.whl (38 kB)
 Downloading requests-2.32.5-py3-none-any.whl (64 kB)
 Downloading charset_normalizer-3.4.6-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (204 kB)
 Downloading idna-3.11-py3-none-any.whl (71 kB)
 Downloading tokenizers-0.20.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.0/3.0 MB 354.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.0/3.0 MB 70.9 MB/s  0:00:00
 Downloading urllib3-2.6.3-py3-none-any.whl (131 kB)
+Downloading datasets-4.8.2-py3-none-any.whl (526 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 526.6/526.6 kB 110.2 MB/s  0:00:00
+Downloading dill-0.4.1-py3-none-any.whl (120 kB)
+Downloading fsspec-2026.2.0-py3-none-any.whl (202 kB)
+Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+Downloading multiprocess-0.70.19-py311-none-any.whl (144 kB)
+Downloading pydantic-2.12.5-py3-none-any.whl (463 kB)
+Downloading pydantic_core-2.41.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 81.2 MB/s  0:00:00
 Downloading pybind11-3.0.2-py3-none-any.whl (310 kB)
 Downloading numexpr-2.14.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (442 kB)
 Downloading immutabledict-4.3.1-py3-none-any.whl (5.0 kB)
 Downloading sympy-1.14.0-py3-none-any.whl (6.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.3/6.3 MB 261.7 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.3/6.3 MB 79.8 MB/s  0:00:00
 Downloading mpmath-1.3.0-py3-none-any.whl (536 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 536.2/536.2 kB 550.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 536.2/536.2 kB 108.7 MB/s  0:00:00
 Downloading math_verify-0.9.0-py3-none-any.whl (29 kB)
 Downloading latex2sympy2_extended-1.11.0-py3-none-any.whl (209 kB)
 Downloading aiohttp-3.13.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.7/1.7 MB 410.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.7/1.7 MB 86.7 MB/s  0:00:00
 Downloading multidict-6.7.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (246 kB)
 Downloading yarl-1.23.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (102 kB)
 Downloading aiohappyeyeballs-2.6.1-py3-none-any.whl (15 kB)
 Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
+Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
 Downloading attrs-25.4.0-py3-none-any.whl (67 kB)
 Downloading certifi-2026.2.25-py3-none-any.whl (153 kB)
 Downloading fastapi-0.135.1-py3-none-any.whl (116 kB)
 Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
 Downloading filelock-3.25.2-py3-none-any.whl (26 kB)
 Downloading frozenlist-1.8.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (231 kB)
+Downloading h11-0.16.0-py3-none-any.whl (37 kB)
 Downloading interegular-0.3.3-py37-none-any.whl (23 kB)
 Downloading mistral_common-1.10.0-py3-none-any.whl (6.5 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.5/6.5 MB 203.6 MB/s  0:00:00
-Downloading pydantic-2.12.5-py3-none-any.whl (463 kB)
-Downloading pydantic_core-2.41.5-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 372.3 MB/s  0:00:00
-Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.5/6.5 MB 66.5 MB/s  0:00:00
 Downloading jsonschema-4.26.0-py3-none-any.whl (90 kB)
 Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
-Downloading openai-2.28.0-py3-none-any.whl (1.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 531.5 MB/s  0:00:00
+Downloading openai-2.29.0-py3-none-any.whl (1.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 79.9 MB/s  0:00:00
 Downloading anyio-4.12.1-py3-none-any.whl (113 kB)
 Downloading distro-1.9.0-py3-none-any.whl (20 kB)
-Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
-Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
 Downloading jiter-0.13.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (362 kB)
 Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
-Downloading h11-0.16.0-py3-none-any.whl (37 kB)
 Downloading opencv_python_headless-4.11.0.86-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (50.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 50.0/50.0 MB 260.7 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 50.0/50.0 MB 78.5 MB/s  0:00:00
 Downloading packaging-26.0-py3-none-any.whl (74 kB)
 Downloading pillow-12.1.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (7.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.0/7.0 MB 273.3 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 7.0/7.0 MB 81.5 MB/s  0:00:00
 Downloading prometheus_client-0.24.1-py3-none-any.whl (64 kB)
 Downloading prometheus_fastapi_instrumentator-7.1.0-py3-none-any.whl (19 kB)
 Downloading starlette-0.52.1-py3-none-any.whl (74 kB)
 Downloading propcache-0.4.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (210 kB)
 Downloading pyarrow-23.0.1-cp311-cp311-manylinux_2_28_x86_64.whl (47.6 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 47.6/47.6 MB 257.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 47.6/47.6 MB 83.7 MB/s  0:00:00
 Downloading pydantic_extra_types-2.11.1-py3-none-any.whl (79 kB)
 Downloading pycountry-26.2.16-py3-none-any.whl (8.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.0/8.0 MB 279.5 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.0/8.0 MB 85.3 MB/s  0:00:00
 Downloading pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (806 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 806.6/806.6 kB 517.7 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 806.6/806.6 kB 108.8 MB/s  0:00:00
 Downloading ray-2.54.0-cp311-cp311-manylinux2014_x86_64.whl (72.9 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 72.9/72.9 MB 170.8 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 72.9/72.9 MB 87.4 MB/s  0:00:00
 Downloading msgpack-1.1.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (426 kB)
 Downloading click-8.3.1-py3-none-any.whl (108 kB)
 Downloading referencing-0.37.0-py3-none-any.whl (26 kB)
 Downloading regex-2026.2.28-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (800 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 800.2/800.2 kB 583.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 800.2/800.2 kB 113.6 MB/s  0:00:00
 Downloading rpds_py-0.30.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (390 kB)
 Downloading sacrebleu-2.6.0-py3-none-any.whl (100 kB)
 Downloading safetensors-0.7.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (507 kB)
 Downloading scikit_learn-1.8.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (9.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.1/9.1 MB 278.9 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.1/9.1 MB 91.3 MB/s  0:00:00
 Downloading joblib-1.5.3-py3-none-any.whl (309 kB)
 Downloading scipy-1.17.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (35.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 35.3/35.3 MB 263.3 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 35.3/35.3 MB 89.9 MB/s  0:00:00
 Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
 Downloading tabulate-0.10.0-py3-none-any.whl (39 kB)
 Downloading threadpoolctl-3.6.0-py3-none-any.whl (18 kB)
 Downloading tiktoken-0.12.0-cp311-cp311-manylinux_2_28_x86_64.whl (1.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 477.1 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 91.9 MB/s  0:00:00
 Downloading tqdm-4.67.3-py3-none-any.whl (78 kB)
 Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
 Downloading absl_py-2.4.0-py3-none-any.whl (135 kB)
@@ -527,24 +519,23 @@ Downloading markupsafe-3.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86
 Downloading jsonlines-4.0.0-py3-none-any.whl (8.7 kB)
 Downloading lark-1.3.1-py3-none-any.whl (113 kB)
 Downloading lxml-6.0.2-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (5.2 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 274.1 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 95.2 MB/s  0:00:00
 Downloading more_itertools-10.8.0-py3-none-any.whl (69 kB)
 Downloading msgspec-0.20.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (219 kB)
-Downloading multiprocess-0.70.16-py311-none-any.whl (143 kB)
 Downloading nest_asyncio-1.6.0-py3-none-any.whl (5.2 kB)
 Downloading networkx-3.6.1-py3-none-any.whl (2.1 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 384.3 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 101.3 MB/s  0:00:00
 Downloading nltk-3.9.3-py3-none-any.whl (1.5 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.5/1.5 MB 406.3 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.5/1.5 MB 97.8 MB/s  0:00:00
 Downloading numba-0.64.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (3.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.7/3.7 MB 277.2 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.7/3.7 MB 90.4 MB/s  0:00:00
 Downloading llvmlite-0.46.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (56.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 56.3/56.3 MB 261.2 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 56.3/56.3 MB 49.0 MB/s  0:00:01
 Downloading nvidia_ml_py-13.590.48-py3-none-any.whl (50 kB)
 Downloading nvidia_nvjitlink_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl (39.7 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 39.7/39.7 MB 264.7 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 39.7/39.7 MB 10.4 MB/s  0:00:03
 Downloading pandas-3.0.1-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (11.3 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.3/11.3 MB 274.2 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 11.3/11.3 MB 14.4 MB/s  0:00:00
 Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
 Downloading partial_json_parser-0.2.1.1.post7-py3-none-any.whl (10 kB)
 Downloading portalocker-3.2.0-py3-none-any.whl (22 kB)
@@ -560,43 +551,43 @@ Downloading tcolorpy-0.1.7-py3-none-any.whl (8.1 kB)
 Downloading typepy-1.3.4-py3-none-any.whl (31 kB)
 Downloading pytz-2026.1.post1-py2.py3-none-any.whl (510 kB)
 Downloading setuptools-82.0.1-py3-none-any.whl (1.0 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.0/1.0 MB 473.5 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.0/1.0 MB 11.3 MB/s  0:00:00
 Downloading pyzmq-27.1.0-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (857 kB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 857.0/857.0 kB 496.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 857.0/857.0 kB 21.5 MB/s  0:00:00
 Downloading sentencepiece-0.2.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (1.4 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 403.6 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.4/1.4 MB 23.8 MB/s  0:00:00
 Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
 Downloading uvicorn-0.42.0-py3-none-any.whl (68 kB)
 Downloading httptools-0.7.1-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (456 kB)
 Downloading python_dotenv-1.2.2-py3-none-any.whl (22 kB)
 Downloading uvloop-0.22.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.8 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.8/3.8 MB 288.4 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.8/3.8 MB 24.0 MB/s  0:00:00
 Downloading watchfiles-1.1.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
 Downloading websockets-16.0-cp311-cp311-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (184 kB)
 Downloading xxhash-3.6.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (193 kB)
 Downloading zstandard-0.25.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.6 MB)
-   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.6/5.6 MB 261.7 MB/s  0:00:00
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.6/5.6 MB 25.3 MB/s  0:00:00
 Building wheels for collected packages: rouge-score, langdetect, pyairports, sqlitedict, word2number
   Building wheel for rouge-score (pyproject.toml): started
   Building wheel for rouge-score (pyproject.toml): finished with status 'done'
-  Created wheel for rouge-score: filename=rouge_score-0.1.2-py3-none-any.whl size=24988 sha256=62e279d9dd6f329d78a7f4cdef045b7cf068bbb36018ca3942593f1993dcfb09
-  Stored in directory: /tmp/pip-ephem-wheel-cache-z53nkflm/wheels/1e/19/43/8a442dc83660ca25e163e1bd1f89919284ab0d0c1475475148
+  Created wheel for rouge-score: filename=rouge_score-0.1.2-py3-none-any.whl size=24988 sha256=f8a86c23f801dda02ea8d73687a732b5201cf661f2d8f54f849dcc19d05142dc
+  Stored in directory: /tmp/pip-ephem-wheel-cache-10aebhm5/wheels/1e/19/43/8a442dc83660ca25e163e1bd1f89919284ab0d0c1475475148
   Building wheel for langdetect (pyproject.toml): started
   Building wheel for langdetect (pyproject.toml): finished with status 'done'
-  Created wheel for langdetect: filename=langdetect-1.0.9-py3-none-any.whl size=993332 sha256=18b6dc0c096a4537547ff53eb5f3c308ba5b5af8f3d8837bb90e0be1548d783b
-  Stored in directory: /tmp/pip-ephem-wheel-cache-z53nkflm/wheels/0a/f2/b2/e5ca405801e05eb7c8ed5b3b4bcf1fcabcd6272c167640072e
+  Created wheel for langdetect: filename=langdetect-1.0.9-py3-none-any.whl size=993332 sha256=95647cd98e6b86dbbdc2565fe7e30f7e3ae002ef25056aff4f816ea0850ab243
+  Stored in directory: /tmp/pip-ephem-wheel-cache-10aebhm5/wheels/0a/f2/b2/e5ca405801e05eb7c8ed5b3b4bcf1fcabcd6272c167640072e
   Building wheel for pyairports (pyproject.toml): started
   Building wheel for pyairports (pyproject.toml): finished with status 'done'
-  Created wheel for pyairports: filename=pyairports-0.0.1-py3-none-any.whl size=3522 sha256=098de81cb79eb90ca831a31db1df74c06fb6f13d830390bfd37385b43aa98626
-  Stored in directory: /tmp/pip-ephem-wheel-cache-z53nkflm/wheels/3d/26/74/b78de57355f22c357980aee150cd8b072007fe5d84e68b6dc9
+  Created wheel for pyairports: filename=pyairports-0.0.1-py3-none-any.whl size=3522 sha256=a44c42ca9518e1fe4cf92f6a9581389ea080b80bd611955060dea8436a740dde
+  Stored in directory: /tmp/pip-ephem-wheel-cache-10aebhm5/wheels/3d/26/74/b78de57355f22c357980aee150cd8b072007fe5d84e68b6dc9
   Building wheel for sqlitedict (pyproject.toml): started
   Building wheel for sqlitedict (pyproject.toml): finished with status 'done'
-  Created wheel for sqlitedict: filename=sqlitedict-2.1.0-py3-none-any.whl size=16955 sha256=b57ef5028b95c03109734128624cde08582f744a01df51d6f1447ae576f178cb
-  Stored in directory: /tmp/pip-ephem-wheel-cache-z53nkflm/wheels/73/63/89/7210274f9b7fb033b8f22671f64c0e0b55083d30c3c046a3ff
+  Created wheel for sqlitedict: filename=sqlitedict-2.1.0-py3-none-any.whl size=16955 sha256=67f73076d88b5078dfc1ec4e73e3c62b2588142eda0a758756506c053cf86fc2
+  Stored in directory: /tmp/pip-ephem-wheel-cache-10aebhm5/wheels/73/63/89/7210274f9b7fb033b8f22671f64c0e0b55083d30c3c046a3ff
   Building wheel for word2number (pyproject.toml): started
   Building wheel for word2number (pyproject.toml): finished with status 'done'
-  Created wheel for word2number: filename=word2number-1.1-py3-none-any.whl size=5659 sha256=f6ffc3467bc1855b1b9fc4927199638c1b779fbdb36b544296c249d926c2c453
-  Stored in directory: /tmp/pip-ephem-wheel-cache-z53nkflm/wheels/cd/ef/ae/073b491b14d25e2efafcffca9e16b2ee6d114ec5c643ba4f06
+  Created wheel for word2number: filename=word2number-1.1-py3-none-any.whl size=5659 sha256=0393a933d9389479d6b7d34a66c7c37a7681216ce1d0a25de46cf1c18fbe31c2
+  Stored in directory: /tmp/pip-ephem-wheel-cache-10aebhm5/wheels/cd/ef/ae/073b491b14d25e2efafcffca9e16b2ee6d114ec5c643ba4f06
 Successfully built rouge-score langdetect pyairports sqlitedict word2number
 Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpuinfo, nvidia-ml-py, mpmath, antlr4-python3-runtime, zstandard, zipp, xxhash, websockets, uvloop, urllib3, typing-extensions, tqdm, threadpoolctl, tcolorpy, tabulate, sympy, sniffio, six, setuptools, sentencepiece, safetensors, rpds-py, regex, pyzmq, pyyaml, python-dotenv, pycountry, pybind11, pyarrow, psutil, protobuf, propcache, prometheus-client, portalocker, pillow, pathvalidate, partial-json-parser, packaging, nvidia-nvtx-cu12, nvidia-nvjitlink-cu12, nvidia-nccl-cu12, nvidia-curand-cu12, nvidia-cufft-cu12, nvidia-cuda-runtime-cu12, nvidia-cuda-nvrtc-cu12, nvidia-cuda-cupti-cu12, nvidia-cublas-cu12, numpy, networkx, nest-asyncio, multidict, msgspec, msgpack, more_itertools, MarkupSafe, lxml, llvmlite, lark, joblib, jiter, interegular, immutabledict, idna, httptools, hf-xet, h11, fsspec, frozenlist, filelock, einops, distro, diskcache, dill, colorama, cloudpickle, click, charset_normalizer, chardet, certifi, attrs, annotated-types, annotated-doc, aiohappyeyeballs, absl-py, yarl, uvicorn, typing-inspection, triton, scipy, sacrebleu, requests, referencing, python-dateutil, pydantic-core, opencv-python-headless, nvidia-cusparse-cu12, nvidia-cudnn-cu12, numexpr, numba, nltk, multiprocess, mbstrdecoder, latex2sympy2_extended, langdetect, jsonlines, jinja2, importlib-metadata, httpcore, gguf, anyio, aiosignal, watchfiles, typepy, tiktoken, starlette, scikit-learn, rouge-score, responses, pydantic, pandas, nvidia-cusolver-cu12, math_verify, jsonschema-specifications, huggingface-hub, httpx, aiohttp, torch, tokenizers, pydantic-extra-types, prometheus-fastapi-instrumentator, openai, lm-format-enforcer, jsonschema, fastapi, xformers, transformers, torchvision, ray, datasets, DataProperty, accelerate, tabledata, outlines, mistral-common, evaluate, compressed-tensors, pytablewriter, vllm, lm-eval
   Attempting uninstall: word2number
@@ -627,6 +618,10 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Found existing installation: mpmath 1.3.0
     Uninstalling mpmath-1.3.0:
       Successfully uninstalled mpmath-1.3.0
+  Attempting uninstall: antlr4-python3-runtime
+    Found existing installation: antlr4-python3-runtime 4.11.0
+    Uninstalling antlr4-python3-runtime-4.11.0:
+      Successfully uninstalled antlr4-python3-runtime-4.11.0
   Attempting uninstall: zstandard
     Found existing installation: zstandard 0.25.0
     Uninstalling zstandard-0.25.0:
@@ -876,9 +871,9 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Uninstalling h11-0.16.0:
       Successfully uninstalled h11-0.16.0
   Attempting uninstall: fsspec
-    Found existing installation: fsspec 2024.9.0
-    Uninstalling fsspec-2024.9.0:
-      Successfully uninstalled fsspec-2024.9.0
+    Found existing installation: fsspec 2026.2.0
+    Uninstalling fsspec-2026.2.0:
+      Successfully uninstalled fsspec-2026.2.0
   Attempting uninstall: frozenlist
     Found existing installation: frozenlist 1.8.0
     Uninstalling frozenlist-1.8.0:
@@ -900,9 +895,9 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Uninstalling diskcache-5.6.3:
       Successfully uninstalled diskcache-5.6.3
   Attempting uninstall: dill
-    Found existing installation: dill 0.3.8
-    Uninstalling dill-0.3.8:
-      Successfully uninstalled dill-0.3.8
+    Found existing installation: dill 0.4.1
+    Uninstalling dill-0.4.1:
+      Successfully uninstalled dill-0.4.1
   Attempting uninstall: colorama
     Found existing installation: colorama 0.4.6
     Uninstalling colorama-0.4.6:
@@ -1012,13 +1007,17 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Uninstalling nltk-3.9.3:
       Successfully uninstalled nltk-3.9.3
   Attempting uninstall: multiprocess
-    Found existing installation: multiprocess 0.70.16
-    Uninstalling multiprocess-0.70.16:
-      Successfully uninstalled multiprocess-0.70.16
+    Found existing installation: multiprocess 0.70.19
+    Uninstalling multiprocess-0.70.19:
+      Successfully uninstalled multiprocess-0.70.19
   Attempting uninstall: mbstrdecoder
     Found existing installation: mbstrdecoder 1.1.4
     Uninstalling mbstrdecoder-1.1.4:
       Successfully uninstalled mbstrdecoder-1.1.4
+  Attempting uninstall: latex2sympy2_extended
+    Found existing installation: latex2sympy2_extended 1.11.0
+    Uninstalling latex2sympy2_extended-1.11.0:
+      Successfully uninstalled latex2sympy2_extended-1.11.0
   Attempting uninstall: langdetect
     Found existing installation: langdetect 1.0.9
     Uninstalling langdetect-1.0.9:
@@ -1091,6 +1090,10 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Found existing installation: nvidia-cusolver-cu12 11.4.5.107
     Uninstalling nvidia-cusolver-cu12-11.4.5.107:
       Successfully uninstalled nvidia-cusolver-cu12-11.4.5.107
+  Attempting uninstall: math_verify
+    Found existing installation: math-verify 0.9.0
+    Uninstalling math-verify-0.9.0:
+      Successfully uninstalled math-verify-0.9.0
   Attempting uninstall: jsonschema-specifications
     Found existing installation: jsonschema-specifications 2025.9.1
     Uninstalling jsonschema-specifications-2025.9.1:
@@ -1116,9 +1119,9 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Uninstalling tokenizers-0.20.3:
       Successfully uninstalled tokenizers-0.20.3
   Attempting uninstall: pydantic-extra-types
-    Found existing installation: pydantic-extra-types 2.11.0
-    Uninstalling pydantic-extra-types-2.11.0:
-      Successfully uninstalled pydantic-extra-types-2.11.0
+    Found existing installation: pydantic-extra-types 2.11.1
+    Uninstalling pydantic-extra-types-2.11.1:
+      Successfully uninstalled pydantic-extra-types-2.11.1
   Attempting uninstall: prometheus-fastapi-instrumentator
     Found existing installation: prometheus-fastapi-instrumentator 7.1.0
     Uninstalling prometheus-fastapi-instrumentator-7.1.0:
@@ -1156,9 +1159,9 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Uninstalling ray-2.54.0:
       Successfully uninstalled ray-2.54.0
   Attempting uninstall: datasets
-    Found existing installation: datasets 3.1.0
-    Uninstalling datasets-3.1.0:
-      Successfully uninstalled datasets-3.1.0
+    Found existing installation: datasets 4.8.2
+    Uninstalling datasets-4.8.2:
+      Successfully uninstalled datasets-4.8.2
   Attempting uninstall: DataProperty
     Found existing installation: DataProperty 1.1.0
     Uninstalling DataProperty-1.1.0:
@@ -1200,7 +1203,7 @@ Installing collected packages: word2number, sqlitedict, pytz, pyairports, py-cpu
     Uninstalling lm_eval-0.4.11:
       Successfully uninstalled lm_eval-0.4.11
 
-Successfully installed DataProperty-1.1.0 MarkupSafe-3.0.3 absl-py-2.4.0 accelerate-1.1.1 aiohappyeyeballs-2.6.1 aiohttp-3.13.3 aiosignal-1.4.0 annotated-doc-0.0.4 annotated-types-0.7.0 antlr4-python3-runtime-4.11.0 anyio-4.12.1 attrs-25.4.0 certifi-2026.2.25 chardet-5.2.0 charset_normalizer-3.4.6 click-8.3.1 cloudpickle-3.1.2 colorama-0.4.6 compressed-tensors-0.6.0 datasets-2.21.0 dill-0.3.8 diskcache-5.6.3 distro-1.9.0 einops-0.8.2 evaluate-0.4.0 fastapi-0.135.1 filelock-3.25.2 frozenlist-1.8.0 fsspec-2024.6.1 gguf-0.10.0 h11-0.16.0 hf-xet-1.4.2 httpcore-1.0.9 httptools-0.7.1 httpx-0.28.1 huggingface-hub-0.36.2 idna-3.11 immutabledict-4.3.1 importlib-metadata-8.7.1 interegular-0.3.3 jinja2-3.1.6 jiter-0.13.0 joblib-1.5.3 jsonlines-4.0.0 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 langdetect-1.0.9 lark-1.3.1 latex2sympy2_extended-1.11.0 llvmlite-0.46.0 lm-eval-0.4.11 lm-format-enforcer-0.10.6 lxml-6.0.2 math_verify-0.9.0 mbstrdecoder-1.1.4 mistral-common-1.10.0 more_itertools-10.8.0 mpmath-1.3.0 msgpack-1.1.2 msgspec-0.20.0 multidict-6.7.1 multiprocess-0.70.16 nest-asyncio-1.6.0 networkx-3.6.1 nltk-3.9.3 numba-0.64.0 numexpr-2.14.1 numpy-1.26.4 nvidia-cublas-cu12-12.1.3.1 nvidia-cuda-cupti-cu12-12.1.105 nvidia-cuda-nvrtc-cu12-12.1.105 nvidia-cuda-runtime-cu12-12.1.105 nvidia-cudnn-cu12-9.1.0.70 nvidia-cufft-cu12-11.0.2.54 nvidia-curand-cu12-10.3.2.106 nvidia-cusolver-cu12-11.4.5.107 nvidia-cusparse-cu12-12.1.0.106 nvidia-ml-py-13.590.48 nvidia-nccl-cu12-2.20.5 nvidia-nvjitlink-cu12-12.9.86 nvidia-nvtx-cu12-12.1.105 openai-2.28.0 opencv-python-headless-4.11.0.86 outlines-0.0.46 packaging-26.0 pandas-3.0.1 partial-json-parser-0.2.1.1.post7 pathvalidate-3.3.1 pillow-12.1.1 portalocker-3.2.0 prometheus-client-0.24.1 prometheus-fastapi-instrumentator-7.1.0 propcache-0.4.1 protobuf-5.27.2 psutil-7.2.2 py-cpuinfo-9.0.0 pyairports-0.0.1 pyarrow-23.0.1 pybind11-3.0.2 pycountry-26.2.16 pydantic-2.12.5 pydantic-core-2.41.5 pydantic-extra-types-2.11.1 pytablewriter-1.2.1 python-dateutil-2.9.0.post0 python-dotenv-1.2.2 pytz-2026.1.post1 pyyaml-6.0.3 pyzmq-27.1.0 ray-2.54.0 referencing-0.37.0 regex-2026.2.28 requests-2.32.5 responses-0.18.0 rouge-score-0.1.2 rpds-py-0.30.0 sacrebleu-2.6.0 safetensors-0.7.0 scikit-learn-1.8.0 scipy-1.17.1 sentencepiece-0.2.1 setuptools-82.0.1 six-1.17.0 sniffio-1.3.1 sqlitedict-2.1.0 starlette-0.52.1 sympy-1.14.0 tabledata-1.3.4 tabulate-0.10.0 tcolorpy-0.1.7 threadpoolctl-3.6.0 tiktoken-0.12.0 tokenizers-0.20.3 torch-2.4.0 torchvision-0.19.0 tqdm-4.67.3 transformers-4.46.3 triton-3.0.0 typepy-1.3.4 typing-extensions-4.15.0 typing-inspection-0.4.2 urllib3-2.6.3 uvicorn-0.42.0 uvloop-0.22.1 vllm-0.6.3.post1 watchfiles-1.1.1 websockets-16.0 word2number-1.1 xformers-0.0.27.post2 xxhash-3.6.0 yarl-1.23.0 zipp-3.23.0 zstandard-0.25.0
+Successfully installed DataProperty-1.1.0 MarkupSafe-3.0.3 absl-py-2.4.0 accelerate-1.1.1 aiohappyeyeballs-2.6.1 aiohttp-3.13.3 aiosignal-1.4.0 annotated-doc-0.0.4 annotated-types-0.7.0 antlr4-python3-runtime-4.11.0 anyio-4.12.1 attrs-25.4.0 certifi-2026.2.25 chardet-5.2.0 charset_normalizer-3.4.6 click-8.3.1 cloudpickle-3.1.2 colorama-0.4.6 compressed-tensors-0.6.0 datasets-4.8.2 dill-0.4.1 diskcache-5.6.3 distro-1.9.0 einops-0.8.2 evaluate-0.4.0 fastapi-0.135.1 filelock-3.25.2 frozenlist-1.8.0 fsspec-2026.2.0 gguf-0.10.0 h11-0.16.0 hf-xet-1.4.2 httpcore-1.0.9 httptools-0.7.1 httpx-0.28.1 huggingface-hub-0.36.2 idna-3.11 immutabledict-4.3.1 importlib-metadata-8.7.1 interegular-0.3.3 jinja2-3.1.6 jiter-0.13.0 joblib-1.5.3 jsonlines-4.0.0 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 langdetect-1.0.9 lark-1.3.1 latex2sympy2_extended-1.11.0 llvmlite-0.46.0 lm-eval-0.4.11 lm-format-enforcer-0.10.6 lxml-6.0.2 math_verify-0.9.0 mbstrdecoder-1.1.4 mistral-common-1.10.0 more_itertools-10.8.0 mpmath-1.3.0 msgpack-1.1.2 msgspec-0.20.0 multidict-6.7.1 multiprocess-0.70.19 nest-asyncio-1.6.0 networkx-3.6.1 nltk-3.9.3 numba-0.64.0 numexpr-2.14.1 numpy-1.26.4 nvidia-cublas-cu12-12.1.3.1 nvidia-cuda-cupti-cu12-12.1.105 nvidia-cuda-nvrtc-cu12-12.1.105 nvidia-cuda-runtime-cu12-12.1.105 nvidia-cudnn-cu12-9.1.0.70 nvidia-cufft-cu12-11.0.2.54 nvidia-curand-cu12-10.3.2.106 nvidia-cusolver-cu12-11.4.5.107 nvidia-cusparse-cu12-12.1.0.106 nvidia-ml-py-13.590.48 nvidia-nccl-cu12-2.20.5 nvidia-nvjitlink-cu12-12.9.86 nvidia-nvtx-cu12-12.1.105 openai-2.29.0 opencv-python-headless-4.11.0.86 outlines-0.0.46 packaging-26.0 pandas-3.0.1 partial-json-parser-0.2.1.1.post7 pathvalidate-3.3.1 pillow-12.1.1 portalocker-3.2.0 prometheus-client-0.24.1 prometheus-fastapi-instrumentator-7.1.0 propcache-0.4.1 protobuf-5.27.2 psutil-7.2.2 py-cpuinfo-9.0.0 pyairports-0.0.1 pyarrow-23.0.1 pybind11-3.0.2 pycountry-26.2.16 pydantic-2.12.5 pydantic-core-2.41.5 pydantic-extra-types-2.11.1 pytablewriter-1.2.1 python-dateutil-2.9.0.post0 python-dotenv-1.2.2 pytz-2026.1.post1 pyyaml-6.0.3 pyzmq-27.1.0 ray-2.54.0 referencing-0.37.0 regex-2026.2.28 requests-2.32.5 responses-0.18.0 rouge-score-0.1.2 rpds-py-0.30.0 sacrebleu-2.6.0 safetensors-0.7.0 scikit-learn-1.8.0 scipy-1.17.1 sentencepiece-0.2.1 setuptools-82.0.1 six-1.17.0 sniffio-1.3.1 sqlitedict-2.1.0 starlette-0.52.1 sympy-1.14.0 tabledata-1.3.4 tabulate-0.10.0 tcolorpy-0.1.7 threadpoolctl-3.6.0 tiktoken-0.12.0 tokenizers-0.20.3 torch-2.4.0 torchvision-0.19.0 tqdm-4.67.3 transformers-4.46.3 triton-3.0.0 typepy-1.3.4 typing-extensions-4.15.0 typing-inspection-0.4.2 urllib3-2.6.3 uvicorn-0.42.0 uvloop-0.22.1 vllm-0.6.3.post1 watchfiles-1.1.1 websockets-16.0 word2number-1.1 xformers-0.0.27.post2 xxhash-3.6.0 yarl-1.23.0 zipp-3.23.0 zstandard-0.25.0
 Step 4: Verifying installation...
 lm-eval version: 0.4.11
 
@@ -1211,14 +1214,6 @@ Checking for vLLM...
 ================================
 Running All Benchmarks
 ================================
-Multiprocessing start method: spawn
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-Ignoring unsupported arguments for mmlu: ['method']
-
-================================================================================
-Running MMLU benchmark
-================================================================================
-
 DEBUG: Running mmlu with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1238,27 +1233,18 @@ Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
 Chat template: True
 Generation params: temperature=0.0, max_gen_toks=256
-WARNING 03-16 17:42:32 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:42:39 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:42:42 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:42:43 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:43:08 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-16 17:43:09 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
-INFO 03-16 17:43:09 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
-INFO 03-16 17:43:12 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:43:12 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:43:27 model_runner.py:1523] Graph capturing finished in 15 secs.
-
-Error running mmlu: must be called with a dataclass type or instance
-
-Failed to run mmlu: must be called with a dataclass type or instance
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-Ignoring unsupported arguments for math: ['method']
-
-================================================================================
-Running MATH benchmark
-================================================================================
-
+WARNING 03-17 15:25:12 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:25:18 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:25:20 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:25:20 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:25:35 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:25:36 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
+INFO 03-17 15:25:36 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
+INFO 03-17 15:25:38 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:25:38 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:25:54 model_runner.py:1523] Graph capturing finished in 16 secs.
+INFO 03-17 15:30:33 model_runner_base.py:120] Writing input of failed execution to /tmp/err_execute_model_input_20260317-153033.pkl...
+WARNING 03-17 15:30:33 model_runner_base.py:143] Failed to pickle inputs of failed execution: Can't pickle local object 'weak_bind.<locals>.weak_bound'
 DEBUG: Running math with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1278,60 +1264,60 @@ Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
 Chat template: True
 Generation params: temperature=0.0, max_gen_toks=512
-WARNING 03-16 17:43:56 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:43:56 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:43:57 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:43:57 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:44:12 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 17:44:13 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 17:44:13 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 17:44:13 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:44:13 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:44:23 model_runner.py:1523] Graph capturing finished in 10 secs.
+WARNING 03-17 15:30:48 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:30:55 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:30:57 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:30:57 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:31:06 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:31:07 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
+INFO 03-17 15:31:07 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
+INFO 03-17 15:31:09 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:31:09 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:31:19 model_runner.py:1523] Graph capturing finished in 10 secs.
 Task 'math' not found, trying next alias if available...
-WARNING 03-16 17:44:39 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:44:39 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:44:40 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:44:40 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:44:55 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 17:44:55 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 17:44:55 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 17:44:55 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:44:55 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:45:05 model_runner.py:1523] Graph capturing finished in 10 secs.
+WARNING 03-17 15:31:44 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:31:44 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:31:44 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:31:45 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:31:54 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:31:54 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
+INFO 03-17 15:31:54 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
+INFO 03-17 15:31:55 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:31:55 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:32:05 model_runner.py:1523] Graph capturing finished in 10 secs.
 Chat template config or mult-turn fewshot not supported: {'apply_chat_template': True, 'fewshot_as_multiturn': True}; retrying with simpler config.
-WARNING 03-16 17:45:29 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:45:29 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:45:29 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:45:30 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:45:44 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 17:45:45 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 17:45:45 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 17:45:45 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:45:45 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:45:55 model_runner.py:1523] Graph capturing finished in 10 secs.
+WARNING 03-17 15:32:30 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:32:30 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:32:31 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:32:31 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:32:40 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:32:41 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
+INFO 03-17 15:32:41 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
+INFO 03-17 15:32:41 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:32:41 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:32:52 model_runner.py:1523] Graph capturing finished in 10 secs.
 Chat template config or mult-turn fewshot not supported: {'apply_chat_template': True}; retrying with simpler config.
-WARNING 03-16 17:46:11 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:46:11 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:46:12 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:46:12 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:46:27 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 17:46:27 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 17:46:27 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 17:46:27 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:46:27 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:46:37 model_runner.py:1523] Graph capturing finished in 10 secs.
+WARNING 03-17 15:33:09 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:33:09 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:33:10 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:33:10 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:33:19 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:33:20 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
+INFO 03-17 15:33:20 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
+INFO 03-17 15:33:20 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:33:20 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:33:31 model_runner.py:1523] Graph capturing finished in 11 secs.
 Chat template config or mult-turn fewshot not supported: {}; retrying with simpler config.
-WARNING 03-16 17:46:58 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:46:58 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:46:59 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:46:59 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:47:14 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 17:47:14 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 17:47:14 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 17:47:14 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:47:14 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:47:24 model_runner.py:1523] Graph capturing finished in 10 secs.
+WARNING 03-17 15:33:50 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:33:50 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:33:50 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:33:51 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:34:00 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:34:00 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
+INFO 03-17 15:34:00 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
+INFO 03-17 15:34:01 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:34:01 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:34:11 model_runner.py:1523] Graph capturing finished in 11 secs.
 
 ============================================================
 MATH RESULTS
@@ -1340,15 +1326,6 @@ MATH RESULTS
 MATH Accuracy: 0.4236
 Task key: minerva_math
 Accuracy key: exact_match,none
-
-Results saved to: results/eval_5115570/math_results.json
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-Ignoring unsupported arguments for gsm8k: ['method']
-
-================================================================================
-Running GSM8K benchmark
-================================================================================
-
 DEBUG: Running gsm8k with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1364,25 +1341,22 @@ GSM8K EVALUATION
 Running GSM8K evaluation with 5-shot learning...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-16 17:58:30 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 17:58:30 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 17:58:31 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 17:58:31 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 17:58:45 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 17:58:46 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 17:58:46 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 17:58:46 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 17:58:46 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 17:59:06 model_runner.py:1523] Graph capturing finished in 20 secs.
+WARNING 03-17 15:45:37 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:45:43 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:45:45 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:45:45 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:45:54 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:45:54 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
+INFO 03-17 15:45:54 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
+INFO 03-17 15:45:56 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:45:56 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:46:06 model_runner.py:1523] Graph capturing finished in 10 secs.
 
-Results saved to: results/eval_5115570/gsm8k_results.json
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-Ignoring unsupported arguments for coding: ['method']
+============================================================
+GSM8K RESULTS
+============================================================
 
-================================================================================
-Running CODING benchmark
-================================================================================
-
+GSM8K Accuracy: 0.8180
 DEBUG: Running coding with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1398,39 +1372,20 @@ CODING EVALUATION: humaneval,mbpp
 Running coding evaluation for tasks: humaneval,mbpp
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-16 18:01:39 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:01:39 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:01:40 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:01:41 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:01:55 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:01:55 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 18:01:55 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 18:01:56 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:01:56 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:02:16 model_runner.py:1523] Graph capturing finished in 21 secs.
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
-Multiprocessing start method: spawn
+WARNING 03-17 15:48:52 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:48:59 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:49:00 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:49:00 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:49:09 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:49:09 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
+INFO 03-17 15:49:09 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
+INFO 03-17 15:49:12 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:49:12 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:49:27 model_runner.py:1523] Graph capturing finished in 15 secs.
 Task marked as unsafe, retrying with confirm_run_unsafe_code=True...
-WARNING 03-16 18:02:40 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:02:40 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:02:41 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-
-Error running coding: CUDA out of memory. Tried to allocate 224.00 MiB. GPU 0 has a total capacity of 79.25 GiB of which 21.50 MiB is free. Including non-PyTorch memory, this process has 79.21 GiB memory in use. Of the allocated memory 78.43 GiB is allocated by PyTorch, with 31.38 MiB allocated in private pools (e.g., CUDA Graphs), and 105.82 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
-
-Failed to run coding: CUDA out of memory. Tried to allocate 224.00 MiB. GPU 0 has a total capacity of 79.25 GiB of which 21.50 MiB is free. Including non-PyTorch memory, this process has 79.21 GiB memory in use. Of the allocated memory 78.43 GiB is allocated by PyTorch, with 31.38 MiB allocated in private pools (e.g., CUDA Graphs), and 105.82 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-Ignoring unsupported arguments for ifeval: ['method']
-
-================================================================================
-Running IFEVAL benchmark
-================================================================================
-
+WARNING 03-17 15:49:57 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:49:57 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:49:58 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
 DEBUG: Running ifeval with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1446,30 +1401,22 @@ IFEVAL EVALUATION
 Running IFEval evaluation...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-16 18:02:42 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:02:42 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:02:43 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:02:43 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:02:58 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:02:58 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 18:02:58 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 18:02:59 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:02:59 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:03:20 model_runner.py:1523] Graph capturing finished in 22 secs.
+WARNING 03-17 15:50:10 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:50:16 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:50:18 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:50:18 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:50:27 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:50:27 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
+INFO 03-17 15:50:27 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
+INFO 03-17 15:50:29 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:50:29 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:50:40 model_runner.py:1523] Graph capturing finished in 10 secs.
 
 ============================================================
 IFEVAL RESULTS
 ============================================================
 Prompt-level Strict Acc: 0.7412199630314233
-Prompt-level Loose Acc: 0.789279112754159
-
-Results saved to: results/eval_5115570/ifeval_results.json
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-
-================================================================================
-Running SQUAD benchmark
-================================================================================
-
+Prompt-level Loose Acc: 0.7874306839186691
 DEBUG: Running squad with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1488,47 +1435,45 @@ Final decision: apply_chat_template = True
 Running SQuAD evaluation...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
-WARNING 03-16 18:04:34 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:04:34 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:04:35 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:04:36 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:04:49 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:04:50 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 18:04:50 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 18:04:50 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:04:50 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:05:16 model_runner.py:1523] Graph capturing finished in 26 secs.
+WARNING 03-17 15:52:06 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:52:12 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:52:13 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:52:14 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:52:22 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:52:23 gpu_executor.py:122] # GPU blocks: 28030, # CPU blocks: 2048
+INFO 03-17 15:52:23 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.49x
+INFO 03-17 15:52:25 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:52:25 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:52:36 model_runner.py:1523] Graph capturing finished in 11 secs.
 Task 'squad' not found, trying next alias if available...
-WARNING 03-16 18:05:35 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:05:35 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:05:36 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:05:36 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:05:50 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:05:50 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 18:05:50 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 18:05:51 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:05:51 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:06:17 model_runner.py:1523] Graph capturing finished in 26 secs.
+WARNING 03-17 15:52:54 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:52:54 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:52:54 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:52:55 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:53:04 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:53:04 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
+INFO 03-17 15:53:04 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
+INFO 03-17 15:53:05 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:53:05 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:53:16 model_runner.py:1523] Graph capturing finished in 12 secs.
 Task 'squad_v2' not found, trying next alias if available...
-WARNING 03-16 18:06:35 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:06:35 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:06:36 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:06:36 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:06:49 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:06:50 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
-INFO 03-16 18:06:50 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
-INFO 03-16 18:06:50 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:06:50 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:07:17 model_runner.py:1523] Graph capturing finished in 27 secs.
+WARNING 03-17 15:53:31 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:53:31 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:53:32 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:53:32 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:53:42 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:53:42 gpu_executor.py:122] # GPU blocks: 28125, # CPU blocks: 2048
+INFO 03-17 15:53:42 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 109.86x
+INFO 03-17 15:53:42 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:53:42 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:53:54 model_runner.py:1523] Graph capturing finished in 11 secs.
 
-Results saved to: results/eval_5115570/squad_results.json
-Versions: torch=2.4.0+cu121, vllm=0.6.3.post1, transformers=4.46.3
-Ignoring unsupported arguments for gpqa_diamond: ['method']
+============================================================
+SQuAD RESULTS
+============================================================
 
-================================================================================
-Running GPQA_DIAMOND benchmark
-================================================================================
-
+Exact Match: 0.6877
+F1 Score: 0.0000
 DEBUG: Running gpqa_diamond with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
   - limit: None (type: <class 'NoneType'>)
@@ -1546,54 +1491,102 @@ Final decision: apply_chat_template = True
 Running GPQA Diamond evaluation with 0-shot learning...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
-WARNING 03-16 18:08:30 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:08:30 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:08:31 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:08:31 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:08:44 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:08:45 gpu_executor.py:122] # GPU blocks: 24570, # CPU blocks: 2048
-INFO 03-16 18:08:45 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.98x
-INFO 03-16 18:08:45 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:08:45 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:08:54 model_runner.py:1523] Graph capturing finished in 8 secs.
+WARNING 03-17 15:55:24 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:55:31 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:55:32 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:55:32 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:55:41 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-17 15:55:42 gpu_executor.py:122] # GPU blocks: 24475, # CPU blocks: 2048
+INFO 03-17 15:55:42 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.61x
+INFO 03-17 15:55:44 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:55:44 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:55:47 model_runner.py:1523] Graph capturing finished in 3 secs.
 Task 'gpqa_diamond' not found, trying next alias if available...
-WARNING 03-16 18:09:10 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:09:10 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:09:11 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:09:11 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:09:25 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:09:26 gpu_executor.py:122] # GPU blocks: 24570, # CPU blocks: 2048
-INFO 03-16 18:09:26 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.98x
-INFO 03-16 18:09:26 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:09:26 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:09:34 model_runner.py:1523] Graph capturing finished in 8 secs.
+WARNING 03-17 15:56:06 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:56:06 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:56:06 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:56:06 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:56:16 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:56:16 gpu_executor.py:122] # GPU blocks: 24570, # CPU blocks: 2048
+INFO 03-17 15:56:16 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.98x
+INFO 03-17 15:56:16 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:56:16 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:56:20 model_runner.py:1523] Graph capturing finished in 3 secs.
 Task 'gpqa-diamond' not found, trying next alias if available...
-WARNING 03-16 18:09:48 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-16 18:09:48 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-16 18:09:49 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-16 18:09:49 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-16 18:10:03 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-16 18:10:04 gpu_executor.py:122] # GPU blocks: 24570, # CPU blocks: 2048
-INFO 03-16 18:10:04 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.98x
-INFO 03-16 18:10:04 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-16 18:10:04 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-16 18:10:13 model_runner.py:1523] Graph capturing finished in 8 secs.
+WARNING 03-17 15:56:34 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-17 15:56:34 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-17 15:56:35 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-17 15:56:35 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-17 15:56:44 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-17 15:56:45 gpu_executor.py:122] # GPU blocks: 24570, # CPU blocks: 2048
+INFO 03-17 15:56:45 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.98x
+INFO 03-17 15:56:45 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-17 15:56:45 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-17 15:56:48 model_runner.py:1523] Graph capturing finished in 3 secs.
+Multiprocessing start method: spawn
 
-Results saved to: results/eval_5115570/gpqa_diamond_results.json
+================================================================================
+Running MMLU benchmark (Subprocess Isolated)
+================================================================================
 
-Summary saved to: results/eval_5115570/all_benchmarks_summary.json
+
+Error running mmlu subprocess: Returns non-zero exit code 1
+
+================================================================================
+Running MATH benchmark (Subprocess Isolated)
+================================================================================
+
+
+Results saved to: results/eval_5158237/math_results.json
+
+================================================================================
+Running GSM8K benchmark (Subprocess Isolated)
+================================================================================
+
+
+Results saved to: results/eval_5158237/gsm8k_results.json
+
+================================================================================
+Running CODING benchmark (Subprocess Isolated)
+================================================================================
+
+
+Error running coding subprocess: Returns non-zero exit code 1
+
+================================================================================
+Running IFEVAL benchmark (Subprocess Isolated)
+================================================================================
+
+
+Results saved to: results/eval_5158237/ifeval_results.json
+
+================================================================================
+Running SQUAD benchmark (Subprocess Isolated)
+================================================================================
+
+
+Results saved to: results/eval_5158237/squad_results.json
+
+================================================================================
+Running GPQA_DIAMOND benchmark (Subprocess Isolated)
+================================================================================
+
+
+Results saved to: results/eval_5158237/gpqa_diamond_results.json
+
+Summary saved to: results/eval_5158237/all_benchmarks_summary.json
 
 ================================================================================
 EVALUATION SUMMARY
 ================================================================================
-MMLU: ERROR - must be called with a dataclass type or instance
+MMLU: ERROR - Subprocess crashed: Command '['/scratch/biggs.s/conda_envs/rl_casino/bin/python', '-c', '\nimport sys\nimport json\nimport os\nimport traceback\nimport inspect\n\nsys.path.append(\'/home/biggs.s/rl_casino/src\')\n\ntry:\n    from evaluation.mmlu_evaluator import evaluate_mmlu\n    \n    # Introspect exactly what arguments this evaluator accepts so we don\'t throw an unexpected keyword arg\n    raw_kwargs = {\'model\': \'vllm\', \'limit\': None, \'batch_size\': \'auto\', \'device\': None, \'trust_remote_code\': False, \'apply_chat_template\': None, \'method\': \'lm_eval\'}\n    evaluator_signature = inspect.signature(evaluate_mmlu)\n    accepts_var_kwargs = any(\n        param.kind == inspect.Parameter.VAR_KEYWORD\n        for param in evaluator_signature.parameters.values()\n    )\n    \n    if accepts_var_kwargs:\n        filtered_kwargs = raw_kwargs\n    else:\n        filtered_kwargs = {\n            key: value\n            for key, value in raw_kwargs.items()\n            if key in evaluator_signature.parameters\n        }\n        if "model" in evaluator_signature.parameters and "model" in raw_kwargs:\n            filtered_kwargs["model"] = raw_kwargs["model"]\n            \n    if "verbose" not in filtered_kwargs:\n        filtered_kwargs["verbose"] = True\n        \n    if True:\n        print(f"DEBUG: Running mmlu with filtered_kwargs:")\n        for k, v in filtered_kwargs.items():\n            print(f"  - {k}: {v} (type: {type(v)})")\n    \n    results = evaluate_mmlu(model_path=\'meta-llama/Llama-3.1-8B-Instruct\', **filtered_kwargs)\n    \n    # Write to transport file\n    with open(\'/tmp/tmp0_7rq90z.json\', \'w\') as f:\n        json.dump(results, f, default=str)\nexcept Exception as e:\n    traceback.print_exc()\n    sys.exit(1)\n']' returned non-zero exit status 1.
 MATH: Accuracy = 0.4236
-GSM8K: Accuracy = 0.0000
-CODING: ERROR - CUDA out of memory. Tried to allocate 224.00 MiB. GPU 0 has a total capacity of 79.25 GiB of which 21.50 MiB is free. Including non-PyTorch memory, this process has 79.21 GiB memory in use. Of the allocated memory 78.43 GiB is allocated by PyTorch, with 31.38 MiB allocated in private pools (e.g., CUDA Graphs), and 105.82 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
-IFEVAL: Strict Acc = 0.7412, Loose Acc = 0.7893
-SQUAD: Exact Match = 0.0000, F1 = 0.0000
+GSM8K: Accuracy = 0.8180
+CODING: ERROR - Subprocess crashed: Command '['/scratch/biggs.s/conda_envs/rl_casino/bin/python', '-c', '\nimport sys\nimport json\nimport os\nimport traceback\nimport inspect\n\nsys.path.append(\'/home/biggs.s/rl_casino/src\')\n\ntry:\n    from evaluation.coding_evaluator import evaluate_coding\n    \n    # Introspect exactly what arguments this evaluator accepts so we don\'t throw an unexpected keyword arg\n    raw_kwargs = {\'model\': \'vllm\', \'limit\': None, \'batch_size\': \'auto\', \'device\': None, \'trust_remote_code\': False, \'apply_chat_template\': None, \'method\': \'lm_eval\'}\n    evaluator_signature = inspect.signature(evaluate_coding)\n    accepts_var_kwargs = any(\n        param.kind == inspect.Parameter.VAR_KEYWORD\n        for param in evaluator_signature.parameters.values()\n    )\n    \n    if accepts_var_kwargs:\n        filtered_kwargs = raw_kwargs\n    else:\n        filtered_kwargs = {\n            key: value\n            for key, value in raw_kwargs.items()\n            if key in evaluator_signature.parameters\n        }\n        if "model" in evaluator_signature.parameters and "model" in raw_kwargs:\n            filtered_kwargs["model"] = raw_kwargs["model"]\n            \n    if "verbose" not in filtered_kwargs:\n        filtered_kwargs["verbose"] = True\n        \n    if True:\n        print(f"DEBUG: Running coding with filtered_kwargs:")\n        for k, v in filtered_kwargs.items():\n            print(f"  - {k}: {v} (type: {type(v)})")\n    \n    results = evaluate_coding(model_path=\'meta-llama/Llama-3.1-8B-Instruct\', **filtered_kwargs)\n    \n    # Write to transport file\n    with open(\'/tmp/tmp233zs3pu.json\', \'w\') as f:\n        json.dump(results, f, default=str)\nexcept Exception as e:\n    traceback.print_exc()\n    sys.exit(1)\n']' returned non-zero exit status 1.
+IFEVAL: Strict Acc = 0.7412, Loose Acc = 0.7874
+SQUAD: Exact Match = 0.6877, F1 = 0.0000
 GPQA_DIAMOND: Accuracy = 0.0000
 ================================
-Evaluation finished at: Mon Mar 16 06:20:22 PM EDT 2026
-Results saved to: results/eval_5115570
+Evaluation finished at: Tue Mar 17 04:06:58 PM EDT 2026
+Results saved to: results/eval_5158237
 ================================

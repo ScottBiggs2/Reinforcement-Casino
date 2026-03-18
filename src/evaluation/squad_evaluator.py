@@ -438,12 +438,19 @@ def evaluate_squad_with_lm_eval(
             if "squad" in key.lower() and isinstance(data, dict):
                 exact_match = data.get("exact_match,none", data.get("exact_match", data.get("contains,none", 0)))
                 f1 = data.get("f1,none", data.get("f1", 0))
+                contains = data.get("contains,none", 0)
+                
                 if verbose:
                     print("\n" + "=" * 60)
                     print("SQuAD RESULTS")
                     print("=" * 60)
-                    print(f"\nExact Match: {exact_match:.4f}")
-                    print(f"F1 Score: {f1:.4f}")
+                    print(f"\nTask: {key}")
+                    print(f"Exact Match / Contains: {exact_match:.4f}")
+                    if f1 > 0:
+                        print(f"F1 Score: {f1:.4f}")
+                    if "contains,none" in data and not "exact_match" in data:
+                        print(f"Contains Metric: {contains:.4f}")
+                    print(f"Available metrics for this task: {list(data.keys())}")
                 else:
                     print(f"Exact Match: {exact_match:.4f}, F1: {f1:.4f}")
                 break

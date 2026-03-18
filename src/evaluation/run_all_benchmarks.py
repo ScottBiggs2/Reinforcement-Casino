@@ -291,12 +291,20 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
         elif benchmark_name == "squad":
             if "results" in benchmark_results:
                 squad_results = benchmark_results["results"]
+                found_squad = False
                 for key, data in squad_results.items():
                     if "squad" in key.lower() and isinstance(data, dict):
                         exact_match = data.get("exact_match,none", data.get("exact_match", data.get("contains,none", 0)))
                         f1 = data.get("f1,none", data.get("f1", 0))
                         print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
+                        found_squad = True
                         break
+                if not found_squad:
+                    # Fallback for direct keys if nested results not matched
+                    em = benchmark_results.get("exact_match", 0)
+                    f1 = benchmark_results.get("f1", 0)
+                    if em > 0 or f1 > 0:
+                         print(f"{benchmark_name.upper()}: Exact Match = {em:.4f}, F1 = {f1:.4f}")
             elif "exact_match" in benchmark_results:
                 em = benchmark_results['exact_match']
                 f1 = benchmark_results['f1']
@@ -304,12 +312,25 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
         elif benchmark_name in ["gpqa", "gpqa_diamond"]:
             if "results" in benchmark_results:
                 gpqa_results = benchmark_results["results"]
+                found_gpqa = False
                 for key, data in gpqa_results.items():
                     if "gpqa" in key.lower() or "diamond" in key.lower():
                         if isinstance(data, dict):
                             acc = data.get("acc_norm,none", data.get("acc_norm", data.get("acc,none", data.get("acc", 0))))
                             print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                            found_gpqa = True
                             break
+                if not found_gpqa and gpqa_results:
+                     # If no 'gpqa' key found, check the first key if there's only one
+                     if len(gpqa_results) == 1:
+                         key = list(gpqa_results.keys())[0]
+                         data = gpqa_results[key]
+                         if isinstance(data, dict):
+                             acc = data.get("acc_norm,none", data.get("acc_norm", data.get("acc,none", data.get("acc", 0))))
+                             print(f"{benchmark_name.upper()} ({key}): Accuracy = {acc:.4f}")
+                             found_gpqa = True
+                if not found_gpqa:
+                     print(f"{benchmark_name.upper()}: Could not extract accuracy (check verbose output)")
 
 
 if __name__ == "__main__":
