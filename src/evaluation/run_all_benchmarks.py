@@ -90,6 +90,9 @@ def run_benchmark(
     # Map 'method' if provided as an extra kwarg
     method = kwargs.pop("method", "lm_eval")
     
+    if benchmark_name == "coding":
+        kwargs["confirm_run_unsafe_code"] = True
+        
     # Build subprocess injection
     script_code = f"""
 import sys
@@ -107,18 +110,20 @@ try:
     raw_kwargs = {repr(kwargs)}
     evaluator_signature = inspect.signature({func_name})
     
-    # Defensive filtering: only pass arguments that the function actually accepts
+    # Check if the evaluator accepts **kwargs
+    accepts_var_kwargs = any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in evaluator_signature.parameters.values()
+    )
+    
+    # Defensive filtering: only pass arguments that the function actually accepts or if it takes **kwargs
     filtered_kwargs = {{}}
     for key, value in raw_kwargs.items():
-        if key in evaluator_signature.parameters:
+        if accepts_var_kwargs or key in evaluator_signature.parameters:
             filtered_kwargs[key] = value
             
-    # Always check for 'model' alias if it exists
-    if "model" in evaluator_signature.parameters and "model" in raw_kwargs:
-        filtered_kwargs["model"] = raw_kwargs["model"]
-    
-    # Use the passed method if accepted
-    if "method" in evaluator_signature.parameters:
+    # Always ensure 'method' is handled if accepted
+    if "method" in evaluator_signature.parameters and "method" not in filtered_kwargs:
         filtered_kwargs["method"] = {repr(method)}
         
     if {repr(verbose)}:
@@ -145,6 +150,12 @@ except Exception as e:
             check=True
         )
         
+        if verbose:
+            if result.stdout:
+                print(result.stdout)
+            if result.stderr:
+                print(result.stderr, file=sys.stderr)
+                
         # Load results from the transport file
         if not os.path.exists(tmp_results_path):
              results = {"error": f"Subprocess finished but results file {tmp_results_path} was not created."}
@@ -333,6 +344,10 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                                     f1 = v
                                     break
                                     
+                        # Diagnostic: if both 0, print some keys to stdout
+                        if exact_match == 0 and f1 == 0:
+                             print(f"DEBUG: SQuAD Task '{key}' found but EM/F1 are 0. Available metrics: {list(data.keys())}")
+                             
                         print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
                         found_squad = True
                         break
@@ -359,7 +374,11 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                             for k, v in data.items():
                                 if "acc" in k.lower() and isinstance(v, (int, float)) and v > acc:
                                     acc = v
-                                    
+                        
+                        # Diagnostic: if 0, print some keys to stdout
+                        if acc == 0:
+                             print(f"DEBUG: GPQA Task '{key}' found but accuracy is 0. Available metrics: {list(data.keys())}")
+                             
                         print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
                         found_gpqa = True
                         break
