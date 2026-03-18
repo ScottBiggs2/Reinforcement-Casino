@@ -66,10 +66,25 @@ def run_benchmark(
 
     # Import target dynamically for the wrapper execution script
     import_module = f"evaluation.{benchmark_name}_evaluator"
-    if benchmark_name in ["gpqa", "gpqa_diamond"]:
-        import_module = "evaluation.gpqa_evaluator"
-        func_name = "evaluate_gpqa_diamond"
+    
+    # Explicit mapping of benchmark names to their evaluator entry points
+    BENCHMARK_FUNC_MAP = {
+        "mmlu": "evaluate_mmlu",
+        "math": "evaluate_math",
+        "gsm8k": "evaluate_gsm8k",
+        "coding": "evaluate_coding",
+        "ifeval": "evaluate_ifeval",
+        "squad": "evaluate_squad",
+        "gpqa": "evaluate_gpqa_diamond",
+        "gpqa_diamond": "evaluate_gpqa_diamond",
+    }
+    
+    if benchmark_name in BENCHMARK_FUNC_MAP:
+        func_name = BENCHMARK_FUNC_MAP[benchmark_name]
+        if benchmark_name in ["gpqa", "gpqa_diamond"]:
+            import_module = "evaluation.gpqa_evaluator"
     else:
+        # Fallback to automated naming
         func_name = f"evaluate_{benchmark_name}"
         
     # Build subprocess injection
@@ -276,9 +291,11 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                         break
         elif benchmark_name == "coding":
             if "results" in benchmark_results:
-                for task, task_results in benchmark_results["results"].items():
-                    pass_at_1 = task_results.get("pass@1", task_results.get("acc", 0))
-                    print(f"CODING ({task}): pass@1 = {pass_at_1:.4f}")
+                coding_res = benchmark_results["results"]
+                for task, task_results in coding_res.items():
+                    if isinstance(task_results, dict):
+                        pass_at_1 = task_results.get("pass@1", task_results.get("acc", 0))
+                        print(f"CODING ({task}): pass@1 = {pass_at_1:.4f}")
         elif benchmark_name == "ifeval":
             if "results" in benchmark_results:
                 ifeval_results = benchmark_results["results"]
