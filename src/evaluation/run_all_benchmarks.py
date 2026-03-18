@@ -87,6 +87,9 @@ def run_benchmark(
         # Fallback to automated naming
         func_name = f"evaluate_{benchmark_name}"
         
+    # Map 'method' if provided as an extra kwarg
+    method = kwargs.pop("method", "lm_eval")
+    
     # Build subprocess injection
     script_code = f"""
 import sys
@@ -103,24 +106,20 @@ try:
     # Introspect exactly what arguments this evaluator accepts so we don't throw an unexpected keyword arg
     raw_kwargs = {repr(kwargs)}
     evaluator_signature = inspect.signature({func_name})
-    accepts_var_kwargs = any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in evaluator_signature.parameters.values()
-    )
     
-    if accepts_var_kwargs:
-        filtered_kwargs = raw_kwargs
-    else:
-        filtered_kwargs = {{
-            key: value
-            for key, value in raw_kwargs.items()
-            if key in evaluator_signature.parameters
-        }}
-        if "model" in evaluator_signature.parameters and "model" in raw_kwargs:
-            filtered_kwargs["model"] = raw_kwargs["model"]
+    # Defensive filtering: only pass arguments that the function actually accepts
+    filtered_kwargs = {{}}
+    for key, value in raw_kwargs.items():
+        if key in evaluator_signature.parameters:
+            filtered_kwargs[key] = value
             
-    if "verbose" not in filtered_kwargs:
-        filtered_kwargs["verbose"] = {repr(verbose)}
+    # Always check for 'model' alias if it exists
+    if "model" in evaluator_signature.parameters and "model" in raw_kwargs:
+        filtered_kwargs["model"] = raw_kwargs["model"]
+    
+    # Use the passed method if accepted
+    if "method" in evaluator_signature.parameters:
+        filtered_kwargs["method"] = {repr(method)}
         
     if {repr(verbose)}:
         print(f"DEBUG: Running {benchmark_name} with filtered_kwargs:")
@@ -138,19 +137,25 @@ except Exception as e:
 """
     
     try:
-        # Run process
+        # Run process and capture output for debugging
         result = subprocess.run(
             [sys.executable, "-c", script_code],
-            capture_output=False,
+            capture_output=True,
+            text=True,
             check=True
         )
         
         # Load results from the transport file
-        with open(tmp_results_path, 'r') as f:
-            try:
-                results = json.load(f)
-            except json.JSONDecodeError:
-                results = {"error": "Subprocess script failed to dump valid JSON."}
+        if not os.path.exists(tmp_results_path):
+             results = {"error": f"Subprocess finished but results file {tmp_results_path} was not created."}
+             if result.stderr:
+                 results["error"] += f"\nStderr: {result.stderr}"
+        else:
+            with open(tmp_results_path, 'r') as f:
+                try:
+                    results = json.load(f)
+                except json.JSONDecodeError:
+                    results = {"error": "Subprocess script failed to dump valid JSON."}
                 
         # Save formal results if output directory is specified
         if output_dir and "error" not in results:
@@ -163,7 +168,13 @@ except Exception as e:
                 
     except subprocess.CalledProcessError as e:
         print(f"\nError running {benchmark_name} subprocess: Returns non-zero exit code {e.returncode}")
-        results = {"error": f"Subprocess crashed: {str(e)}"}
+        # Build more informative error with actual traceback if possible
+        error_msg = f"Subprocess crashed: {str(e)}"
+        if e.stderr:
+            error_msg += f"\nStderr: {e.stderr}"
+        if e.stdout:
+            error_msg += f"\nStdout: {e.stdout}"
+        results = {"error": error_msg}
     except Exception as e:
         print(f"\nError orchestrating {benchmark_name}: {e}")
         import traceback
@@ -311,13 +322,22 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 found_squad = False
                 for key, data in squad_results.items():
                     if "squad" in key.lower() and isinstance(data, dict):
+                        # EM and F1 are standard
                         exact_match = data.get("exact_match,none", data.get("exact_match", data.get("contains,none", 0)))
                         f1 = data.get("f1,none", data.get("f1", 0))
+                        
+                        # Defensive: if EM exists but F1 is 0, try to find ANY F1-like key
+                        if exact_match > 0 and f1 == 0:
+                            for k, v in data.items():
+                                if "f1" in k.lower() and isinstance(v, (int, float)) and v > 0:
+                                    f1 = v
+                                    break
+                                    
                         print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
                         found_squad = True
                         break
                 if not found_squad:
-                    # Fallback for direct keys if nested results not matched
+                    # Fallback for direct keys
                     em = benchmark_results.get("exact_match", 0)
                     f1 = benchmark_results.get("f1", 0)
                     if em > 0 or f1 > 0:
@@ -331,12 +351,19 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 gpqa_results = benchmark_results["results"]
                 found_gpqa = False
                 for key, data in gpqa_results.items():
-                    if "gpqa" in key.lower() or "diamond" in key.lower():
-                        if isinstance(data, dict):
-                            acc = data.get("acc_norm,none", data.get("acc_norm", data.get("acc,none", data.get("acc", 0))))
-                            print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
-                            found_gpqa = True
-                            break
+                    if ("gpqa" in key.lower() or "diamond" in key.lower()) and isinstance(data, dict):
+                        acc = data.get("acc_norm,none", data.get("acc_norm", data.get("acc,none", data.get("acc", 0))))
+                        
+                        # Robustness: try to find ANYTHING accuracy-like if 0
+                        if acc == 0:
+                            for k, v in data.items():
+                                if "acc" in k.lower() and isinstance(v, (int, float)) and v > acc:
+                                    acc = v
+                                    
+                        print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                        found_gpqa = True
+                        break
+                
                 if not found_gpqa and gpqa_results:
                      # If no 'gpqa' key found, check the first key if there's only one
                      if len(gpqa_results) == 1:
@@ -344,8 +371,11 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                          data = gpqa_results[key]
                          if isinstance(data, dict):
                              acc = data.get("acc_norm,none", data.get("acc_norm", data.get("acc,none", data.get("acc", 0))))
-                             print(f"{benchmark_name.upper()} ({key}): Accuracy = {acc:.4f}")
+                             print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
                              found_gpqa = True
+                
+                if not found_gpqa:
+                    print(f"{benchmark_name.upper()}: Accuracy = N/A")
                 if not found_gpqa:
                      print(f"{benchmark_name.upper()}: Could not extract accuracy (check verbose output)")
 

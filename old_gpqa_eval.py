@@ -37,7 +37,6 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_gpqa_diamond(
     model_path: str,
-    model: str = "hf",
     num_fewshot: int = 0,
     limit: Optional[int] = None,
     device: Optional[str] = None,
@@ -74,29 +73,25 @@ def evaluate_gpqa_diamond(
         print("GPQA DIAMOND EVALUATION")
         print("=" * 60)
     
-    # Auto-detect device if not specified
-    if device is None:
-        if model == "vllm":
-            device = "cuda"
-        elif torch.cuda.is_available():
-            device = "cuda"
-        elif torch.backends.mps.is_available():
-            device = "mps"
-        else:
-            device = "cpu"
-
     # Auto-detect dtype if not specified
     if dtype is None:
-        if model == "vllm":
+        if torch.cuda.is_available():
             dtype_str = "float16"
-        elif device == "cuda" and torch.cuda.is_available():
-            dtype_str = "float16"
-        elif device == "mps" and torch.backends.mps.is_available():
+        elif torch.backends.mps.is_available():
             dtype_str = "float16"
         else:
             dtype_str = "float32"
     else:
         dtype_str = str(dtype).replace("torch.", "")
+    
+    # Auto-detect device if not specified
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates
@@ -146,20 +141,6 @@ def evaluate_gpqa_diamond(
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
-    
-    # vLLM robustness flags
-    if model == "vllm":
-        # Explicit max_model_len to avoid auto-derivation bugs
-        base_model_args_parts.append("max_model_len=4096")
-        # Disable chunked prefill which can cause NoneType errors in 0.6.3
-        base_model_args_parts.append("enable_chunked_prefill=False")
-        # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
-        base_model_args_parts.append("max_num_batched_tokens=4096")
-        # Limit max_num_seqs and memory to avoid OOM
-        # GPQA is very memory intensive due to long contexts/logprobs
-        base_model_args_parts.append("max_num_seqs=32")
-        base_model_args_parts.append("gpu_memory_utilization=0.7")
-        
     base_model_args_str = ",".join(base_model_args_parts)
     
     # Try different configurations for chat template
@@ -181,7 +162,6 @@ def evaluate_gpqa_diamond(
         print("GPQA: Running...", end=" ", flush=True)
     
     # Task name varies across lm-eval versions
-    # We add 'gpqa' as a generic fallback which might be a group containing diamond
     task_candidates = ["gpqa_diamond", "gpqa-diamond", "gpqa"]
     results = None
     task_errors = []
@@ -200,47 +180,34 @@ def evaluate_gpqa_diamond(
             for config in configs_to_try:
                 try:
                     eval_kwargs = {
-                        "model": model, # Use passed-in backend
+                        "model": "hf",
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,
                         "limit": limit,
                         "batch_size": batch_size,
+                        "device": device,
                         # Set generation parameters for proper evaluation
                         "gen_kwargs": {
                             "temperature": 0.0,  # Deterministic for fair evaluation
                             "max_gen_toks": 256,  # Sufficient for GPQA answers
                         }
                     }
-                    # Only pass device for non-vllm models (vllm handles devices internally)
-                    if model != "vllm":
-                        eval_kwargs["device"] = device
-                        
                     eval_kwargs.update(config)
-                    
-                    # Filter out None values to prevent library-level crashes on comparisons
-                    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
-                    
-                    if verbose:
-                        print(f"DEBUG: Attempting task '{task_name}' with config {config}")
-                        
-                    results = simple_evaluate(**filtered_eval_kwargs)
+                    results = simple_evaluate(**eval_kwargs)
                     break
-                except Exception as e:
+                except TypeError as e:
                     if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                         if verbose:
                             print(f"Chat template config not supported: {config}; retrying without it.")
                         continue
-                        
+                    raise
+                except Exception as e:
                     if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
-                        task_errors.append(f"{task_name}: {str(e)}")
+                        task_errors.append(str(e))
                         if verbose:
-                            print(f"Task '{task_name}' not found or failed, trying next alias/config...")
+                            print(f"Task '{task_name}' not found, trying next alias if available...")
                         break
-                    
-                    # Print full traceback for unexpected errors
-                    import traceback
-                    traceback.print_exc()
                     raise
             if results is not None:
                 break
@@ -256,28 +223,20 @@ def evaluate_gpqa_diamond(
     # Extract and print key metrics
     if "results" in results:
         gpqa_results = results["results"]
-        if verbose:
-             print(f"DEBUG: GPQA Raw results keys: {list(gpqa_results.keys())}")
-             
-        found_key = False
+        # GPQA typically reports accuracy
         for key, value in gpqa_results.items():
             if "gpqa" in key.lower() or "diamond" in key.lower():
-                found_key = True
                 if isinstance(value, dict):
-                    acc = value.get("acc_norm,none", value.get("acc_norm", value.get("acc,none", value.get("acc", 0))))
-                    if verbose:
-                        print("\n" + "=" * 60)
-                        print("GPQA DIAMOND RESULTS")
-                        print("=" * 60)
-                        print(f"\nTask: {key}")
-                        print(f"GPQA Diamond Accuracy: {acc:.4f}")
-                        print(f"Available metrics for this task: {list(value.keys())}")
-                    else:
-                        print(f"Accuracy: {acc:.4f}")
+                    acc = value.get("acc", value.get("acc,none", 0))
+                    if acc:
+                        if verbose:
+                            print("\n" + "=" * 60)
+                            print("GPQA DIAMOND RESULTS")
+                            print("=" * 60)
+                            print(f"\nGPQA Diamond Accuracy: {acc:.4f}")
+                        else:
+                            print(f"Accuracy: {acc:.4f}")
                 break
-        
-        if not found_key and verbose:
-            print(f"WARNING: Could not find any keys containing 'gpqa' or 'diamond' in results: {list(gpqa_results.keys())}")
     
     return results
 

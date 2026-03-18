@@ -1,33 +1,12 @@
-============================================================
-CODING EVALUATION: humaneval,mbpp
-============================================================
-
-Running coding evaluation for tasks: humaneval,mbpp
-Model: meta-llama/Llama-3.1-8B-Instruct
-Chat template: True
-WARNING 03-18 00:01:10 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-18 00:01:15 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-18 00:01:17 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-18 00:01:17 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-18 00:01:26 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-18 00:01:26 gpu_executor.py:122] # GPU blocks: 24475, # CPU blocks: 2048
-INFO 03-18 00:01:26 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.61x
-INFO 03-18 00:01:29 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-18 00:01:29 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-18 00:01:32 model_runner.py:1523] Graph capturing finished in 3 secs.
-Task marked as unsafe, retrying with confirm_run_unsafe_code=True...
-WARNING 03-18 00:01:54 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-18 00:01:54 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-18 00:01:55 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-18 00:01:55 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-18 00:02:04 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-18 00:02:04 gpu_executor.py:122] # GPU blocks: 24547, # CPU blocks: 2048
-INFO 03-18 00:02:04 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 95.89x
-DEBUG: Running ifeval with filtered_kwargs:
-  - model: vllm (type: <class 'str'>)
-  - limit: None (type: <class 'NoneType'>)
-  - batch_size: auto (type: <class 'str'>)
-  - device: None (type: <class 'NoneType'>)
-  - trust_remote_code: False (type: <class 'bool'>)
-  - apply_chat_template: None (type: <class 'NoneType'>)
-  - verbose: True (type: <class 'bool'>)
+EVALUATION SUMMARY
+================================================================================
+MMLU: Accuracy = 0.6874
+MATH: Accuracy = 0.4262
+GSM8K: Accuracy = 0.8180
+CODING: ERROR - Subprocess crashed: Command '['/scratch/biggs.s/conda_envs/rl_casino/bin/python', '-c', '\nimport sys\nimport json\nimport os\nimport traceback\nimport inspect\n\nsys.path.append(\'/home/biggs.s/rl_casino/src\')\n\ntry:\n    from evaluation.coding_evaluator import evaluate_coding\n    \n    # Introspect exactly what arguments this evaluator accepts so we don\'t throw an unexpected keyword arg\n    raw_kwargs = {\'model\': \'vllm\', \'limit\': None, \'batch_size\': \'auto\', \'device\': None, \'trust_remote_code\': False, \'apply_chat_template\': None, \'method\': \'lm_eval\'}\n    evaluator_signature = inspect.signature(evaluate_coding)\n    accepts_var_kwargs = any(\n        param.kind == inspect.Parameter.VAR_KEYWORD\n        for param in evaluator_signature.parameters.values()\n    )\n    \n    if accepts_var_kwargs:\n        filtered_kwargs = raw_kwargs\n    else:\n        filtered_kwargs = {\n            key: value\n            for key, value in raw_kwargs.items()\n            if key in evaluator_signature.parameters\n        }\n        if "model" in evaluator_signature.parameters and "model" in raw_kwargs:\n            filtered_kwargs["model"] = raw_kwargs["model"]\n            \n    if "verbose" not in filtered_kwargs:\n        filtered_kwargs["verbose"] = True\n        \n    if True:\n        print(f"DEBUG: Running coding with filtered_kwargs:")\n        for k, v in filtered_kwargs.items():\n            print(f"  - {k}: {v} (type: {type(v)})")\n    \n    results = evaluate_coding(model_path=\'meta-llama/Llama-3.1-8B-Instruct\', **filtered_kwargs)\n    \n    # Write to transport file\n    with open(\'/tmp/tmpy_lestd8.json\', \'w\') as f:\n        json.dump(results, f, default=str)\nexcept Exception as e:\n    traceback.print_exc()\n    sys.exit(1)\n']' returned non-zero exit status 1.
+IFEVAL: Strict Acc = 0.7412, Loose Acc = 0.7874
+SQUAD: Exact Match = 0.6877, F1 = 0.0000
+GPQA_DIAMOND: Accuracy = 0.0000
+================================
+Evaluation finished at: Wed Mar 18 03:28:48 EDT 2026
+Results saved to: results/eval_5169301
