@@ -22,7 +22,7 @@ pip install rouge-score || {
 
 # Step 3: Install all dependencies from the dedicated eval_requirements.txt
 echo "Step 3: Installing evaluation dependencies from eval_requirements.txt..."
-pip install --upgrade --force-reinstall --no-cache-dir --index-url https://pypi.org/simple -r eval_requirements.txt
+pip install --upgrade --index-url https://pypi.org/simple -r eval_requirements.txt
 
 # Post-install fixes if needed
 echo "Step 4: Verifying installation..."

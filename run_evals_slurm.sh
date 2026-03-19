@@ -97,13 +97,15 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export CUDA_MODULE_LOADING=LAZY
 
 # We use the environment's python directly
-$PYTHON_BIN src/evaluation/run_all_benchmarks.py \
+echo "DEBUG: Launching run_all_benchmarks.py via $PYTHON_BIN"
+PYTHONUNBUFFERED=1 $PYTHON_BIN src/evaluation/run_all_benchmarks.py \
   --output_dir "results/eval_${SLURM_JOB_ID}" \
   --batch_size "$BATCH_SIZE" \
   ${LIMIT:+--limit "$LIMIT"} \
   --verbose \
   $VLLM_ARG \
   "$@"
+echo "DEBUG: run_all_benchmarks.py command completed with exit code $?"
 
 echo "================================"
 echo "Evaluation finished at: $(date)"

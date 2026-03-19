@@ -1,23 +1,11 @@
-"""
-Unified evaluation runner for all LLM benchmarks.
-Supports running individual benchmarks or all benchmarks at once.
-"""
-
-import multiprocessing
-try:
-    # This MUST be the first thing that happens to fix the vLLM CUDA conflict
-    multiprocessing.set_start_method('spawn', force=True)
-except RuntimeError:
-    pass
-print(f"Multiprocessing start method: {multiprocessing.get_start_method()}")
-
-import os
 import sys
+import os
 import argparse
 import inspect
 import json
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+import multiprocessing
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -400,6 +388,17 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
 
 
 if __name__ == "__main__":
+    # This MUST be the first thing that happens in the main process
+    # to fix the vLLM CUDA conflict when using isolated subprocesses.
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass
+        
+    print(f"DEBUG: run_all_benchmarks.py starting")
+    print(f"DEBUG: Python version: {sys.version}")
+    print(f"DEBUG: Multiprocessing start method: {multiprocessing.get_start_method()}")
+    
     parser = argparse.ArgumentParser(
         description="Run LLM benchmark evaluations",
         formatter_class=argparse.RawDescriptionHelpFormatter,
