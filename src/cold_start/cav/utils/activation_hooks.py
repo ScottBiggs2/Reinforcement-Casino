@@ -5,16 +5,6 @@ import torch.nn as nn
 from collections import defaultdict
 
 
-def infer_model_input_device(model) -> torch.device:
-    """Infer the device that should receive model inputs."""
-    if hasattr(model, "hf_device_map") and model.hf_device_map:
-        first_device = next(iter(model.hf_device_map.values()))
-        if isinstance(first_device, str) and first_device not in {"cpu", "disk"}:
-            return torch.device(first_device)
-
-    return next(model.parameters()).device
-
-
 class FeatureExtractor:
     """Capture one pooled activation vector per sample for each `down_proj` layer."""
 

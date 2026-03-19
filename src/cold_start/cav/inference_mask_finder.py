@@ -1,51 +1,30 @@
 #!/usr/bin/env python3
-"""
-Cold-Start Inference Mask Finder
-=================================
-Generates a sparse subnetwork mask WITHOUT any training steps.
-
-Supported methods:
-  cav   – Concept Activation Vectors (Chosen vs Rejected probes)   [default]
-  snip  – SNIP gradient saliency (single backward pass, no update)
-
-Output format is identical to even_better_mask_finder.py and is directly
-compatible with SparseMaskManager:
-  torch.save({"masks": masks, "metadata": metadata}, path)
-
-Usage:
-  python src/cold_start/inference_mask_finder.py \
-      --method cav \
-      --n_samples 64 \
-      --sparsity 90.0 \
-      --output masks/cold_start_cav_90pct.pt
-
-  python src/cold_start/inference_mask_finder.py \
-      --method snip \
-      --n_samples 64 \
-      --sparsity 90.0 \
-      --output masks/cold_start_snip_90pct.pt
-"""
+"""Build cold-start masks from a small calibration set with CAV or SNIP."""
 
 import os
 import sys
 import argparse
+import random
+import numpy as np
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Make sure project root is on the path regardless of CWD
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from src.cold_start.utils.activation_hooks import FeatureExtractor
+from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_input_device
 from src.cold_start.utils.cav_probes import CAVProbeScorer
 from src.cold_start.utils.snip_scorer import SNIPScorer
 
-
-# ---------------------------------------------------------------------------
-# Dataset helpers
-# ---------------------------------------------------------------------------
-
 DATASET_NAME = "qihoo360/Light-R1-DPOData"
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _msg_to_text(x):
@@ -58,13 +37,11 @@ def _msg_to_text(x):
     return str(x)
 
 
-def load_calibration_samples(n_samples=64):
-    """
-    Load n_samples from the DPO dataset.
-    Returns lists: chosen_texts, rejected_texts
-    """
+def load_calibration_samples(n_samples=64, seed=42):
+    """Load a small chosen/rejected calibration split from the DPO dataset."""
     print(f"Loading {n_samples} calibration samples from {DATASET_NAME}...")
     raw = load_dataset(DATASET_NAME, split="train")
+    raw = raw.shuffle(seed=seed)
 
     chosen_texts   = []
     rejected_texts = []
@@ -91,17 +68,11 @@ def load_calibration_samples(n_samples=64):
         if not chosen or not rejected:
             continue
 
-        # Concatenate prompt + response for context
         chosen_texts.append(prompt + "\n" + chosen)
         rejected_texts.append(prompt + "\n" + rejected)
 
     print(f"  Loaded {len(chosen_texts)} chosen / {len(rejected_texts)} rejected samples.")
     return chosen_texts, rejected_texts
-
-
-# ---------------------------------------------------------------------------
-# Mask saving (SparseMaskManager-compatible)
-# ---------------------------------------------------------------------------
 
 def save_masks(masks, output_path, metadata=None):
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
@@ -118,13 +89,10 @@ def save_masks(masks, output_path, metadata=None):
     print(f"  Active (kept)      : {int(kept):,}")
     print(f"  Sparsity           : {actual:.2f}%")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
 def main(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    set_seed(args.seed)
+
+    compute_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*60}")
     print(f"Cold-Start Mask Finder  [method={args.method}]")
     print(f"{'='*60}")
@@ -132,16 +100,15 @@ def main(args):
     print(f"  N samples  : {args.n_samples}")
     print(f"  Sparsity   : {args.sparsity}%")
     print(f"  Output     : {args.output}")
-    print(f"  Device     : {device}")
+    print(f"  Seed       : {args.seed}")
+    print(f"  Device     : {compute_device}")
     print(f"{'='*60}\n")
 
-    # ---- Load tokenizer ------------------------------------------------
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
-    # ---- Load model (inference only) -----------------------------------
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
@@ -150,27 +117,27 @@ def main(args):
         device_map="auto" if torch.cuda.is_available() else None,
     )
     if not torch.cuda.is_available():
-        model.to(device)
+        model.to(compute_device)
     model.config.use_cache = False
+    input_device = infer_model_input_device(model)
     print(f"  Model on {next(model.parameters()).device}, dtype={model.dtype}")
+    print(f"  Input device: {input_device}")
 
-    # ---- Load calibration data -----------------------------------------
-    chosen_texts, rejected_texts = load_calibration_samples(args.n_samples)
+    chosen_texts, rejected_texts = load_calibration_samples(args.n_samples, seed=args.seed)
 
-    # ---- Run scoring ---------------------------------------------------
     if args.method == "cav":
         extractor = FeatureExtractor()
         extractor.register(model)
 
         print("\n[CAV] Collecting chosen activations...")
         pos_acts = extractor.collect(
-            model, tokenizer, chosen_texts, device,
+            model, tokenizer, chosen_texts, input_device,
             max_length=args.max_length, batch_size=args.batch_size,
         )
 
         print("[CAV] Collecting rejected activations...")
         neg_acts = extractor.collect(
-            model, tokenizer, rejected_texts, device,
+            model, tokenizer, rejected_texts, input_device,
             max_length=args.max_length, batch_size=args.batch_size,
         )
 
@@ -187,6 +154,7 @@ def main(args):
             "n_samples": args.n_samples,
             "sparsity_percent": args.sparsity,
             "dataset": DATASET_NAME,
+            "seed": args.seed,
             "mag_weight": args.mag_weight,
         }
 
@@ -194,7 +162,7 @@ def main(args):
         print("[SNIP] Computing gradient saliency scores...")
         scorer = SNIPScorer()
         snip_scores = scorer.score(
-            model, tokenizer, chosen_texts, device,
+            model, tokenizer, chosen_texts, input_device,
             max_length=args.max_length, batch_size=args.batch_size,
         )
         masks = scorer.scores_to_masks(snip_scores, sparsity_percent=args.sparsity)
@@ -205,12 +173,12 @@ def main(args):
             "n_samples": args.n_samples,
             "sparsity_percent": args.sparsity,
             "dataset": DATASET_NAME,
+            "seed": args.seed,
         }
 
     else:
         raise ValueError(f"Unknown method: {args.method}. Choose 'cav' or 'snip'.")
 
-    # ---- Save mask -----------------------------------------------------
     save_masks(masks, args.output, metadata)
     print("\n[Done] Cold-start mask generation complete.")
 
@@ -233,6 +201,8 @@ if __name__ == "__main__":
                         help="Output .pt file path")
     parser.add_argument("--max_length", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for dataset sampling and scoring reproducibility")
     parser.add_argument(
         "--mag_weight", type=float, default=1.0,
         help=(

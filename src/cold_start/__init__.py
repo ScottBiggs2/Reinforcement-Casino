@@ -1,2 +1,1 @@
-# Cold Start Subnetwork Discovery
-# Inference-only mask finding without training steps.
+"""Cold-start mask discovery tools."""
