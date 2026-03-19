@@ -82,6 +82,19 @@ def evaluate_mmlu(
     if verbose:
         print("=" * 60)
         print("MMLU EVALUATION")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+            print(f"Allocated: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
+            print(f"Reserved: {torch.cuda.memory_reserved(0) / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
         print("=" * 60)
     
     # Auto-detect device if not specified
@@ -172,8 +185,8 @@ def evaluate_mmlu(
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
         base_model_args_parts.append("max_num_batched_tokens=4096")
         # Limit max_num_seqs and memory to avoid OOM
-        base_model_args_parts.append("max_num_seqs=64")
-        base_model_args_parts.append("gpu_memory_utilization=0.8")
+        base_model_args_parts.append("max_num_seqs=32")
+        base_model_args_parts.append("gpu_memory_utilization=0.7")
         
     base_model_args_str = ",".join(base_model_args_parts)
     
@@ -229,16 +242,40 @@ def evaluate_mmlu(
                 # Filter out None values to prevent library-level crashes on comparisons
                 filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
                 
+                if verbose:
+                    print(f"\nDEBUG: Attempting MMLU with config: {config}")
+                    if torch.cuda.is_available():
+                        print(f"Pre-eval Memory: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
+                
                 results = simple_evaluate(**filtered_eval_kwargs)
+                
+                if verbose and torch.cuda.is_available():
+                    print(f"Post-eval Memory: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
                 break
             except Exception as e:
                 import traceback
-                traceback.print_exc()
-                if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
+                
+                # Check for known chat template or fewshot issues
+                error_msg = str(e)
+                chat_template_errors = [
+                    "apply_chat_template",
+                    "fewshot_as_multiturn",
+                    "Answer is not a string",
+                    "AssertionError"
+                ]
+                
+                if any(err in error_msg for err in chat_template_errors) or isinstance(e, AssertionError):
                     if verbose:
-                        print(f"Chat template config not supported: {config}; retrying without it.")
+                        traceback.print_exc()
+                        print(
+                            f"Chat template config or mult-turn fewshot not supported: {config}; "
+                            "retrying with simpler config."
+                        )
                     last_error = e
                     continue
+                
+                # Print full traceback for unexpected errors
+                traceback.print_exc()
                 raise
     
     if not verbose:

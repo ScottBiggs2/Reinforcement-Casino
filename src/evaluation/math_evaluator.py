@@ -75,6 +75,17 @@ def evaluate_math(
     if verbose:
         print("=" * 60)
         print("MATH EVALUATION")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
         print("=" * 60)
     
     # Auto-detect device if not specified
@@ -165,8 +176,8 @@ def evaluate_math(
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
         base_model_args_parts.append("max_num_batched_tokens=4096")
         # Limit max_num_seqs and memory to avoid OOM
-        base_model_args_parts.append("max_num_seqs=64")
-        base_model_args_parts.append("gpu_memory_utilization=0.8")
+        base_model_args_parts.append("max_num_seqs=32")
+        base_model_args_parts.append("gpu_memory_utilization=0.7")
         
     base_model_args_str = ",".join(base_model_args_parts)
     

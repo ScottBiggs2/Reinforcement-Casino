@@ -170,8 +170,10 @@ except Exception as e:
         # Build more informative error with actual traceback if possible
         error_msg = f"Subprocess crashed: {str(e)}"
         if e.stderr:
+            print(f"Stderr:\n{e.stderr}")
             error_msg += f"\nStderr: {e.stderr}"
         if e.stdout:
+            print(f"Stdout:\n{e.stdout}")
             error_msg += f"\nStdout: {e.stdout}"
         results = {"error": error_msg}
     except Exception as e:

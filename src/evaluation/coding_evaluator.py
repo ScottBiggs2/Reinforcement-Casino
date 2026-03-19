@@ -72,6 +72,17 @@ def evaluate_coding(
     if verbose:
         print("=" * 60)
         print(f"CODING EVALUATION: {tasks}")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
         print("=" * 60)
     
     # Auto-detect device
@@ -115,8 +126,8 @@ def evaluate_coding(
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
         base_model_args_parts.append("max_num_batched_tokens=4096")
         # Limit max_num_seqs and memory to avoid OOM
-        base_model_args_parts.append("max_num_seqs=64")
-        base_model_args_parts.append("gpu_memory_utilization=0.8")
+        base_model_args_parts.append("max_num_seqs=32")
+        base_model_args_parts.append("gpu_memory_utilization=0.7")
         
     base_model_args_str = ",".join(base_model_args_parts)
     
@@ -145,46 +156,62 @@ def evaluate_coding(
     if model != "vllm":
         eval_kwargs["device"] = device
     
+    # Try different configurations for chat template
+    configs_to_try = []
     if apply_chat_template:
-        eval_kwargs["apply_chat_template"] = True
-        
-    # Attempt to run with code execution allowed if the version supports it
-    # We use a more robust way to check for the argument to avoid the crash in the worker
-    import inspect
-    sig = inspect.signature(simple_evaluate)
-    if "allow_code_execution" in sig.parameters:
-        eval_kwargs["allow_code_execution"] = True
+        configs_to_try.append({"apply_chat_template": True})
+    configs_to_try.append({})  # Base config without chat template
+    
+    results = None
+    last_error = None
+    
+    for config in configs_to_try:
+        try:
+            current_eval_kwargs = eval_kwargs.copy()
+            current_eval_kwargs.update(config)
+            
+            # Filter out None values to prevent library-level crashes on comparisons
+            filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
+            
+            # Attempt to run with code execution allowed if the version supports it
+            import inspect
+            sig = inspect.signature(simple_evaluate)
+            if "allow_code_execution" in sig.parameters:
+                filtered_eval_kwargs["allow_code_execution"] = True
 
-    try:
-        # Filter out None values to prevent library-level crashes on comparisons
-        filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
-        results = simple_evaluate(**filtered_eval_kwargs)
-    except Exception as e:
-        if "marked as unsafe" in str(e) or "allow_code_execution" in str(e) or "confirm_run_unsafe_code" in str(e):
-            if verbose:
-                print("Task marked as unsafe, retrying with confirm_run_unsafe_code=True...")
-            # Set the environment variable just in case
-            os.environ["HF_ALLOW_CODE_EVAL"] = "1"
-            
-            filtered_eval_kwargs["confirm_run_unsafe_code"] = True
-            
-            try:
-                # Retry with confirm_run_unsafe_code
-                results = simple_evaluate(**filtered_eval_kwargs)
-            except TypeError as te:
-                if "unexpected keyword argument" in str(te):
-                    # If kwargs is rejected, try with allow_code_execution=True
-                    del filtered_eval_kwargs["confirm_run_unsafe_code"]
-                    filtered_eval_kwargs["allow_code_execution"] = True
-                    results = simple_evaluate(**filtered_eval_kwargs)
-                else:
-                    raise
-        else:
+            results = simple_evaluate(**filtered_eval_kwargs)
+            break
+        except Exception as e:
             import traceback
-            if verbose:
-                print(f"Error in simple_evaluate: {e}")
+            error_msg = str(e)
+            
+            # Check for known chat template or code evaluation issues
+            retry_errors = [
+                "apply_chat_template",
+                "marked as unsafe",
+                "allow_code_execution",
+                "confirm_run_unsafe_code",
+                "AssertionError"
+            ]
+            
+            if any(err in error_msg for err in retry_errors) or isinstance(e, AssertionError):
+                if verbose:
+                    traceback.print_exc()
+                    print(f"Error with config {config}, retrying with simpler config/flags...")
+                
+                # Set specific flags for retry if related to safety
+                if "marked as unsafe" in error_msg or "confirm_run_unsafe_code" in error_msg:
+                    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
+                    eval_kwargs["confirm_run_unsafe_code"] = True
+                
+                last_error = e
+                continue
+            
             traceback.print_exc()
             raise e
+
+    if results is None:
+        raise last_error or RuntimeError("Failed to run coding evaluation.")
         
     if verbose and "results" in results:
         print("\n" + "=" * 60)

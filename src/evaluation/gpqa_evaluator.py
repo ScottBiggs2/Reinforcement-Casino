@@ -71,7 +71,18 @@ def evaluate_gpqa_diamond(
     
     if verbose:
         print("=" * 60)
-        print("GPQA DIAMOND EVALUATION")
+        print("GPQA EVALUATION")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
         print("=" * 60)
     
     # Auto-detect device if not specified
@@ -157,8 +168,8 @@ def evaluate_gpqa_diamond(
         base_model_args_parts.append("max_num_batched_tokens=4096")
         # Limit max_num_seqs and memory to avoid OOM
         # GPQA is very memory intensive due to long contexts/logprobs
-        base_model_args_parts.append("max_num_seqs=32")
-        base_model_args_parts.append("gpu_memory_utilization=0.7")
+        base_model_args_parts.append("max_num_seqs=16")
+        base_model_args_parts.append("gpu_memory_utilization=0.6")
         
     base_model_args_str = ",".join(base_model_args_parts)
     
@@ -182,7 +193,8 @@ def evaluate_gpqa_diamond(
     
     # Task name varies across lm-eval versions
     # We add 'gpqa' as a generic fallback which might be a group containing diamond
-    task_candidates = ["gpqa_diamond", "gpqa-diamond", "gpqa"]
+    # Try common task aliases
+    task_candidates = ["gpqa_diamond", "gpqa_diamond_n-shot", "gpqa_diamond_zeroshot", "gpqa"]
     results = None
     task_errors = []
     
@@ -227,9 +239,21 @@ def evaluate_gpqa_diamond(
                     results = simple_evaluate(**filtered_eval_kwargs)
                     break
                 except Exception as e:
-                    if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
+                    import traceback
+                    error_msg = str(e)
+                    
+                    # Check for known chat template or fewshot issues
+                    chat_template_errors = [
+                        "apply_chat_template",
+                        "fewshot_as_multiturn",
+                        "Answer is not a string",
+                        "AssertionError"
+                    ]
+                    
+                    if any(err in error_msg for err in chat_template_errors) or isinstance(e, AssertionError):
                         if verbose:
-                            print(f"Chat template config not supported: {config}; retrying without it.")
+                            traceback.print_exc()
+                            print(f"Chat template config or mult-turn fewshot not supported: {config}; retrying with simpler config.")
                         continue
                         
                     if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
@@ -239,7 +263,6 @@ def evaluate_gpqa_diamond(
                         break
                     
                     # Print full traceback for unexpected errors
-                    import traceback
                     traceback.print_exc()
                     raise
             if results is not None:
@@ -264,16 +287,15 @@ def evaluate_gpqa_diamond(
             if "gpqa" in key.lower() or "diamond" in key.lower():
                 found_key = True
                 if isinstance(value, dict):
-                    acc = value.get("acc_norm,none", value.get("acc_norm", value.get("acc,none", value.get("acc", 0))))
+                    gpqa_score = value.get("acc_norm,none", value.get("acc_norm", value.get("acc,none", value.get("acc", 0))))
                     if verbose:
                         print("\n" + "=" * 60)
                         print("GPQA DIAMOND RESULTS")
                         print("=" * 60)
-                        print(f"\nTask: {key}")
-                        print(f"GPQA Diamond Accuracy: {acc:.4f}")
+                        print(f"\nGPQA Diamond Accuracy: {gpqa_score:.4f}")
                         print(f"Available metrics for this task: {list(value.keys())}")
                     else:
-                        print(f"Accuracy: {acc:.4f}")
+                        print(f"GPQA Diamond Accuracy: {gpqa_score:.4f}")
                 break
         
         if not found_key and verbose:

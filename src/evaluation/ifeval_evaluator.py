@@ -75,6 +75,17 @@ def evaluate_ifeval(
     if verbose:
         print("=" * 60)
         print("IFEVAL EVALUATION")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
         print("=" * 60)
     
     # Auto-detect device
@@ -118,7 +129,8 @@ def evaluate_ifeval(
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
         base_model_args_parts.append("max_num_batched_tokens=4096")
         # Explicitly set max_num_seqs because lm-eval defaults it to None, crashing 0.6.3
-        base_model_args_parts.append("max_num_seqs=256")
+        base_model_args_parts.append("max_num_seqs=64")
+        base_model_args_parts.append("gpu_memory_utilization=0.7")
         
     base_model_args_str = ",".join(base_model_args_parts)
     
@@ -144,16 +156,48 @@ def evaluate_ifeval(
     if model != "vllm":
         eval_kwargs["device"] = device
     
+    # Try different configurations for chat template
+    configs_to_try = []
     if apply_chat_template:
-        eval_kwargs["apply_chat_template"] = True
-    try:
-        # Filter out None values to prevent library-level crashes on comparisons
-        filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
-        results = simple_evaluate(**filtered_eval_kwargs)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise e
+        configs_to_try.append({"apply_chat_template": True})
+    configs_to_try.append({})  # Base config without chat template
+    
+    results = None
+    last_error = None
+    
+    for config in configs_to_try:
+        try:
+            current_eval_kwargs = eval_kwargs.copy()
+            current_eval_kwargs.update(config)
+            
+            # Filter out None values to prevent library-level crashes on comparisons
+            filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
+            
+            results = simple_evaluate(**filtered_eval_kwargs)
+            break
+        except Exception as e:
+            import traceback
+            error_msg = str(e)
+            
+            # Check for known chat template or other library issues
+            retry_errors = [
+                "apply_chat_template",
+                "Answer is not a string",
+                "AssertionError"
+            ]
+            
+            if any(err in error_msg for err in retry_errors) or isinstance(e, AssertionError):
+                if verbose:
+                    traceback.print_exc()
+                    print(f"Error with config {config}, retrying with simpler config...")
+                last_error = e
+                continue
+            
+            traceback.print_exc()
+            raise e
+            
+    if results is None:
+        raise last_error or RuntimeError("Failed to run IFEval evaluation.")
     
     if verbose and "results" in results and "ifeval" in results["results"]:
         ifeval_data = results["results"]["ifeval"]

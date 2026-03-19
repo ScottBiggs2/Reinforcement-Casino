@@ -254,6 +254,17 @@ def evaluate_squad_with_lm_eval(
     if verbose:
         print("=" * 60)
         print("SQuAD EVALUATION (lm-evaluation-harness)")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
         print("=" * 60)
     
     # Auto-detect device if not specified
@@ -338,7 +349,8 @@ def evaluate_squad_with_lm_eval(
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
         base_model_args_parts.append("max_num_batched_tokens=4096")
         # Explicitly set max_num_seqs because lm-eval defaults it to None, crashing 0.6.3
-        base_model_args_parts.append("max_num_seqs=256")
+        base_model_args_parts.append("max_num_seqs=64")
+        base_model_args_parts.append("gpu_memory_utilization=0.7")
         
     base_model_args_str = ",".join(base_model_args_parts)
     
@@ -408,17 +420,30 @@ def evaluate_squad_with_lm_eval(
                     break
                 except Exception as e:
                     import traceback
-                    traceback.print_exc()
-                    if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
+                    error_msg = str(e)
+                    
+                    # Check for known chat template or fewshot issues
+                    chat_template_errors = [
+                        "apply_chat_template",
+                        "fewshot_as_multiturn",
+                        "Answer is not a string",
+                        "AssertionError"
+                    ]
+                    
+                    if any(err in error_msg for err in chat_template_errors) or isinstance(e, AssertionError):
                         if verbose:
-                            print(f"Chat template config not supported: {config}; retrying without it.")
+                            traceback.print_exc()
+                            print(f"Chat template config or mult-turn fewshot not supported: {config}; retrying with simpler config.")
                         continue
                         
                     if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
-                        task_errors.append(str(e))
+                        task_errors.append(f"{task_name}: {str(e)}")
                         if verbose:
-                            print(f"Task '{task_name}' not found, trying next alias if available...")
+                            print(f"Task '{task_name}' not found or failed, trying next alias/config...")
                         break
+                    
+                    # Print full traceback for unexpected errors
+                    traceback.print_exc()
                     raise
             if results is not None:
                 break
