@@ -49,14 +49,38 @@ def train(
     use_wandb,
     save_csv,
     grad_accum,
+    max_grad_norm,
+    adam_beta1,
+    adam_beta2,
+    adam_eps,
+    dpo_beta,
+    warmup_steps,
+    disable_tf32,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
     
     if run_name is None:
-        run_name = f"sparse_dpo_bsr_{optimizer_type}_{sanitize_model_name(model_name)}"
+        # Construct a descriptive run name
+        parts = ["sparse_dpo"]
+        
+        # Optimizer info
+        if optimizer_type == "sparse_adamw":
+            parts.append("bsr_adamw")
+        else:
+            parts.append(optimizer_type)
+            
+        # Backprop info (always BSR in this script, but good to label)
+        parts.append("bsr_backprop")
+        
+        # Model info
+        parts.append(sanitize_model_name(model_name))
+        
+        run_name = "_".join(parts)
     
+    wandb_project = "huggingface"
+    os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
     
@@ -88,24 +112,39 @@ def train(
                  if ('mlp' in n.lower() or not mlp_only) and 'weight' in n and mask_manager.has_mask(n)}
                  
     print(f"Injecting Sparse MLP BSR backward for {len(mask_dict)} layers...")
-    replace_linear_modules(model, mask_dict, block_size=block_size_bsr)
+    use_tf32_kernel = not disable_tf32
+    print(f"BSR Kernel TF32 Precision Enabled: {use_tf32_kernel}")
+    replace_linear_modules(model, mask_dict, block_size=block_size_bsr, use_tf32=use_tf32_kernel)
     
     # Optimizer Logic
     print(f"Initializing {optimizer_type}...")
     if optimizer_type == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     elif optimizer_type == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+        optimizer = torch.optim.AdamW(
+            model.parameters(), 
+            lr=learning_rate, 
+            betas=(adam_beta1, adam_beta2), 
+            eps=adam_eps
+        )
     elif optimizer_type == "sparse_adamw":
         optimizer = SparseAdamW(
             list(model.named_parameters()), 
             mask_manager, 
             lr=learning_rate, 
+            betas=(adam_beta1, adam_beta2),
+            eps=adam_eps,
             block_size=block_size_adam,
-            mlp_only=mlp_only
+            mlp_only=mlp_only,
+            max_grad_norm=max_grad_norm
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
+        
+    if disable_tf32:
+        print("Disabling TF32 for strict fp32 accumulation precision.")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
         
     # Checkpoint Schedule
     checkpoint_schedule = list(range(10, 50, 10)) + list(range(100, 250, 50))
@@ -131,7 +170,8 @@ def train(
         batch_size=batch_size,
         grad_accum=grad_accum,
         run_name=run_name,
-        use_wandb=use_wandb
+        use_wandb=use_wandb,
+        wandb_project=wandb_project
     ))
     
     if save_csv:
@@ -145,10 +185,14 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=1,
-        report_to="none",
+        report_to=["wandb"] if use_wandb else [],
+        run_name=run_name,
         remove_unused_columns=False,
         bf16=True,
         gradient_checkpointing=True,
+        max_grad_norm=max_grad_norm,
+        beta=dpo_beta,
+        warmup_steps=warmup_steps,
     )
     
     trainer = DPOTrainer(
@@ -178,6 +222,18 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_only", action="store_true", default=True)
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
+    parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
+    
+    # Stability Tuning Parameters
+    parser.add_argument("--max_grad_norm", type=float, default=1.0, help="Max gradient norm for clipping")
+    parser.add_argument("--adam_beta1", type=float, default=0.9, help="Adam beta1")
+    parser.add_argument("--adam_beta2", type=float, default=0.999, help="Adam beta2")
+    parser.add_argument("--adam_eps", type=float, default=1e-8, help="Adam epsilon (increase to 1e-5 for stability)")
+    
+    # Advanced Noise Reduction
+    parser.add_argument("--dpo_beta", type=float, default=0.1, help="DPO margin parameter (increase to 0.2-0.5 to bound updates)")
+    parser.add_argument("--warmup_steps", type=int, default=0, help="Linear warmup steps for LR scheduler")
+    parser.add_argument("--disable_tf32", action="store_true", help="Disable TF32 for strict fp32 math (slow but precise)")
     
     args = parser.parse_args()
     
@@ -189,7 +245,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.lr,
         subset_size=args.subset_size,
-        run_name=None,
+        run_name=args.run_name,
         mlp_only=args.mlp_only,
         block_size_bsr=args.block_size_bsr,
         block_size_adam=args.block_size_adam,
@@ -197,4 +253,11 @@ if __name__ == "__main__":
         use_wandb=args.use_wandb,
         save_csv=args.save_csv,
         grad_accum=args.grad_accum,
+        max_grad_norm=args.max_grad_norm,
+        adam_beta1=args.adam_beta1,
+        adam_beta2=args.adam_beta2,
+        adam_eps=args.adam_eps,
+        dpo_beta=args.dpo_beta,
+        warmup_steps=args.warmup_steps,
+        disable_tf32=args.disable_tf32,
     )

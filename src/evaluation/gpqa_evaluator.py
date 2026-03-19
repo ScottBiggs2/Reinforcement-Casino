@@ -37,6 +37,7 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_gpqa_diamond(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 0,
     limit: Optional[int] = None,
     device: Optional[str] = None,
@@ -73,25 +74,29 @@ def evaluate_gpqa_diamond(
         print("GPQA DIAMOND EVALUATION")
         print("=" * 60)
     
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype_str = "float16"
-        elif torch.backends.mps.is_available():
-            dtype_str = "float16"
-        else:
-            dtype_str = "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device if not specified
     if device is None:
-        if torch.cuda.is_available():
+        if model == "vllm":
+            device = "cuda"
+        elif torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        elif device == "cuda" and torch.cuda.is_available():
+            dtype_str = "float16"
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates
@@ -141,6 +146,14 @@ def evaluate_gpqa_diamond(
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
     base_model_args_str = ",".join(base_model_args_parts)
     
     # Try different configurations for chat template
@@ -180,29 +193,32 @@ def evaluate_gpqa_diamond(
             for config in configs_to_try:
                 try:
                     eval_kwargs = {
-                        "model": "hf",
+                        "model": model, # Use passed-in backend
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,
                         "limit": limit,
                         "batch_size": batch_size,
-                        "device": device,
-                        # Set generation parameters for proper evaluation
-                        "gen_kwargs": {
-                            "temperature": 0.0,  # Deterministic for fair evaluation
-                            "max_gen_toks": 256,  # Sufficient for GPQA answers
-                        }
                     }
+                    # Only pass device for non-vllm models (vllm handles devices internally)
+                    if model != "vllm":
+                        eval_kwargs["device"] = device
+                        
                     eval_kwargs.update(config)
-                    results = simple_evaluate(**eval_kwargs)
+                    
+                    # Filter out None values to prevent library-level crashes on comparisons
+                    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+                    
+                    results = simple_evaluate(**filtered_eval_kwargs)
                     break
-                except TypeError as e:
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                         if verbose:
                             print(f"Chat template config not supported: {config}; retrying without it.")
                         continue
-                    raise
-                except Exception as e:
+                        
                     if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
                         task_errors.append(str(e))
                         if verbose:

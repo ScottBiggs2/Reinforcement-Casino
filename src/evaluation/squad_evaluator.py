@@ -7,9 +7,8 @@ import sys
 import inspect
 from typing import Dict, Any, Optional, List
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForQuestionAnswering
-from datasets import load_dataset
-import evaluate
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -71,12 +70,6 @@ def evaluate_squad_with_hf_evaluate(
     try:
         if verbose:
             print("Attempting to load as QuestionAnswering model...")
-        if dtype is None:
-            if torch.cuda.is_available():
-                dtype = torch.float16
-            else:
-                dtype = torch.float32
-        
         if device is None:
             if torch.cuda.is_available():
                 device = "cuda"
@@ -84,6 +77,14 @@ def evaluate_squad_with_hf_evaluate(
                 device = "mps"
             else:
                 device = "cpu"
+        
+        if dtype is None:
+            if device == "cuda" and torch.cuda.is_available():
+                dtype = torch.float16
+            elif device == "mps" and torch.backends.mps.is_available():
+                dtype = torch.float16
+            else:
+                dtype = torch.float32
         
         model = AutoModelForQuestionAnswering.from_pretrained(
             model_path,
@@ -115,13 +116,17 @@ def evaluate_squad_with_hf_evaluate(
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
     
+    # Lazy imports
+    from datasets import load_dataset
+    import evaluate
+    
     # Load SQuAD dataset
     if verbose:
         print(f"\nLoading SQuAD {split} dataset...")
     dataset = load_dataset("squad", split=split)
     if limit:
-        dataset = dataset.select(range(min(limit, len(dataset))))
-    if verbose:
+        if limit is not None:
+            dataset = dataset.select(range(min(limit, len(dataset))))
         print(f"Loaded {len(dataset)} examples")
     
     # Load SQuAD metric
@@ -215,11 +220,12 @@ def evaluate_squad_with_hf_evaluate(
 
 def evaluate_squad_with_lm_eval(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 0,
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 8,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -250,25 +256,29 @@ def evaluate_squad_with_lm_eval(
         print("SQuAD EVALUATION (lm-evaluation-harness)")
         print("=" * 60)
     
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype_str = "float16"
-        elif torch.backends.mps.is_available():
-            dtype_str = "float16"
-        else:
-            dtype_str = "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device if not specified
     if device is None:
-        if torch.cuda.is_available():
+        if model == "vllm":
+            device = "cuda"
+        elif torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        elif device == "cuda" and torch.cuda.is_available():
+            dtype_str = "float16"
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates
@@ -318,6 +328,14 @@ def evaluate_squad_with_lm_eval(
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
     base_model_args_str = ",".join(base_model_args_parts)
     
     # Try different configurations for chat template
@@ -339,6 +357,11 @@ def evaluate_squad_with_lm_eval(
         print("SQuAD: Running...", end=" ", flush=True)
     
     task_candidates = ["squad", "squad_v2", "squad_completion"]
+    
+    # Lazy imports for stability
+    from lm_eval import simple_evaluate
+    import evaluate
+    
     results = None
     task_errors = []
     
@@ -356,29 +379,37 @@ def evaluate_squad_with_lm_eval(
             for config in configs_to_try:
                 try:
                     eval_kwargs = {
-                        "model": "hf",
+                        "model": model,
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,
                         "limit": limit,
                         "batch_size": batch_size,
-                        "device": device,
                         # Set generation parameters for proper evaluation
                         "gen_kwargs": {
                             "temperature": 0.0,  # Deterministic for fair evaluation
                             "max_gen_toks": 128,  # Sufficient for SQuAD answers
                         }
                     }
+                    # Only pass device for non-vllm models (vllm handles devices internally)
+                    if model != "vllm":
+                        eval_kwargs["device"] = device
+                        
                     eval_kwargs.update(config)
-                    results = simple_evaluate(**eval_kwargs)
+                    
+                    # Filter out None values to prevent library-level crashes on comparisons
+                    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+                    
+                    results = simple_evaluate(**filtered_eval_kwargs)
                     break
-                except TypeError as e:
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
                     if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                         if verbose:
                             print(f"Chat template config not supported: {config}; retrying without it.")
                         continue
-                    raise
-                except Exception as e:
+                        
                     if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
                         task_errors.append(str(e))
                         if verbose:
@@ -442,6 +473,11 @@ def evaluate_squad(
     # Only forward arguments the target evaluator knows how to handle
     signature = inspect.signature(target)
     accepted_params = set(signature.parameters.keys()) - {"model_path"}
+    
+    # Map 'model' to 'model' for target function
+    if "model" in kwargs and "model" in accepted_params:
+        kwargs["model"] = kwargs["model"]
+        
     filtered_kwargs = {
         key: value for key, value in kwargs.items() if key in accepted_params
     }

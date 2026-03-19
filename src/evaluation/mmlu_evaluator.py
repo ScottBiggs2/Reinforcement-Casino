@@ -10,12 +10,14 @@ import torch
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
+
 try:
     from lm_eval import simple_evaluate
     LM_EVAL_AVAILABLE = True
 except ImportError:
     LM_EVAL_AVAILABLE = False
-    print("Warning: lm-evaluation-harness not installed. Install with: pip install lm-eval")
 
 try:
     from transformers import AutoTokenizer
@@ -37,11 +39,12 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_mmlu(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 5,
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 8,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -51,11 +54,12 @@ def evaluate_mmlu(
     
     Args:
         model_path: Path to model (HuggingFace ID or local path)
+        model: Model backend ("hf" or "vllm")
         num_fewshot: Number of few-shot examples (default: 5)
         limit: Limit number of examples per task (None = all)
         device: Device to run on (auto-detect if None)
         dtype: Model dtype (auto-detect if None)
-        batch_size: Batch size for evaluation
+        batch_size: Batch size for evaluation (can be "auto")
         trust_remote_code: Whether to trust remote code
         apply_chat_template: Whether to apply the model's chat template (auto for instruct/chat if None)
         
@@ -73,25 +77,29 @@ def evaluate_mmlu(
         print("MMLU EVALUATION")
         print("=" * 60)
     
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype_str = "float16"
-        elif torch.backends.mps.is_available():
-            dtype_str = "float16"
-        else:
-            dtype_str = "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device if not specified
     if device is None:
-        if torch.cuda.is_available():
+        if model == "vllm":
+            device = "cuda"
+        elif torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        elif device == "cuda" and torch.cuda.is_available():
+            dtype_str = "float16"
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates
@@ -136,11 +144,25 @@ def evaluate_mmlu(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
+    # Lazy import for stability
+    try:
+        from lm_eval import simple_evaluate
+    except ImportError:
+        raise ImportError("lm-evaluation-harness is required for MMLU evaluation.")
+        
     # Build model_args string for lm-eval
     # lm-eval's from_pretrained will automatically detect and use .safetensors files
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
     base_model_args_str = ",".join(base_model_args_parts)
     
     # Try different configurations for chat template
@@ -179,23 +201,27 @@ def evaluate_mmlu(
         for config in configs_to_try:
             try:
                 eval_kwargs = {
-                    "model": "hf",
+                    "model": model,
                     "model_args": base_model_args_str,
                     "tasks": "mmlu",
                     "num_fewshot": num_fewshot,
                     "limit": limit,
                     "batch_size": batch_size,
-                    "device": device,
-                    # Set generation parameters for proper evaluation
-                    "gen_kwargs": {
-                        "temperature": 0.0,  # Deterministic for fair evaluation
-                        "max_gen_toks": 256,  # Sufficient for MMLU answers
-                    }
                 }
+                # Only pass device for non-vllm models (vllm handles devices internally)
+                if model != "vllm":
+                    eval_kwargs["device"] = device
+                    
                 eval_kwargs.update(config)
-                results = simple_evaluate(**eval_kwargs)
+                
+                # Filter out None values to prevent library-level crashes on comparisons
+                filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+                
+                results = simple_evaluate(**filtered_eval_kwargs)
                 break
-            except TypeError as e:
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
                 if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                     if verbose:
                         print(f"Chat template config not supported: {config}; retrying without it.")

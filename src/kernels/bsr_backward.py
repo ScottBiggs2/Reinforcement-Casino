@@ -10,6 +10,7 @@ def sparse_grad_weight_kernel(
     stride_go_batch, stride_go_out, stride_in_batch, stride_in_in,
     stride_gw_out, stride_gw_in, stride_m_out, stride_m_in,
     BLOCK_SIZE: tl.constexpr,
+    USE_TF32: tl.constexpr,
 ):
     """Computes grad_W = grad_output.T @ input ONLY for non-masked blocks."""
     pid = tl.program_id(0)
@@ -50,13 +51,18 @@ def sparse_grad_weight_kernel(
         in_mask = b_mask[:, None] & in_valid[None, :]
         inp = tl.load(input_ptr + in_offs, mask=in_mask, other=0.0)
         
-        acc += tl.dot(tl.trans(go), inp)
+        if USE_TF32:
+            go_f32 = go.to(tl.float32)
+            inp_f32 = inp.to(tl.float32)
+            acc += tl.dot(tl.trans(go_f32), inp_f32, allow_tf32=True)
+        else:
+            acc += tl.dot(tl.trans(go), inp)
         
     acc = acc * mask_block
     gw_offsets = out_offsets[:, None] * stride_gw_out + in_offsets[None, :] * stride_gw_in
     tl.store(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
 
-def sparse_weight_gradient_triton(grad_output, input_tensor, mask, block_size=16):
+def sparse_weight_gradient_triton(grad_output, input_tensor, mask, block_size=16, use_tf32=False):
     batch_size, output_dim = grad_output.shape
     _, input_dim = input_tensor.shape
     grad_weight = torch.empty(output_dim, input_dim, device=grad_output.device, dtype=grad_output.dtype)
@@ -70,5 +76,6 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, block_size=16
         grad_weight.stride(0), grad_weight.stride(1),
         mask.stride(0), mask.stride(1),
         BLOCK_SIZE=block_size,
+        USE_TF32=use_tf32,
     )
     return grad_weight

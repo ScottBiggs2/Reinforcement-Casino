@@ -44,6 +44,8 @@ parser.add_argument(
     default="google/gemma-3-270m-it",
     help="HuggingFace model name to load (default: google/gemma-3-270m-it)"
 )
+parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB")
+parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
 args = parser.parse_args()
 
 MODEL_NAME = args.model_name
@@ -60,17 +62,18 @@ DELTA_LOG_DIR = f"./delta_logs_{MODEL_NAME_SANITIZED}"
 # )
 
 CHECKPOINT_SCHEDULE = (
-    list(range(10, 50, 10)) +  # [5, 10, 15, 20, 25]
-    list(range(100, 250, 50))  # [50, 75, 100]
+    list(range(10, 51, 10)) +  # [10, 20, 30, 40, 50]
+    list(range(100, 501, 100))  # [100, 200, 300, 400, 500]
 )
 
 
-THRESHOLD = 1e-3
-NUM_STEPS = 250
+THRESHOLD = 1e-5 # appendix A in Mukherjee et al 2025
+NUM_STEPS = 500
 SUBSET_SIZE = None  # reduce for faster bring-up
 
-WANDB_PROJECT = f"{MODEL_NAME_SANITIZED}-dpo-subnetwork-emergence"
-WANDB_RUN_NAME = f"{MODEL_NAME_SANITIZED}_lightR1_flexible_checkpoints"
+WANDB_PROJECT = "huggingface"
+os.environ["WANDB_PROJECT"] = WANDB_PROJECT
+WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_lightR1_flexible_checkpoints"
 
 print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 
@@ -78,42 +81,10 @@ print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 # 1. Load dataset
 #######################################
 
-raw_ds = load_dataset(DATASET_NAME, split="train")
+from src.utils.data_utils import load_dpo_dataset, dpo_collator_fn
 
-def msg_to_text(x):
-    if isinstance(x, str):
-        return x
-    if isinstance(x, dict):
-        return x.get("value", "")
-    if isinstance(x, list):
-        return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
-    return str(x)
-
-def normalize_record(rec):
-    prompt_raw   = rec.get("prompt", "")
-    chosen_raw   = rec.get("chosen", "")
-    rejected_raw = rec.get("rejected", "")
-
-    if isinstance(prompt_raw, list):
-        prompt_text = "\n".join(
-            m.get("value","") for m in prompt_raw
-            if isinstance(m, dict) and m.get("from","").lower() != "assistant"
-        ).strip()
-    else:
-        prompt_text = msg_to_text(prompt_raw).strip()
-
-    chosen_text   = msg_to_text(chosen_raw).strip()
-    rejected_text = msg_to_text(rejected_raw).strip()
-
-    return {"prompt": prompt_text, "chosen": chosen_text, "rejected": rejected_text}
-
-norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
-
-# (Optional) take a subset to iterate quickly
-if SUBSET_SIZE is not None:
-    norm_ds = norm_ds.select(range(min(SUBSET_SIZE, len(norm_ds))))
-
-train_dataset = norm_ds
+raw_ds = load_dpo_dataset(DATASET_NAME, subset_size=SUBSET_SIZE)
+train_dataset = raw_ds
 eval_dataset = None
 
 #######################################
@@ -194,7 +165,7 @@ model.config.use_cache = False  # Trainer compat
 cfg = DPOConfig(
     output_dir=OUTPUT_DIR,
     run_name=WANDB_RUN_NAME,
-    report_to=["wandb"],
+    report_to=["wandb"] if args.use_wandb else [],
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=5e-6,
@@ -252,7 +223,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
         self.wandb_initialized = False
 
     def on_train_begin(self, args, state, control, **kwargs):
-        if not self.wandb_initialized:
+        if not self.wandb_initialized and "wandb" in args.report_to:
             wandb.init(
                 project=WANDB_PROJECT,
                 name=args.run_name,

@@ -10,12 +10,14 @@ import torch
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
+
 try:
     from lm_eval import simple_evaluate
     LM_EVAL_AVAILABLE = True
 except ImportError:
     LM_EVAL_AVAILABLE = False
-    print("Warning: lm-evaluation-harness not installed. Install with: pip install lm-eval")
 
 try:
     from transformers import AutoTokenizer
@@ -37,11 +39,12 @@ def _has_chat_template(model_path: str) -> bool:
 
 def evaluate_math(
     model_path: str,
+    model: str = "hf",
     num_fewshot: int = 4,
     limit: Optional[int] = None,
     device: Optional[str] = None,
     dtype: Optional[torch.dtype] = None,
-    batch_size: int = 8,
+    batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
     verbose: bool = True,
@@ -51,11 +54,12 @@ def evaluate_math(
     
     Args:
         model_path: Path to model (HuggingFace ID or local path)
+        model: Model backend ("hf" or "vllm")
         num_fewshot: Number of few-shot examples (default: 4)
         limit: Limit number of examples (None = all)
         device: Device to run on (auto-detect if None)
         dtype: Model dtype (auto-detect if None)
-        batch_size: Batch size for evaluation
+        batch_size: Batch size for evaluation (can be "auto")
         trust_remote_code: Whether to trust remote code
         apply_chat_template: Whether to apply the model's chat template (auto for instruct/chat if None)
         
@@ -73,25 +77,29 @@ def evaluate_math(
         print("MATH EVALUATION")
         print("=" * 60)
     
-    # Auto-detect dtype if not specified
-    if dtype is None:
-        if torch.cuda.is_available():
-            dtype_str = "float16"
-        elif torch.backends.mps.is_available():
-            dtype_str = "float16"
-        else:
-            dtype_str = "float32"
-    else:
-        dtype_str = str(dtype).replace("torch.", "")
-    
     # Auto-detect device if not specified
     if device is None:
-        if torch.cuda.is_available():
+        if model == "vllm":
+            device = "cuda"
+        elif torch.cuda.is_available():
             device = "cuda"
         elif torch.backends.mps.is_available():
             device = "mps"
         else:
             device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        elif device == "cuda" and torch.cuda.is_available():
+            dtype_str = "float16"
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates
@@ -136,11 +144,25 @@ def evaluate_math(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
+    # Lazy import for stability
+    try:
+        from lm_eval import simple_evaluate
+    except ImportError:
+        raise ImportError("lm-evaluation-harness is required for MATH evaluation.")
+        
     # Build model_args string for lm-eval
     # lm-eval's from_pretrained will automatically detect and use .safetensors files
     base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append("max_model_len=4096")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        
     base_model_args_str = ",".join(base_model_args_parts)
     
     # Run evaluation using lm-evaluation-harness
@@ -157,7 +179,8 @@ def evaluate_math(
         print("MATH: Running...", end=" ", flush=True)
     
     # Try common task aliases in case the installed lm-eval version uses different names
-    task_candidates = ["math", "hendrycks_math500"]
+    # Task names vary across lm-eval versions (v0.3.0 vs v0.4.x)
+    task_candidates = ["math", "hendrycks_math", "minerva_math"]
     results = None
     task_errors = []
     
@@ -193,25 +216,33 @@ def evaluate_math(
                     
                     # Build kwargs for simple_evaluate
                     eval_kwargs = {
-                        "model": "hf",
+                        "model": model,
                         "model_args": base_model_args_str,
                         "tasks": task_name,
                         "num_fewshot": num_fewshot,
                         "limit": limit,
                         "batch_size": batch_size,
-                        "device": device,
                         # Set generation parameters for proper evaluation
                         "gen_kwargs": {
                             "temperature": 0.0,  # Deterministic for fair evaluation
                             "max_gen_toks": 512,  # Sufficient for MATH answers
                         }
                     }
+                    # Only pass device for non-vllm models (vllm handles devices internally)
+                    if model != "vllm":
+                        eval_kwargs["device"] = device
+                        
                     # Add chat template config if specified
                     eval_kwargs.update(config)
                     
-                    results = simple_evaluate(**eval_kwargs)
+                    # Filter out None values to prevent library-level crashes on comparisons
+                    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+                    
+                    results = simple_evaluate(**filtered_eval_kwargs)
                 break
-            except TypeError as e:
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
                 if "apply_chat_template" in str(e) or "fewshot_as_multiturn" in str(e):
                     if verbose:
                         print(
@@ -219,8 +250,7 @@ def evaluate_math(
                             "retrying without it."
                         )
                     continue
-                raise
-            except Exception as e:
+                
                 # Fall back only when the task name is missing in this lm-eval build
                 if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
                     task_errors.append(str(e))
@@ -242,8 +272,6 @@ def evaluate_math(
     # Extract and print key metrics
     # lm-eval results structure can vary: 
     # {"results": {"task_name": {"acc,none": value, ...}}, ...}
-    # or {"results": {"task_name": {"acc": value, ...}}, ...}
-    # or {"results": {"task_name/subset": {"acc,none": value, ...}}, ...}
     math_score = None
     task_key_used = None
     acc_key_used = None
@@ -251,27 +279,19 @@ def evaluate_math(
     if "results" in results:
         math_results = results["results"]
         
-        # Debug: print all keys in results if verbose
-        if verbose:
-            print(f"\nDebug: Found {len(math_results)} result keys: {list(math_results.keys())}")
-        
         # Try different possible keys for MATH results
-        for key in ["math", "hendrycks_math500", "hendrycks_math", "hendrycksMath"]:
+        # We prioritize the exact task names we requested
+        for key in ["math", "hendrycks_math"]:
             if key in math_results:
                 task_result = math_results[key]
                 if isinstance(task_result, dict):
-                    if verbose:
-                        print(f"Debug: Found task '{key}' with keys: {list(task_result.keys())}")
                     # Try different accuracy key formats (order matters - try most specific first)
-                    for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
+                    for acc_key in ["acc,none", "acc", "exact_match,none", "exact_match"]:
                         if acc_key in task_result:
                             math_score = task_result[acc_key]
-                            # 0 is a valid score, so check if it's actually a number
                             if isinstance(math_score, (int, float)):
                                 task_key_used = key
                                 acc_key_used = acc_key
-                                if verbose:
-                                    print(f"Debug: Found accuracy using key '{acc_key}': {math_score}")
                                 break
                     if math_score is not None:
                         break
@@ -280,135 +300,39 @@ def evaluate_math(
         if math_score is None:
             for key, value in math_results.items():
                 if "math" in key.lower() and isinstance(value, dict):
-                    if verbose:
-                        print(f"Debug: Checking key '{key}' with sub-keys: {list(value.keys())}")
-                    for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
+                    for acc_key in ["acc,none", "acc", "exact_match,none", "exact_match"]:
                         if acc_key in value:
                             math_score = value[acc_key]
-                            # 0 is a valid score, so check if it's actually a number
                             if isinstance(math_score, (int, float)):
                                 task_key_used = key
                                 acc_key_used = acc_key
-                                if verbose:
-                                    print(f"Debug: Found accuracy in '{key}' using '{acc_key}': {math_score}")
                                 break
                     if math_score is not None:
                         break
-        
-        # Last resort: check if there's a nested structure or different format
-        if math_score is None:
-            # Sometimes results are nested differently - check all dict values recursively
-            def find_accuracy_recursive(obj, path=""):
-                if isinstance(obj, dict):
-                    # Check for accuracy keys first
-                    for acc_key in ["acc,none", "acc", "accuracy", "exact_match,none", "exact_match"]:
-                        if acc_key in obj:
-                            val = obj[acc_key]
-                            # 0 is a valid score, so just check if it's a number
-                            if isinstance(val, (int, float)):
-                                return val, path, acc_key
-                    # Recurse into nested dicts
-                    for k, v in obj.items():
-                        if isinstance(v, dict):
-                            result = find_accuracy_recursive(v, f"{path}.{k}" if path else k)
-                            if result:
-                                return result
-                return None
-            
-            recursive_result = find_accuracy_recursive(math_results)
-            if recursive_result:
-                math_score, task_key_used, acc_key_used = recursive_result
-                if verbose:
-                    print(f"Debug: Found accuracy recursively at '{task_key_used}' using '{acc_key_used}': {math_score}")
-    
-    # Also check the top-level "results" for aggregated scores
-    if math_score is None and "results" in results:
-        # Sometimes there's an aggregated score at the top level
-        for key in ["acc", "accuracy", "acc,none"]:
-            if key in results:
-                val = results[key]
-                if isinstance(val, (int, float)):
-                    math_score = val
-                    acc_key_used = key
-                    if verbose:
-                        print(f"Debug: Found accuracy at top level using '{key}': {math_score}")
-                    break
-    
-    # Check for alternative result structures (some versions use different formats)
-    if math_score is None and isinstance(results, dict):
-        # Check for "versions" or "scores" nested structure
-        for top_key in ["versions", "scores", "config"]:
-            if top_key in results and isinstance(results[top_key], dict):
-                for key, value in results[top_key].items():
-                    if "math" in key.lower() and isinstance(value, dict):
-                        for acc_key in ["acc,none", "acc", "accuracy"]:
-                            if acc_key in value:
-                                val = value[acc_key]
-                                if isinstance(val, (int, float)):
-                                    math_score = val
-                                    task_key_used = key
-                                    acc_key_used = acc_key
-                                    if verbose:
-                                        print(f"Debug: Found accuracy in '{top_key}.{key}' using '{acc_key}': {math_score}")
-                                    break
-                        if math_score is not None:
-                            break
-                if math_score is not None:
-                    break
     
     if math_score is not None:
-        # 0 is a valid score, but warn if it seems suspiciously low for a good model
-        if math_score == 0.0 and verbose:
-            print("\n⚠️  WARNING: Extracted accuracy is 0.0")
-            print("This could indicate:")
-            print("  1. The model actually scored 0% (very unlikely for Llama 3.1 8B)")
-            print("  2. The wrong metric was extracted")
-            print("  3. The evaluation failed silently")
-            print("\nPlease verify the results structure above.")
-        
         if verbose:
             print("\n" + "=" * 60)
             print("MATH RESULTS")
             print("=" * 60)
             print(f"\nMATH Accuracy: {math_score:.4f}")
-            if task_key_used:
-                print(f"Task key: {task_key_used}")
-            if acc_key_used:
-                print(f"Accuracy key: {acc_key_used}")
+            print(f"Task key: {task_key_used}")
+            print(f"Accuracy key: {acc_key_used}")
         else:
             print(f"Accuracy: {math_score:.4f}")
     else:
-        # Debug: print what we actually got - ALWAYS show this if extraction fails
+        # Only print the full structure if specifically requested or if extraction fails
         print("\n" + "=" * 60)
         print("MATH RESULTS - EXTRACTION FAILED")
         print("=" * 60)
-        print(f"Results type: {type(results)}")
-        if isinstance(results, dict):
-            print(f"Top-level keys: {list(results.keys())}")
-            if "results" in results:
-                print(f"Results['results'] type: {type(results['results'])}")
-                if isinstance(results['results'], dict):
-                    print(f"Results['results'] keys: {list(results['results'].keys())}")
-                    # Print ALL result entries for debugging (not just first 3)
-                    print("\nAll result entries:")
-                    for key, value in results['results'].items():
-                        print(f"  {key}:")
-                        if isinstance(value, dict):
-                            for sub_key, sub_value in value.items():
-                                print(f"    {sub_key}: {sub_value} (type: {type(sub_value).__name__})")
-                        else:
-                            print(f"    (not a dict): {value} (type: {type(value).__name__})")
-        print("\nFull results structure (first 1000 chars):")
-        import json
-        results_str = json.dumps(results, indent=2, default=str)
-        print(results_str[:1000])
-        if len(results_str) > 1000:
-            print(f"... (truncated, total length: {len(results_str)} chars)")
+        if isinstance(results, dict) and "results" in results:
+            print(f"Results['results'] keys: {list(results['results'].keys())}")
+            for key, value in results['results'].items():
+                if isinstance(value, dict):
+                    print(f"  {key}: {list(value.keys())}")
         print("\nERROR: Could not extract accuracy from results.")
-        print("This might indicate:")
-        print("  1. The result structure is different than expected")
-        print("  2. The evaluation failed silently")
-        print("  3. The accuracy key name is different")
+    
+    return results
     
     return results
 

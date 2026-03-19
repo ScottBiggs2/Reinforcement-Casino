@@ -25,6 +25,7 @@ class SparseAdamW(torch.optim.Optimizer):
         weight_decay=0.01,
         block_size=128,
         mlp_only=True,
+        max_grad_norm=1.0,
     ):
         self.param_to_name = {}
         params = []
@@ -38,6 +39,7 @@ class SparseAdamW(torch.optim.Optimizer):
         self.mask_manager = mask_manager
         self.block_size = block_size
         self.mlp_only = mlp_only
+        self.max_grad_norm = max_grad_norm # Default clipping value for stability
         
         self.stats = {
             'sparse_steps': 0,
@@ -63,6 +65,7 @@ class SparseAdamW(torch.optim.Optimizer):
         print(f"  Block size: {block_size}")
         print(f"  Using indexed sparse kernels: TRUE")
         print(f"  Kernel recompilation fix: APPLIED")
+        print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
     
     @torch.no_grad()
     def step(self, closure=None):
@@ -71,6 +74,12 @@ class SparseAdamW(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
+        
+        # Apply local gradient clipping to all parameters first to protect momentum
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None and self.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(p, self.max_grad_norm)
         
         for group in self.param_groups:
             for p in group['params']:

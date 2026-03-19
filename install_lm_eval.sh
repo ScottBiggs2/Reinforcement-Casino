@@ -5,8 +5,9 @@ set -e
 
 echo "Installing lm-eval with Python 3.11 compatibility fixes..."
 
-# Step 1: Upgrade pip and setuptools
-echo "Step 1: Upgrading pip and setuptools..."
+# Step 1: Upgrade pip and setuptools and clear cache
+echo "Step 1: Upgrading pip and clearing cache..."
+pip cache purge || true
 pip install --upgrade pip setuptools wheel
 
 # Step 2: Install rouge-score separately (often causes build issues)
@@ -19,28 +20,12 @@ pip install rouge-score || {
     }
 }
 
-# Step 3: Install other dependencies that might be needed
-echo "Step 3: Installing build dependencies..."
-pip install pybind11 numexpr
+# Step 3: Install all dependencies from the dedicated eval_requirements.txt
+echo "Step 3: Installing evaluation dependencies from eval_requirements.txt..."
+pip install --upgrade --force-reinstall --no-cache-dir --index-url https://pypi.org/simple -r eval_requirements.txt
 
-# Step 4: Try installing lm-eval
-echo "Step 4: Installing lm-eval..."
-if ! pip install lm-eval; then
-    echo "Standard installation failed, trying from source..."
-    echo "Cloning lm-evaluation-harness repository..."
-    cd /tmp
-    rm -rf lm-evaluation-harness
-    git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness.git
-    cd lm-evaluation-harness
-    pip install -e .
-    cd -
-    echo "✓ Installed from source"
-else
-    echo "✓ Installed from PyPI"
-fi
-
-echo ""
-echo "Verifying installation..."
+# Post-install fixes if needed
+echo "Step 4: Verifying installation..."
 python -c "import lm_eval; print(f'lm-eval version: {lm_eval.__version__}')" || {
     echo "ERROR: Installation verification failed"
     exit 1

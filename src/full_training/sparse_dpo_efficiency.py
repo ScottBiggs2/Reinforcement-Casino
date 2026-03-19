@@ -56,6 +56,8 @@ def train(
     if run_name is None:
         run_name = f"sparse_dpo_efficiency_{optimizer_type}_{sanitize_model_name(model_name)}"
     
+    wandb_project = "huggingface"
+    os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join("results", run_name)
     os.makedirs(run_dir, exist_ok=True)
     
@@ -124,7 +126,8 @@ def train(
         batch_size=batch_size,
         grad_accum=grad_accum,
         run_name=run_name,
-        use_wandb=use_wandb
+        use_wandb=use_wandb,
+        wandb_project=wandb_project
     ))
     
     if save_csv:
@@ -138,7 +141,8 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         logging_steps=1,
-        report_to="none", # We handle wandb manually in callback
+        report_to="wandb" if use_wandb else "none",
+        run_name=run_name,
         remove_unused_columns=False,
         bf16=True,
         gradient_checkpointing=True,
@@ -170,6 +174,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_only", action="store_true", default=True)
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
+    parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
     
     args = parser.parse_args()
     
@@ -181,7 +186,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.lr,
         subset_size=args.subset_size,
-        run_name=None,
+        run_name=args.run_name,
         mlp_only=args.mlp_only,
         block_size=args.block_size,
         optimizer_type=args.optimizer,

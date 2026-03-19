@@ -16,6 +16,9 @@ All evaluators support loading models from:
 from evaluation.model_loader import load_model_and_tokenizer
 from evaluation.mmlu_evaluator import evaluate_mmlu
 from evaluation.math_evaluator import evaluate_math
+from evaluation.gsm8k_evaluator import evaluate_gsm8k
+from evaluation.coding_evaluator import evaluate_coding
+from evaluation.ifeval_evaluator import evaluate_ifeval
 from evaluation.squad_evaluator import evaluate_squad
 from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
 
@@ -23,6 +26,9 @@ __all__ = [
     "load_model_and_tokenizer",
     "evaluate_mmlu",
     "evaluate_math",
+    "evaluate_gsm8k",
+    "evaluate_coding",
+    "evaluate_ifeval",
     "evaluate_squad",
     "evaluate_gpqa_diamond",
 ]

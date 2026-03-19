@@ -3,6 +3,14 @@ Unified evaluation runner for all LLM benchmarks.
 Supports running individual benchmarks or all benchmarks at once.
 """
 
+import multiprocessing
+try:
+    # This MUST be the first thing that happens to fix the vLLM CUDA conflict
+    multiprocessing.set_start_method('spawn', force=True)
+except RuntimeError:
+    pass
+print(f"Multiprocessing start method: {multiprocessing.get_start_method()}")
+
 import os
 import sys
 import argparse
@@ -14,18 +22,45 @@ from pathlib import Path
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from evaluation.mmlu_evaluator import evaluate_mmlu
-from evaluation.math_evaluator import evaluate_math
-from evaluation.squad_evaluator import evaluate_squad
-from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
+# Evaluators are imported lazily inside BENCHMARKS to prevent dependency issues 
+# in one benchmark from crashing the entire suite.
+
+
+def get_evaluator(name):
+    """Lazy-load evaluators to avoid dependency crashes at startup."""
+    if name == "mmlu":
+        from evaluation.mmlu_evaluator import evaluate_mmlu
+        return evaluate_mmlu
+    elif name == "math":
+        from evaluation.math_evaluator import evaluate_math
+        return evaluate_math
+    elif name == "gsm8k":
+        from evaluation.gsm8k_evaluator import evaluate_gsm8k
+        return evaluate_gsm8k
+    elif name == "coding":
+        from evaluation.coding_evaluator import evaluate_coding
+        return evaluate_coding
+    elif name == "ifeval":
+        from evaluation.ifeval_evaluator import evaluate_ifeval
+        return evaluate_ifeval
+    elif name == "squad":
+        from evaluation.squad_evaluator import evaluate_squad
+        return evaluate_squad
+    elif name in ["gpqa", "gpqa_diamond"]:
+        from evaluation.gpqa_evaluator import evaluate_gpqa_diamond
+        return evaluate_gpqa_diamond
+    return None
 
 
 BENCHMARKS = {
-    "mmlu": evaluate_mmlu,
-    "math": evaluate_math,
-    "squad": evaluate_squad,
-    "gpqa": evaluate_gpqa_diamond,
-    "gpqa_diamond": evaluate_gpqa_diamond,
+    "mmlu": "mmlu",
+    "math": "math",
+    "gsm8k": "gsm8k",
+    "coding": "coding",
+    "ifeval": "ifeval",
+    "squad": "squad",
+    "gpqa": "gpqa_diamond",
+    "gpqa_diamond": "gpqa_diamond",
 }
 
 
@@ -48,15 +83,20 @@ def run_benchmark(
     Returns:
         Dictionary with evaluation results
     """
-    if benchmark_name not in BENCHMARKS:
-        raise ValueError(
-            f"Unknown benchmark: {benchmark_name}. "
-            f"Available: {list(BENCHMARKS.keys())}"
-        )
-    
-    evaluator = BENCHMARKS[benchmark_name]
+    # Print versions for debugging
+    try:
+        import torch
+        import vllm
+        import transformers
+        print(f"Versions: torch={torch.__version__}, vllm={vllm.__version__}, transformers={transformers.__version__}")
+    except ImportError:
+        pass
 
-    # Drop kwargs that are not accepted by the evaluator to avoid unexpected errors
+    evaluator = get_evaluator(benchmark_name)
+    if evaluator is None:
+        raise ValueError(f"Could not find or load evaluator for: {benchmark_name}")
+
+    # Drop kwargs that are not accepted by the evaluator
     evaluator_signature = inspect.signature(evaluator)
     accepts_var_kwargs = any(
         param.kind == inspect.Parameter.VAR_KEYWORD
@@ -71,6 +111,10 @@ def run_benchmark(
             for key, value in kwargs.items()
             if key in evaluator_signature.parameters
         }
+        # Explicitly pass model type if accepted
+        if "model" in evaluator_signature.parameters and "model" in kwargs:
+            filtered_kwargs["model"] = kwargs["model"]
+            
         ignored_kwargs = {
             key: value
             for key, value in kwargs.items()
@@ -92,6 +136,11 @@ def run_benchmark(
     if "verbose" not in filtered_kwargs:
         filtered_kwargs["verbose"] = verbose
     
+    if verbose:
+        print(f"DEBUG: Running {benchmark_name} with filtered_kwargs:")
+        for k, v in filtered_kwargs.items():
+            print(f"  - {k}: {v} (type: {type(v)})")
+    
     try:
         results = evaluator(model_path=model_path, **filtered_kwargs)
         
@@ -106,7 +155,9 @@ def run_benchmark(
         
         return results
     except Exception as e:
+        import traceback
         print(f"\nError running {benchmark_name}: {e}")
+        traceback.print_exc()
         raise
 
 
@@ -130,7 +181,7 @@ def run_all_benchmarks(
         Dictionary mapping benchmark names to their results
     """
     if benchmarks is None:
-        benchmarks = ["mmlu", "math", "squad", "gpqa_diamond"]
+        benchmarks = ["mmlu", "math", "gsm8k", "coding", "ifeval", "squad", "gpqa_diamond"]
 
     # Ensure output directory exists before running any benchmarks or writing summary
     if output_dir:
@@ -188,9 +239,12 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 for key, value in mmlu_results.items():
                     if "mmlu" in key.lower():
                         if isinstance(value, dict):
-                            acc = value.get("acc", value.get("acc,none", 0))
-                            if acc:
+                            acc = value.get("acc", value.get("acc,none"))
+                            if acc is not None:
                                 print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                                break
+                            else:
+                                print(f"{benchmark_name.upper()}: Accuracy = N/A")
                                 break
         elif benchmark_name == "math":
             if "results" in benchmark_results:
@@ -210,30 +264,51 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                                 break
                 if acc is None:
                     print(f"{benchmark_name.upper()}: Could not extract accuracy (check verbose output)")
-                    # Debug: show what we found
-                    print(f"  Available keys in results: {list(math_results.keys()) if isinstance(math_results, dict) else 'N/A'}")
+        elif benchmark_name == "gsm8k":
+            if "results" in benchmark_results:
+                gsm8k_results = benchmark_results["results"]
+                # Look for gsm8k or any key containing gsm8k
+                for key, data in gsm8k_results.items():
+                    if "gsm8k" in key.lower() and isinstance(data, dict):
+                        acc = data.get("exact_match,none", data.get("exact_match", data.get("acc,none", data.get("acc", 0))))
+                        print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                        break
+        elif benchmark_name == "coding":
+            if "results" in benchmark_results:
+                for task, task_results in benchmark_results["results"].items():
+                    pass_at_1 = task_results.get("pass@1", task_results.get("acc", 0))
+                    print(f"CODING ({task}): pass@1 = {pass_at_1:.4f}")
+        elif benchmark_name == "ifeval":
+            if "results" in benchmark_results:
+                ifeval_results = benchmark_results["results"]
+                for key, data in ifeval_results.items():
+                    if "ifeval" in key.lower() and isinstance(data, dict):
+                        strict = data.get("prompt_level_strict_acc,none", data.get("prompt_level_strict_acc", 0))
+                        loose = data.get("prompt_level_loose_acc,none", data.get("prompt_level_loose_acc", 0))
+                        print(f"{benchmark_name.upper()}: Strict Acc = {strict:.4f}, Loose Acc = {loose:.4f}")
+                        break
         elif benchmark_name == "squad":
-            if "exact_match" in benchmark_results:
+            if "results" in benchmark_results:
+                squad_results = benchmark_results["results"]
+                for key, data in squad_results.items():
+                    if "squad" in key.lower() and isinstance(data, dict):
+                        exact_match = data.get("exact_match,none", data.get("exact_match", 0))
+                        f1 = data.get("f1,none", data.get("f1", 0))
+                        print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
+                        break
+            elif "exact_match" in benchmark_results:
                 em = benchmark_results['exact_match']
                 f1 = benchmark_results['f1']
                 print(f"{benchmark_name.upper()}: Exact Match = {em:.4f}, F1 = {f1:.4f}")
-            elif "results" in benchmark_results:
-                squad_results = benchmark_results["results"]
-                if "squad" in squad_results:
-                    squad_data = squad_results["squad"]
-                    exact_match = squad_data.get("exact_match,none", 0)
-                    f1 = squad_data.get("f1,none", 0)
-                    print(f"{benchmark_name.upper()}: Exact Match = {exact_match:.4f}, F1 = {f1:.4f}")
         elif benchmark_name in ["gpqa", "gpqa_diamond"]:
             if "results" in benchmark_results:
                 gpqa_results = benchmark_results["results"]
-                for key, value in gpqa_results.items():
+                for key, data in gpqa_results.items():
                     if "gpqa" in key.lower() or "diamond" in key.lower():
-                        if isinstance(value, dict):
-                            acc = value.get("acc", value.get("acc,none", 0))
-                            if acc:
-                                print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
-                                break
+                        if isinstance(data, dict):
+                            acc = data.get("acc,none", data.get("acc", 0))
+                            print(f"{benchmark_name.upper()}: Accuracy = {acc:.4f}")
+                            break
 
 
 if __name__ == "__main__":
@@ -279,8 +354,12 @@ Examples:
         help="Limit number of examples per benchmark"
     )
     parser.add_argument(
-        "--batch_size", type=int, default=8,
-        help="Batch size for evaluation"
+        "--batch_size", type=str, default="auto",
+        help="Batch size for evaluation (default: auto). Can be an integer or 'auto'."
+    )
+    parser.add_argument(
+        "--use_vllm", action="store_true",
+        help="Use vLLM as the backend for much faster evaluation (requires vllm package)"
     )
     parser.add_argument(
         "--device", type=str, default=None,
@@ -313,14 +392,23 @@ Examples:
     
     # Handle "all" benchmarks
     if "all" in args.benchmarks:
-        benchmarks_to_run = ["mmlu", "math", "squad", "gpqa_diamond"]
+        benchmarks_to_run = ["mmlu", "math", "gsm8k", "coding", "ifeval", "squad", "gpqa_diamond"]
     else:
         benchmarks_to_run = args.benchmarks
     
     # Prepare kwargs for evaluators
+    model_type = "vllm" if args.use_vllm else "hf"
+    
+    # Convert batch_size to int if possible
+    try:
+        batch_size = int(args.batch_size)
+    except ValueError:
+        batch_size = args.batch_size # Keep as "auto"
+        
     eval_kwargs = {
+        "model": model_type,
         "limit": args.limit,
-        "batch_size": args.batch_size,
+        "batch_size": batch_size,
         "device": args.device,
         "trust_remote_code": args.trust_remote_code,
         "apply_chat_template": args.apply_chat_template,

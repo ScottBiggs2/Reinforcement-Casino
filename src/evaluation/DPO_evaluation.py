@@ -24,106 +24,72 @@ def calculate_rouge(predictions, references):
     return scores
 
 
+from src.utils.mask_manager import SparseMaskManager
+
 def load_models(args):
     """
-    Loads the three models for evaluation: default, fine-tuned, and masked.
+    Loads the models for evaluation.
+    Supports loading models as 'single units' from checkpoints.
     """
+    # Determine device and dtype
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.float16
+    else:
+        device = "cpu"
+        dtype = torch.float32
+
     # Load tokenizer
+    print(f"Loading tokenizer from {args.model_name_or_path}...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Determine dtype based on available hardware
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-
-    # Load default (base) model
-    print("Loading default model...")
+    # 1. Load default (base) model
+    print("Loading default model (base)...")
     default_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype)
 
-    # Load DPO fine-tuned model
-    print("Loading fine-tuned model from checkpoint...")
+    # 2. Load DPO fine-tuned model (Dense)
     dpo_model = None
     if args.checkpoint_path and os.path.exists(args.checkpoint_path):
+        print(f"Loading DPO model from {args.checkpoint_path}...")
         dpo_model = AutoModelForCausalLM.from_pretrained(args.checkpoint_path, torch_dtype=dtype)
     else:
-        print(f"Warning: Checkpoint path '{args.checkpoint_path}' not found. Skipping DPO model.")
+        print(f"Warning: DPO checkpoint path '{args.checkpoint_path}' not found.")
 
-    # Load masked model (base + sparse deltas)
-    print("Loading masked model...")
+    # 3. Load Masked Model
+    # Consistent pattern: Check if a dedicated masked model directory exists, 
+    # otherwise we can optionally apply a mask to the DPO model's deltas.
     masked_model = None
     
-    if not (args.mask_path and os.path.exists(args.mask_path)):
-        print(f"Warning: Mask path '{args.mask_path}' not found. Skipping masked model.")
-        return tokenizer, default_model, dpo_model, masked_model
+    # NEW: Check if a "masked_model" directory exists (modern single-unit save)
+    # For now, we'll look in a 'masked_model' subdirectory of the checkpoint or as passed
+    masked_model_path = getattr(args, 'masked_model_path', None)
     
-    if dpo_model is None:
-        print("Warning: Cannot create masked model without DPO model. Skipping masked model.")
-        return tokenizer, default_model, dpo_model, masked_model
-    
-    # Load base model for masked version
-    masked_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype)
-    
-    # Load and apply masks
-    print(f"Loading masks from {args.mask_path}...")
-    masks = torch.load(args.mask_path, map_location='cpu')
-    print(f"Loaded {len(masks)} mask tensors")
-    
-    # Convert mask keys to match model parameter names
-    # Mask finder saves "model.norm.weight" as "model_norm_weight"
-    model_param_names = {name for name, _ in masked_model.named_parameters()}
-    converted_masks = {}
-    
-    for param_name in model_param_names:
-        mask_key = param_name.replace(".", "_")
-        if mask_key in masks:
-            converted_masks[param_name] = masks[mask_key]
-    
-    print(f"Matched {len(converted_masks)}/{len(model_param_names)} parameters to masks")
-    
-    if len(converted_masks) == 0:
-        print("ERROR: No masks matched model parameters!")
-        print(f"Sample model param: {list(model_param_names)[0]}")
-        print(f"Sample mask key: {list(masks.keys())[0]}")
-        masked_model = None
-        return tokenizer, default_model, dpo_model, masked_model
-    
-    # Apply masked deltas to the base model
-    print("Applying masked weight deltas...")
-    applied_count = 0
-    total_masked_params = 0
-    total_params = 0
-    
-    with torch.no_grad():
-        dpo_params = dict(dpo_model.named_parameters())
+    if masked_model_path and os.path.exists(masked_model_path):
+        print(f"Loading masked model as single unit from {masked_model_path}...")
+        masked_model = AutoModelForCausalLM.from_pretrained(masked_model_path, torch_dtype=dtype)
+    elif args.mask_path and os.path.exists(args.mask_path) and dpo_model is not None:
+        print(f"Constructing masked model dynamically from Base + Masked Deltas...")
+        # Fallback to old dynamic reconstruction if .pt mask is provided
+        masked_model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, torch_dtype=dtype)
         
-        for name, param in masked_model.named_parameters():
-            if name not in converted_masks:
-                continue
-            
-            # Calculate delta between DPO and base
-            delta = dpo_params[name].data - param.data
-            
-            # Apply mask to delta and update weights
-            mask = converted_masks[name].to(param.device)
-            masked_delta = delta * mask
-            param.data += masked_delta
-            
-            # Track statistics
-            applied_count += 1
-            masked_count = mask.sum().item()
-            total_count = mask.numel()
-            total_masked_params += masked_count
-            total_params += total_count
-            
-            # Print first few for debugging
-            if applied_count <= 5:
-                sparsity = 100 * masked_count / total_count
-                print(f"  {name}: {masked_count:,}/{total_count:,} params ({sparsity:.2f}%)")
-    
-    # Print summary statistics
-    overall_sparsity = 100 * total_masked_params / total_params if total_params > 0 else 0
-    print(f"\nApplied masks to {applied_count} layers")
-    print(f"Overall sparsity: {total_masked_params:,}/{total_params:,} params ({overall_sparsity:.2f}%)")
+        # Use SparseMaskManager for consistency
+        mask_manager = SparseMaskManager(args.mask_path, device='cpu')
+        
+        with torch.no_grad():
+            dpo_params = dict(dpo_model.named_parameters())
+            for name, param in masked_model.named_parameters():
+                mask = mask_manager.get_mask(name)
+                if mask is not None:
+                    # Apply mask to delta
+                    delta = dpo_params[name].data - param.data
+                    masked_delta = delta * mask.to(param.device)
+                    param.data += masked_delta
+                    
+        print("✓ Dynamic masked model constructed.")
+    else:
+        print("Warning: Skipping masked model (no path provided or missing base/dpo).")
         
     return tokenizer, default_model, dpo_model, masked_model
 
@@ -136,9 +102,12 @@ def generate_responses(tokenizer, model, prompts, max_new_tokens=100):
         return ["Model not loaded."] * len(prompts)
         
     model.eval()
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    if torch.backends.mps.is_available():
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
         device = "mps"
+    else:
+        device = "cpu"
     model.to(device)
 
     responses = []
@@ -256,7 +225,9 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_path", type=str, default="results/gemma_dpo_training/final_model", 
                         help="Path to the DPO fine-tuned checkpoint.")
     parser.add_argument("--mask_path", type=str, default="masks/top_10.0_percent_mask.pt", 
-                        help="Path to the mask file.")
+                        help="Path to the mask file (for legacy delta reconstruction).")
+    parser.add_argument("--masked_model_path", type=str, default=None, 
+                        help="Path to a pre-saved masked model (single unit).")
     parser.add_argument("--num_samples", type=int, default=10, 
                         help="Number of samples to evaluate.")
     parser.add_argument("--max_new_tokens", type=int, default=100, 
