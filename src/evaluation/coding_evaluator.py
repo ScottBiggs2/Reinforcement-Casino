@@ -113,7 +113,12 @@ def evaluate_coding(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
-    base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
+    # Ensure model_path doesn't already have 'pretrained=' prefix
+    clean_model_path = model_path
+    if model_path.startswith("pretrained="):
+        clean_model_path = model_path.replace("pretrained=", "", 1)
+        
+    base_model_args_parts = [f"pretrained={clean_model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
     
@@ -173,11 +178,15 @@ def evaluate_coding(
             # Filter out None values to prevent library-level crashes on comparisons
             filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
             
-            # Attempt to run with code execution allowed if the version supports it
-            import inspect
-            sig = inspect.signature(simple_evaluate)
-            if "allow_code_execution" in sig.parameters:
-                filtered_eval_kwargs["allow_code_execution"] = True
+            # Native HumanEval/MBPP in lm-eval uses execution-based evaluation
+            # This requires 'allow_code_execution=True' or 'confirm_run_unsafe_code=True'
+            filtered_eval_kwargs["allow_code_execution"] = True
+            filtered_eval_kwargs["confirm_run_unsafe_code"] = True
+            
+            if verbose:
+                print(f"\nDEBUG: Attempting CODING with config: {config}")
+                if torch.cuda.is_available():
+                    print(f"Pre-eval Memory: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
 
             results = simple_evaluate(**filtered_eval_kwargs)
             break
@@ -189,22 +198,26 @@ def evaluate_coding(
             retry_errors = [
                 "apply_chat_template",
                 "marked as unsafe",
-                "allow_code_execution",
-                "confirm_run_unsafe_code",
-                "AssertionError"
+                "AssertionError" # Often related to chat template issues in lm-eval
             ]
             
-            if any(err in error_msg for err in retry_errors) or isinstance(e, AssertionError):
+            if "confirm_run_unsafe_code" in error_msg or "allow_code_execution" in error_msg:
+                print(f"Code execution error, but we already set the flags. This might be a library bug. Error: {error_msg}")
+                raise e
+                
+            # For vLLM, if we fail AFTER initialization, we risk OOM on retry
+            # Let's try to clear some memory, though vLLM is stubborn
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                import gc
+                gc.collect()
+            
+            if any(err in error_msg for err in chat_template_errors) or isinstance(e, AssertionError):
                 if verbose:
+                    import traceback
                     traceback.print_exc()
-                    print(f"Error with config {config}, retrying with simpler config/flags...")
-                
-                # Set specific flags for retry if related to safety
-                if "marked as unsafe" in error_msg or "confirm_run_unsafe_code" in error_msg:
-                    os.environ["HF_ALLOW_CODE_EVAL"] = "1"
-                    eval_kwargs["confirm_run_unsafe_code"] = True
-                
-                last_error = e
+                    print(f"Chat template config or multi-turn fewshot not supported: {config}; retrying with simpler config.")
+                last_error = e # Store the error for later if all configs fail
                 continue
             
             traceback.print_exc()

@@ -116,7 +116,12 @@ def evaluate_ifeval(
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
     
-    base_model_args_parts = [f"pretrained={model_path}", f"dtype={dtype_str}"]
+    # Ensure model_path doesn't already have 'pretrained=' prefix
+    clean_model_path = model_path
+    if model_path.startswith("pretrained="):
+        clean_model_path = model_path.replace("pretrained=", "", 1)
+        
+    base_model_args_parts = [f"pretrained={clean_model_path}", f"dtype={dtype_str}"]
     if trust_remote_code:
         base_model_args_parts.append("trust_remote_code=True")
     
