@@ -98,3 +98,79 @@ class CAVProbeScorer:
             f"Actual sparsity: {actual:.2f}%"
         )
         return masks
+
+
+def compute_cav_scores(
+    labeled_activations,
+    epochs: int = 200,
+    lr: float = 1e-2,
+    weight_decay: float = 1e-4,
+    device: str = "cpu",
+    normalize_per_layer: bool = True,
+):
+    """Compute per-neuron CAV scores from labeled activations.
+
+    Parameters are kept for API compatibility with callers. `epochs`, `lr`,
+    and `weight_decay` are currently unused because we fit sklearn logistic
+    probes directly.
+
+    Args:
+        labeled_activations: dict[layer_name] -> (X, y)
+            X: torch.Tensor [N, D], y: torch.Tensor [N] with binary labels.
+        normalize_per_layer: If True, min-max normalize each layer's score to
+            [0, 1] so deeper layers do not dominate global thresholding.
+
+    Returns:
+        dict[layer_name] -> torch.Tensor [D] of non-negative neuron scores.
+    """
+    del epochs, lr, weight_decay, device  # kept for signature compatibility
+
+    neuron_scores = {}
+    layer_names = sorted(labeled_activations.keys())
+    print(f"[compute_cav_scores] Training probes for {len(layer_names)} layers...")
+
+    for layer_name in layer_names:
+        X, y = labeled_activations[layer_name]
+        if X is None or y is None:
+            continue
+
+        X = X.detach().float().cpu()
+        y = y.detach().long().cpu()
+
+        if X.ndim != 2 or y.ndim != 1 or X.shape[0] != y.shape[0] or X.shape[0] < 4:
+            continue
+
+        pos = int((y == 1).sum().item())
+        neg = int((y == 0).sum().item())
+        if pos == 0 or neg == 0:
+            continue
+
+        X_np = X.numpy()
+        y_np = y.numpy()
+
+        scaler = StandardScaler()
+        X_sc = scaler.fit_transform(X_np)
+
+        clf = LogisticRegression(
+            penalty="l1",
+            solver="liblinear",
+            C=1.0,
+            max_iter=300,
+            random_state=42,
+        )
+        clf.fit(X_sc, y_np)
+
+        cav = np.abs(clf.coef_[0]).astype(np.float32)
+
+        if normalize_per_layer:
+            cmin = float(cav.min())
+            cmax = float(cav.max())
+            if cmax > cmin:
+                cav = (cav - cmin) / (cmax - cmin)
+            else:
+                cav = np.zeros_like(cav, dtype=np.float32)
+
+        neuron_scores[layer_name] = torch.tensor(cav, dtype=torch.float32)
+
+    print("[compute_cav_scores] Done.")
+    return neuron_scores

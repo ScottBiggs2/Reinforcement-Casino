@@ -9,6 +9,12 @@ def create_mask_from_scores_gpu_efficient(scores_dict, sparsity_percent, device=
     Global threshold with per-layer correction fallback.
     """
     print(f"\n=== Creating Exact Masks (target sparsity: {sparsity_percent}%) ===")
+
+    if not scores_dict:
+        raise ValueError(
+            "create_mask_from_scores_gpu_efficient received an empty scores_dict. "
+            "Upstream scoring produced no valid weight-score tensors."
+        )
     
     keep_percent = 100.0 - sparsity_percent
     
@@ -26,6 +32,8 @@ def create_mask_from_scores_gpu_efficient(scores_dict, sparsity_percent, device=
     total_params = 0
     
     for name, score in scores_dict.items():
+        if score is None or score.numel() == 0:
+            continue
         total_params += score.numel()
         flat = score.flatten()
         sample_size = min(100000, flat.numel())
@@ -36,6 +44,12 @@ def create_mask_from_scores_gpu_efficient(scores_dict, sparsity_percent, device=
         else:
             sample_scores.append(flat)
     
+    if not sample_scores or total_params == 0:
+        raise ValueError(
+            "No non-empty score tensors were available for threshold estimation. "
+            "Check upstream scoring/mapping logic."
+        )
+
     all_samples = torch.cat(sample_scores)
     keep_count = max(1, int(keep_percent / 100.0 * total_params))
     

@@ -18,7 +18,7 @@ from src.utils.mask_utils import (
     save_masks
 )
 from src.cold_start.utils.activation_hooks import FeatureExtractor
-from src.cold_start.utils.cav_probes import compute_cav_scores
+from src.cold_start.utils.cav_probes import compute_cav_scores, CAVProbeScorer
 from src.cold_start.utils.snip_scorer import compute_snip_scores, dpo_style_preference_loss
 
 
@@ -42,14 +42,32 @@ def sanitize_model_name(model_name: str) -> str:
 
 def map_neuron_scores_to_weight_scores(
     neuron_scores: Dict[str, torch.Tensor],
-    extractor: FeatureExtractor,
+    extractor,
     model,
 ) -> Dict[str, torch.Tensor]:
     param_dict = dict(model.named_parameters())
     scores: Dict[str, torch.Tensor] = {}
 
+    module_to_weight = getattr(extractor, "module_to_weight", {}) if extractor is not None else {}
+
+    # Build a suffix index once for robust fallback matching.
+    suffix_to_param = {}
+    for pname in param_dict.keys():
+        if pname.endswith(".weight"):
+            suffix_to_param[pname] = pname
+
     for module_name, score in neuron_scores.items():
-        weight_name = extractor.module_to_weight.get(module_name)
+        weight_name = module_to_weight.get(module_name)
+        if weight_name is None:
+            candidate = f"{module_name}.weight"
+            if candidate in param_dict:
+                weight_name = candidate
+            else:
+                # Fallback: find unique parameter ending with "<module_name>.weight"
+                target_suffix = f"{module_name}.weight"
+                matches = [p for p in suffix_to_param.keys() if p.endswith(target_suffix)]
+                if len(matches) == 1:
+                    weight_name = matches[0]
         if weight_name is None or weight_name not in param_dict:
             continue
 
@@ -66,6 +84,64 @@ def map_neuron_scores_to_weight_scores(
         scores[weight_name] = row_scores.float().cpu()
 
     return scores
+
+
+def _collect_pooled_downproj_activations(
+    model,
+    dataloader,
+    device: str,
+    num_batches: int,
+    which: str = "chosen",
+    mlp_only: bool = True,
+) -> Dict[str, torch.Tensor]:
+    """Collect pooled down_proj input activations directly from DPO batches."""
+    assert which in {"chosen", "rejected"}
+
+    acts: Dict[str, List[torch.Tensor]] = {}
+    hooks = []
+    current_mask = {"value": None}
+
+    for name, module in model.named_modules():
+        if not name.endswith("down_proj"):
+            continue
+        if mlp_only and "mlp" not in name:
+            continue
+        if not isinstance(module, torch.nn.Linear):
+            continue
+
+        acts[name] = []
+
+        def _make_hook(lname):
+            def _hook(mod, inp, out):
+                x = inp[0].detach().float()  # [B, T, H]
+                mask = current_mask["value"]
+                if mask is not None and mask.dim() == 2 and mask.shape[:2] == x.shape[:2]:
+                    m = mask.to(x.device).unsqueeze(-1).float()
+                    denom = m.sum(dim=1).clamp_min(1.0)
+                    pooled = (x * m).sum(dim=1) / denom
+                else:
+                    pooled = x.mean(dim=1)
+                acts[lname].append(pooled.cpu())
+            return _hook
+
+        hooks.append(module.register_forward_hook(_make_hook(name)))
+
+    model.eval()
+    with torch.no_grad():
+        for idx, batch in enumerate(dataloader):
+            if idx >= num_batches:
+                break
+
+            ids = batch[f"{which}_input_ids"].to(device)
+            mask = batch[f"{which}_attention_mask"].to(device)
+            current_mask["value"] = mask
+            _ = model(input_ids=ids, attention_mask=mask)
+            current_mask["value"] = None
+
+    for h in hooks:
+        h.remove()
+
+    return {k: torch.cat(v, dim=0) for k, v in acts.items() if len(v) > 0}
 
 
 def collect_activation_scores(model, dataloader, device: str, num_batches: int, mlp_only: bool) -> Dict[str, torch.Tensor]:
@@ -103,50 +179,41 @@ def collect_cav_scores(
     probe_weight_decay: float,
     normalize_per_layer: bool = True,
 ) -> Dict[str, torch.Tensor]:
-    extractor = FeatureExtractor(model, mlp_only=mlp_only)
-    model.eval()
-
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            if idx >= num_batches:
-                break
-
-            chosen_ids = batch["chosen_input_ids"].to(device)
-            chosen_mask = batch["chosen_attention_mask"].to(device)
-            rejected_ids = batch["rejected_input_ids"].to(device)
-            rejected_mask = batch["rejected_attention_mask"].to(device)
-
-            # Compute where the response starts (end of prompt) for each sequence.
-            # We use the first position where the padding mask is 0 from the right
-            # as a proxy. In practice the prompt occupies the first N tokens.
-            chosen_len = chosen_mask.sum(dim=1)  # number of real tokens per sample
-            rejected_len = rejected_mask.sum(dim=1)
-
-            # Use per-batch majority prompt length as response_start_idx.
-            # This is a reasonable approximation when prompt lengths are similar.
-            chosen_resp_start = int(chosen_len.min().item() // 2)  # heuristic: assume ~half is prompt
-            rejected_resp_start = int(rejected_len.min().item() // 2)
-
-            extractor.collect_labeled_start(label=1, response_start_idx=chosen_resp_start)
-            _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
-            extractor.collect_stop()
-
-            extractor.collect_labeled_start(label=0, response_start_idx=rejected_resp_start)
-            _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
-            extractor.collect_stop()
-
-    layer_data = extractor.get_labeled_activations()
-    neuron_scores = compute_cav_scores(
-        labeled_activations=layer_data,
-        epochs=probe_epochs,
-        lr=probe_lr,
-        weight_decay=probe_weight_decay,
+    positive_acts = _collect_pooled_downproj_activations(
+        model=model,
+        dataloader=dataloader,
         device=device,
-        normalize_per_layer=normalize_per_layer,
+        num_batches=num_batches,
+        which="chosen",
+        mlp_only=mlp_only,
+    )
+    negative_acts = _collect_pooled_downproj_activations(
+        model=model,
+        dataloader=dataloader,
+        device=device,
+        num_batches=num_batches,
+        which="rejected",
+        mlp_only=mlp_only,
     )
 
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
-    extractor.close()
+    scorer = CAVProbeScorer()
+    neuron_scores = scorer.score(positive_acts, negative_acts, mag_weight=1.0)
+
+    if normalize_per_layer:
+        for k, v in list(neuron_scores.items()):
+            vv = v.float()
+            vmin = vv.min()
+            vmax = vv.max()
+            if (vmax - vmin) > 1e-12:
+                neuron_scores[k] = (vv - vmin) / (vmax - vmin)
+            else:
+                neuron_scores[k] = torch.zeros_like(vv)
+
+    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor=None, model=model)
+    if not weight_scores:
+        print("[collect_cav_scores] Warning: mapped weight_scores is empty.")
+        print(f"  neuron score layers: {len(neuron_scores)}")
+        print("  sample neuron keys:", list(neuron_scores.keys())[:5])
     return weight_scores
 
 

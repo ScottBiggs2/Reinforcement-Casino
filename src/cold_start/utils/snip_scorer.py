@@ -73,3 +73,84 @@ class SNIPScorer:
             f"actual sparsity={actual:.2f}%"
         )
         return masks
+
+
+def _sequence_logprob(logits, input_ids, attention_mask):
+    """Return per-sample summed log-probability for non-padding next tokens."""
+    # Standard causal LM shift.
+    shift_logits = logits[:, :-1, :]
+    shift_labels = input_ids[:, 1:]
+    shift_mask = attention_mask[:, 1:].float()
+
+    log_probs = F.log_softmax(shift_logits, dim=-1)
+    token_logp = log_probs.gather(dim=-1, index=shift_labels.unsqueeze(-1)).squeeze(-1)
+    token_logp = token_logp * shift_mask
+    return token_logp.sum(dim=-1)
+
+
+def dpo_style_preference_loss(
+    chosen_logits,
+    chosen_ids,
+    chosen_mask,
+    rejected_logits,
+    rejected_ids,
+    rejected_mask,
+    beta: float = 1.0,
+):
+    """A simple DPO-style loss using model-only chosen-vs-rejected margins."""
+    chosen_lp = _sequence_logprob(chosen_logits, chosen_ids, chosen_mask)
+    rejected_lp = _sequence_logprob(rejected_logits, rejected_ids, rejected_mask)
+    margin = chosen_lp - rejected_lp
+    return -F.logsigmoid(beta * margin).mean()
+
+
+def compute_snip_scores(
+    model,
+    dataloader,
+    device: str,
+    num_batches: int,
+    mlp_only: bool = True,
+):
+    """Compute SNIP scores for model weights from DPO-style preference gradients."""
+    model.train()
+    model.zero_grad(set_to_none=True)
+
+    seen = 0
+    for idx, batch in enumerate(dataloader):
+        if idx >= num_batches:
+            break
+
+        chosen_ids = batch["chosen_input_ids"].to(device)
+        chosen_mask = batch["chosen_attention_mask"].to(device)
+        rejected_ids = batch["rejected_input_ids"].to(device)
+        rejected_mask = batch["rejected_attention_mask"].to(device)
+
+        chosen_logits = model(input_ids=chosen_ids, attention_mask=chosen_mask).logits
+        rejected_logits = model(input_ids=rejected_ids, attention_mask=rejected_mask).logits
+
+        loss = dpo_style_preference_loss(
+            chosen_logits=chosen_logits,
+            chosen_ids=chosen_ids,
+            chosen_mask=chosen_mask,
+            rejected_logits=rejected_logits,
+            rejected_ids=rejected_ids,
+            rejected_mask=rejected_mask,
+        )
+        loss.backward()
+        seen += 1
+
+    scores = {}
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if mlp_only and "mlp" not in name:
+                continue
+            if param.dim() != 2:
+                continue
+            if param.grad is None:
+                continue
+            scores[name] = (param.grad.abs() * param.detach().abs()).float().cpu()
+
+    model.zero_grad(set_to_none=True)
+    model.eval()
+    print(f"[compute_snip_scores] Scored {len(scores)} matrices over {seen} batches.")
+    return scores
