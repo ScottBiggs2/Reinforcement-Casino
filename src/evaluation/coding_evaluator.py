@@ -211,7 +211,7 @@ def evaluate_coding(
                 import gc
                 gc.collect()
             
-            if any(err in error_msg for err in chat_template_errors) or isinstance(e, AssertionError):
+            if any(err in error_msg for err in retry_errors) or isinstance(e, AssertionError):
                 if verbose:
                     import traceback
                     traceback.print_exc()
