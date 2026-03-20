@@ -199,9 +199,8 @@ def evaluate_math(
     else:
         print("MATH: Running...", end=" ", flush=True)
     
-    # Try common task aliases in case the installed lm-eval version uses different names
-    # Task names vary across lm-eval versions (v0.3.0 vs v0.4.x)
-    task_candidates = ["math", "hendrycks_math", "minerva_math"]
+    # Try common task aliases - hendrycks_math is preferred in 0.4.x
+    task_candidates = ["hendrycks_math", "math", "minerva_math"]
     results = None
     task_errors = []
     

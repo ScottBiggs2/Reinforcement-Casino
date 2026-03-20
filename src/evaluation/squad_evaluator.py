@@ -377,7 +377,8 @@ def evaluate_squad_with_lm_eval(
     else:
         print("SQuAD: Running...", end=" ", flush=True)
     
-    task_candidates = ["squad", "squad_v2", "squad_completion"]
+    # squad_completion is our primary focus in recent runs
+    task_candidates = ["squad_completion", "squad", "squad_v2"]
     
     # Lazy imports for stability
     from lm_eval import simple_evaluate

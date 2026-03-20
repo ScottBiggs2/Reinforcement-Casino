@@ -199,7 +199,8 @@ def evaluate_gpqa_diamond(
     # Task name varies across lm-eval versions
     # We add 'gpqa' as a generic fallback which might be a group containing diamond
     # Try common task aliases
-    task_candidates = ["gpqa_diamond", "gpqa_diamond_n-shot", "gpqa_diamond_zeroshot", "gpqa"]
+    # gpqa_diamond_zeroshot was the winner in previous runs
+    task_candidates = ["gpqa_diamond_zeroshot", "gpqa_diamond", "gpqa_diamond_n-shot", "gpqa"]
     results = None
     task_errors = []
     

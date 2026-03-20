@@ -179,8 +179,7 @@ def evaluate_coding(
             filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
             
             # Native HumanEval/MBPP in lm-eval uses execution-based evaluation
-            # This requires 'allow_code_execution=True' or 'confirm_run_unsafe_code=True'
-            filtered_eval_kwargs["allow_code_execution"] = True
+            # This requires 'confirm_run_unsafe_code=True' (v0.4.11)
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True
             
             if verbose:
