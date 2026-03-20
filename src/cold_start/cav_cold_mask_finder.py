@@ -76,12 +76,17 @@ def map_neuron_scores_to_weight_scores(
             continue
 
         flat_score = score.reshape(-1)
-        if flat_score.numel() != weight.shape[0]:
+        if flat_score.numel() == weight.shape[0]:
+            # Neuron scores align with output dimension -> broadcast across columns.
+            mapped = flat_score[:, None].expand(weight.shape[0], weight.shape[1])
+        elif flat_score.numel() == weight.shape[1]:
+            # Neuron scores align with input dimension (e.g., down_proj input).
+            mapped = flat_score[None, :].expand(weight.shape[0], weight.shape[1])
+        else:
             # Shape mismatch can happen for unexpected module outputs.
             continue
 
-        row_scores = flat_score[:, None].expand(weight.shape[0], weight.shape[1])
-        scores[weight_name] = row_scores.float().cpu()
+        scores[weight_name] = mapped.float().cpu()
 
     return scores
 
