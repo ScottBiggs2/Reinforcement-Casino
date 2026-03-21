@@ -9,7 +9,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a100:1
-#SBATCH --mem=64G
+#SBATCH --constraint=a100-80gb
+#SBATCH --mem=128G
 #SBATCH --time=06:00:00
 
 # Exit on any error
