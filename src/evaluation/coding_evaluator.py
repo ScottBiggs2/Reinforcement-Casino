@@ -230,7 +230,8 @@ def evaluate_coding(
         print("CODING RESULTS (pass@1)")
         print("=" * 60)
         for task, task_results in results["results"].items():
-            pass_at_1 = task_results.get("pass@1", task_results.get("acc", "N/A"))
+            # Use pass@1,none or pass@1 (lm-eval v0.4.11 naming)
+            pass_at_1 = task_results.get("pass@1,none", task_results.get("pass@1", task_results.get("acc", "N/A")))
             print(f"{task}: {pass_at_1}")
             
     return results
