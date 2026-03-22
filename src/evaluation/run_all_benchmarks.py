@@ -306,8 +306,13 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 coding_res = benchmark_results["results"]
                 for task, task_results in coding_res.items():
                     if isinstance(task_results, dict):
-                        # Use pass@1,none or pass@1 (lm-eval v0.4.11 naming)
-                        pass_at_1 = task_results.get("pass@1,none", task_results.get("pass@1", task_results.get("acc", 0)))
+                        # lm-eval v0.4.11: humaneval uses pass@1,none; mbpp uses pass_at_1,none (note _ vs @)
+                        pass_at_1 = task_results.get(
+                            "pass@1,none",
+                            task_results.get("pass_at_1,none",
+                                task_results.get("pass@1",
+                                    task_results.get("pass_at_1",
+                                        task_results.get("acc", 0)))))
                         print(f"CODING ({task}): pass@1 = {pass_at_1:.4f}")
         elif benchmark_name == "ifeval":
             if "results" in benchmark_results:
