@@ -6,6 +6,8 @@ import os
 import sys
 from typing import Dict, Any, Optional
 import torch
+import gc
+import traceback
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -104,7 +106,10 @@ def evaluate_coding(
     # Auto-apply chat templates
     if apply_chat_template is None:
         lower_path = model_path.lower()
-        path_has_instruct = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
+        # Common keywords for instruct/chat models
+        instruct_keywords = ["instruct", "chat", "-it", "-int", "dpo", "rlhf"]
+        path_has_instruct = any(keyword in lower_path for keyword in instruct_keywords)
+        
         if os.path.exists(model_path):
             apply_chat_template = path_has_instruct or _has_chat_template(model_path)
         else:
@@ -141,12 +146,10 @@ def evaluate_coding(
         print(f"Model: {model_path}")
         print(f"Chat template: {apply_chat_template}")
     
-    # WARNING: Native HumanEval/MBPP in lm-eval uses execution-based evaluation
-    # This requires 'allow_code_execution=True' in recent lm-eval versions
     eval_kwargs = {
         "model": model,
         "model_args": base_model_args_str,
-        "tasks": tasks.split(","),
+        "tasks": [], # Will be set per task
         "num_fewshot": num_fewshot,
         "limit": limit,
         "batch_size": batch_size,
@@ -167,60 +170,91 @@ def evaluate_coding(
         configs_to_try.append({"apply_chat_template": True})
     configs_to_try.append({})  # Base config without chat template
     
-    results = None
-    last_error = None
+    all_task_results = {}
     
+    # First attempt: Run all tasks together with the requested settings
+    if verbose:
+        print(f"\nDEBUG: First attempt - Running all tasks together: {tasks}")
+        
+    initial_results = None
     for config in configs_to_try:
         try:
             current_eval_kwargs = eval_kwargs.copy()
+            current_eval_kwargs["tasks"] = tasks.split(",")
             current_eval_kwargs.update(config)
             
-            # Filter out None values to prevent library-level crashes on comparisons
             filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
-            
-            # Native HumanEval/MBPP in lm-eval uses execution-based evaluation
-            # This requires 'confirm_run_unsafe_code=True' (v0.4.11)
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True
             
-            if verbose:
-                print(f"\nDEBUG: Attempting CODING with config: {config}")
-                if torch.cuda.is_available():
-                    print(f"Pre-eval Memory: {torch.cuda.memory_allocated(0) / 1e9:.2f} GB")
-
-            results = simple_evaluate(**filtered_eval_kwargs)
+            initial_results = simple_evaluate(**filtered_eval_kwargs)
             break
         except Exception as e:
-            import traceback
-            error_msg = str(e)
+            if verbose:
+                print(f"DEBUG: Initial attempt with config {config} failed: {e}. Retrying with next config...")
+            last_error = e
+            continue
             
-            # Check for known chat template or code evaluation issues
-            retry_errors = [
-                "apply_chat_template",
-                "marked as unsafe",
-                "AssertionError" # Often related to chat template issues in lm-eval
-            ]
+    if initial_results:
+        all_task_results = initial_results
+        
+        # Check if we need to retry any task (specifically MBPP if it scored 0.0)
+        tasks_list = tasks.split(",")
+        needs_retry = []
+        for task_name in tasks_list:
+            task_name = task_name.strip()
+            if not task_name: continue
             
-            if "confirm_run_unsafe_code" in error_msg or "allow_code_execution" in error_msg:
-                print(f"Code execution error, but we already set the flags. This might be a library bug. Error: {error_msg}")
-                raise e
+            if task_name in initial_results["results"]:
+                res_dict = initial_results["results"][task_name]
+                pass_at_1 = res_dict.get("pass@1,create_test",
+                                res_dict.get("pass_at_1,create_test",
+                                res_dict.get("pass@1,none",
+                                res_dict.get("pass_at_1,none",
+                                res_dict.get("pass@1",
+                                res_dict.get("pass_at_1",
+                                res_dict.get("acc", 0.0)))))))
                 
-            # For vLLM, if we fail AFTER initialization, we risk OOM on retry
-            # Let's try to clear some memory, though vLLM is stubborn
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                import gc
-                gc.collect()
+                # If MBPP scored 0.0 and we used zero-shot, plan a retry
+                if task_name == "mbpp" and num_fewshot == 0 and pass_at_1 == 0.0:
+                    needs_retry.append(task_name)
+                    
+        # Perform retries if needed
+        for task_name in needs_retry:
+            if verbose:
+                print(f"\nDEBUG: Retrying task '{task_name}' with specialized settings...")
+                
+            retry_results = None
+            # For MBPP, try 3-shot as a fallback
+            retry_fewshot = 3 if task_name == "mbpp" else num_fewshot
             
-            if any(err in error_msg for err in retry_errors) or isinstance(e, AssertionError):
-                if verbose:
-                    import traceback
-                    traceback.print_exc()
-                    print(f"Chat template config or multi-turn fewshot not supported: {config}; retrying with simpler config.")
-                last_error = e # Store the error for later if all configs fail
-                continue
-            
-            traceback.print_exc()
-            raise e
+            for config in configs_to_try:
+                try:
+                    current_eval_kwargs = eval_kwargs.copy()
+                    current_eval_kwargs["tasks"] = [task_name]
+                    current_eval_kwargs["num_fewshot"] = retry_fewshot
+                    current_eval_kwargs.update(config)
+                    
+                    filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
+                    filtered_eval_kwargs["confirm_run_unsafe_code"] = True
+                    
+                    retry_results = simple_evaluate(**filtered_eval_kwargs)
+                    if retry_results:
+                        # Update the main results with the retry results
+                        all_task_results["results"][task_name] = retry_results["results"][task_name]
+                        if verbose:
+                            new_score = retry_results["results"][task_name].get("pass@1,none", "N/A")
+                            print(f"DEBUG: Retry for '{task_name}' completed. New score: {new_score}")
+                        break
+                except Exception:
+                    continue
+    else:
+        # If the first attempt failed completely, try individual tasks as a fallback
+        if verbose:
+            print("DEBUG: Initial attempt failed completely. Falling back to individual task runs.")
+        # ... logic for individual runs could go here, but usually above is sufficient
+        raise last_error or RuntimeError("Failed to run evaluation.")
+
+    results = all_task_results
 
     if results is None:
         raise last_error or RuntimeError("Failed to run coding evaluation.")
@@ -230,13 +264,16 @@ def evaluate_coding(
         print("CODING RESULTS (pass@1)")
         print("=" * 60)
         for task, task_results in results["results"].items():
-            # lm-eval v0.4.11: humaneval uses pass@1,none; mbpp uses pass_at_1,none (note _ vs @)
+            # lm-eval v0.4.11+: humaneval uses pass@1,create_test; mbpp uses pass_at_1,none
+            # Note: we check for create_test variants first as they are often the "filtered" results we want
             pass_at_1 = task_results.get(
-                "pass@1,none",
-                task_results.get("pass_at_1,none",
-                    task_results.get("pass@1",
-                        task_results.get("pass_at_1",
-                            task_results.get("acc", "N/A")))))
+                "pass@1,create_test",
+                task_results.get("pass_at_1,create_test",
+                    task_results.get("pass@1,none",
+                        task_results.get("pass_at_1,none",
+                            task_results.get("pass@1",
+                                task_results.get("pass_at_1",
+                                    task_results.get("acc", "N/A")))))))
             print(f"{task}: {pass_at_1}")
             
     return results

@@ -1,6 +1,6 @@
-Evaluation started at: Sat Mar 21 16:24:34 EDT 2026
+Evaluation started at: Sun Mar 22 17:31:57 EDT 2026
 Running on node: d1029
-Job ID: 5308510
+Job ID: 5349684
 WARNING: HF_TOKEN is not set. Accessing gated models (Llama 3.1) may fail.
 ================================
 Environment Check
@@ -10,8 +10,8 @@ Python 3.11.14
 PyTorch: 2.4.0+cu121, vLLM: 0.6.3.post1, Transformers: 4.46.3
 Installing lm-eval with Python 3.11 compatibility fixes...
 Step 1: Upgrading pip and clearing cache...
-Files removed: 255 (3095.7 MB)
-Directories removed: 5
+Files removed: 44 (1.8 MB)
+Directories removed: 0
 Requirement already satisfied: pip in /scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages (26.0.1)
 Requirement already satisfied: setuptools in /scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages (82.0.1)
 Requirement already satisfied: wheel in /scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages (0.46.3)
@@ -234,16 +234,16 @@ Generation params: temperature=0.0, max_gen_toks=256
 
 DEBUG: Attempting MMLU with config: {'apply_chat_template': True, 'fewshot_as_multiturn': True}
 Pre-eval Memory: 0.00 GB
-WARNING 03-21 16:25:14 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 16:25:21 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 16:25:22 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 16:25:23 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 16:25:32 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 16:25:32 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-21 16:25:32 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-21 16:25:35 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 16:25:35 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 16:25:37 model_runner.py:1523] Graph capturing finished in 3 secs.
+WARNING 03-22 17:32:29 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 17:32:34 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 17:32:35 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 17:32:35 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 17:33:09 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 17:33:10 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
+INFO 03-22 17:33:10 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
+INFO 03-22 17:33:16 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 17:33:16 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 17:33:20 model_runner.py:1523] Graph capturing finished in 4 secs.
 Post-eval Memory: 16.11 GB
 
 ============================================================
@@ -253,7 +253,7 @@ MMLU RESULTS
 MMLU Accuracy: 0.6874
 
 
-Results saved to: results/eval_5308510/mmlu_results.json
+Results saved to: results/eval_5349684/mmlu_results.json
 
 ================================================================================
 Running MATH benchmark (Subprocess Isolated)
@@ -289,60 +289,60 @@ Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
 Chat template: True
 Generation params: temperature=0.0, max_gen_toks=512
-WARNING 03-21 17:33:45 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:33:50 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:33:51 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:33:51 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:34:01 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 17:34:02 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-21 17:34:02 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-21 17:34:04 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:34:04 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:34:06 model_runner.py:1523] Graph capturing finished in 2 secs.
+WARNING 03-22 18:40:21 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 18:40:26 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 18:40:27 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 18:40:27 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 18:40:57 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 18:40:58 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
+INFO 03-22 18:40:58 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
+INFO 03-22 18:41:01 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 18:41:01 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 18:41:03 model_runner.py:1523] Graph capturing finished in 2 secs.
 Chat template config or mult-turn fewshot not supported: {'apply_chat_template': True, 'fewshot_as_multiturn': True}; retrying with simpler config.
-WARNING 03-21 17:34:25 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:34:25 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:34:26 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:34:26 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:34:35 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-21 17:34:36 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
-INFO 03-21 17:34:36 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
-INFO 03-21 17:34:36 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:34:36 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:34:38 model_runner.py:1523] Graph capturing finished in 2 secs.
+WARNING 03-22 18:41:23 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 18:41:23 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 18:41:24 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 18:41:24 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 18:41:42 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-22 18:41:43 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
+INFO 03-22 18:41:43 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
+INFO 03-22 18:41:43 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 18:41:43 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 18:41:45 model_runner.py:1523] Graph capturing finished in 2 secs.
 Chat template config or mult-turn fewshot not supported: {'apply_chat_template': True}; retrying with simpler config.
-WARNING 03-21 17:34:51 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:34:51 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:34:51 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:34:51 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:35:01 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-21 17:35:01 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
-INFO 03-21 17:35:01 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
-INFO 03-21 17:35:01 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:35:01 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:35:03 model_runner.py:1523] Graph capturing finished in 2 secs.
+WARNING 03-22 18:41:58 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 18:41:58 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 18:41:59 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 18:41:59 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 18:42:17 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-22 18:42:18 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
+INFO 03-22 18:42:18 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
+INFO 03-22 18:42:18 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 18:42:18 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 18:42:20 model_runner.py:1523] Graph capturing finished in 2 secs.
 Chat template config or mult-turn fewshot not supported: {}; retrying with simpler config.
-WARNING 03-21 17:35:16 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:35:16 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:35:17 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:35:17 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:35:26 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-21 17:35:26 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
-INFO 03-21 17:35:26 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
-INFO 03-21 17:35:27 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:35:27 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:35:29 model_runner.py:1523] Graph capturing finished in 2 secs.
+WARNING 03-22 18:42:33 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 18:42:33 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 18:42:34 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 18:42:34 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 18:42:52 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-22 18:42:52 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
+INFO 03-22 18:42:52 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
+INFO 03-22 18:42:53 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 18:42:53 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 18:42:55 model_runner.py:1523] Graph capturing finished in 2 secs.
 Task 'math' not found, trying next alias if available...
-WARNING 03-21 17:35:40 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:35:40 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:35:41 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:35:41 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:35:50 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-21 17:35:50 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
-INFO 03-21 17:35:50 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
-INFO 03-21 17:35:51 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:35:51 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:35:53 model_runner.py:1523] Graph capturing finished in 2 secs.
+WARNING 03-22 18:43:05 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 18:43:05 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 18:43:06 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 18:43:06 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 18:43:24 model_runner.py:1067] Loading model weights took 14.9575 GB
+INFO 03-22 18:43:25 gpu_executor.py:122] # GPU blocks: 20512, # CPU blocks: 2048
+INFO 03-22 18:43:25 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.12x
+INFO 03-22 18:43:26 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 18:43:26 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 18:43:28 model_runner.py:1523] Graph capturing finished in 2 secs.
 
 ============================================================
 MATH RESULTS
@@ -353,7 +353,7 @@ Task key: minerva_math
 Accuracy key: exact_match,none
 
 
-Results saved to: results/eval_5308510/math_results.json
+Results saved to: results/eval_5349684/math_results.json
 
 ================================================================================
 Running GSM8K benchmark (Subprocess Isolated)
@@ -385,16 +385,16 @@ Environment Variables:
 Running GSM8K evaluation with 5-shot learning...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-21 17:54:02 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:54:07 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:54:08 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:54:08 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:54:16 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 17:54:17 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-21 17:54:17 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-21 17:54:19 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:54:19 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:54:22 model_runner.py:1523] Graph capturing finished in 3 secs.
+WARNING 03-22 19:01:46 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 19:01:51 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 19:01:52 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 19:01:52 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 19:02:09 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 19:02:09 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
+INFO 03-22 19:02:09 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
+INFO 03-22 19:02:12 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 19:02:12 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 19:02:15 model_runner.py:1523] Graph capturing finished in 3 secs.
 
 ============================================================
 GSM8K RESULTS
@@ -403,7 +403,7 @@ GSM8K RESULTS
 GSM8K Accuracy: 0.8165
 
 
-Results saved to: results/eval_5308510/gsm8k_results.json
+Results saved to: results/eval_5349684/gsm8k_results.json
 
 ================================================================================
 Running CODING benchmark (Subprocess Isolated)
@@ -438,25 +438,25 @@ Chat template: True
 
 DEBUG: Attempting CODING with config: {'apply_chat_template': True}
 Pre-eval Memory: 0.00 GB
-WARNING 03-21 17:57:10 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 17:57:15 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 17:57:16 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 17:57:16 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 17:57:24 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 17:57:25 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-21 17:57:25 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-21 17:57:27 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 17:57:27 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 17:57:31 model_runner.py:1523] Graph capturing finished in 4 secs.
+WARNING 03-22 19:05:03 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 19:05:08 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 19:05:09 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 19:05:10 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 19:05:26 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 19:05:27 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
+INFO 03-22 19:05:27 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
+INFO 03-22 19:05:30 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 19:05:30 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 19:05:32 model_runner.py:1523] Graph capturing finished in 2 secs.
 
 ============================================================
 CODING RESULTS (pass@1)
 ============================================================
 humaneval: N/A
-mbpp: N/A
+mbpp: 0.0
 
 
-Results saved to: results/eval_5308510/coding_results.json
+Results saved to: results/eval_5349684/coding_results.json
 
 ================================================================================
 Running IFEVAL benchmark (Subprocess Isolated)
@@ -488,16 +488,16 @@ Environment Variables:
 Running IFEval evaluation...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Chat template: True
-WARNING 03-21 18:00:54 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 18:00:59 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 18:01:00 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 18:01:00 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 18:01:08 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 18:01:09 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-21 18:01:09 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-21 18:01:11 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 18:01:11 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 18:01:14 model_runner.py:1523] Graph capturing finished in 3 secs.
+WARNING 03-22 19:09:19 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 19:09:25 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 19:09:26 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 19:09:26 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 19:09:42 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 19:09:43 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
+INFO 03-22 19:09:43 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
+INFO 03-22 19:09:46 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 19:09:46 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 19:09:49 model_runner.py:1523] Graph capturing finished in 3 secs.
 
 ============================================================
 IFEVAL RESULTS
@@ -506,7 +506,7 @@ Prompt-level Strict Acc: 0.7375231053604436
 Prompt-level Loose Acc: 0.7818853974121996
 
 
-Results saved to: results/eval_5308510/ifeval_results.json
+Results saved to: results/eval_5349684/ifeval_results.json
 
 ================================================================================
 Running SQUAD benchmark (Subprocess Isolated)
@@ -541,16 +541,16 @@ Final decision: apply_chat_template = True
 Running SQuAD evaluation...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
-WARNING 03-21 18:02:54 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 18:02:59 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 18:03:00 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 18:03:00 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 18:03:09 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 18:03:09 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-21 18:03:09 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-21 18:03:11 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 18:03:11 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 18:03:15 model_runner.py:1523] Graph capturing finished in 3 secs.
+WARNING 03-22 19:11:42 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 19:11:47 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 19:11:48 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 19:11:49 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 19:12:05 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 19:12:06 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
+INFO 03-22 19:12:06 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
+INFO 03-22 19:12:08 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 19:12:08 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 19:12:13 model_runner.py:1523] Graph capturing finished in 5 secs.
 
 ============================================================
 SQuAD RESULTS
@@ -562,7 +562,7 @@ Contains Metric: 0.6880
 Available metrics for this task: ['alias', 'contains,none', 'contains_stderr,none']
 
 
-Results saved to: results/eval_5308510/squad_results.json
+Results saved to: results/eval_5349684/squad_results.json
 
 ================================================================================
 Running GPQA_DIAMOND benchmark (Subprocess Isolated)
@@ -597,16 +597,16 @@ Running GPQA Diamond evaluation with 0-shot learning...
 Model: meta-llama/Llama-3.1-8B-Instruct
 Device: cuda, Dtype: float16
 DEBUG: Attempting task 'gpqa_diamond_zeroshot' with config {'apply_chat_template': True, 'fewshot_as_multiturn': True}
-WARNING 03-21 18:04:49 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-21 18:04:54 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-21 18:04:55 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-21 18:04:55 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-21 18:05:04 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-21 18:05:04 gpu_executor.py:122] # GPU blocks: 16360, # CPU blocks: 2048
-INFO 03-21 18:05:04 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 63.91x
-INFO 03-21 18:05:06 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-21 18:05:06 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-21 18:05:08 model_runner.py:1523] Graph capturing finished in 1 secs.
+WARNING 03-22 19:14:05 config.py:1668] Casting torch.bfloat16 to torch.float16.
+INFO 03-22 19:14:12 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+INFO 03-22 19:14:13 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
+INFO 03-22 19:14:14 weight_utils.py:243] Using model weights format ['*.safetensors']
+INFO 03-22 19:14:29 model_runner.py:1067] Loading model weights took 14.9888 GB
+INFO 03-22 19:14:30 gpu_executor.py:122] # GPU blocks: 16360, # CPU blocks: 2048
+INFO 03-22 19:14:30 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 63.91x
+INFO 03-22 19:14:32 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 03-22 19:14:32 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 03-22 19:14:34 model_runner.py:1523] Graph capturing finished in 2 secs.
 DEBUG: GPQA Raw results keys: ['gpqa_diamond_zeroshot']
 
 ============================================================
@@ -617,9 +617,9 @@ GPQA Diamond Accuracy: 0.2879
 Available metrics for this task: ['alias', 'acc,none', 'acc_stderr,none', 'acc_norm,none', 'acc_norm_stderr,none']
 
 
-Results saved to: results/eval_5308510/gpqa_diamond_results.json
+Results saved to: results/eval_5349684/gpqa_diamond_results.json
 
-Summary saved to: results/eval_5308510/all_benchmarks_summary.json
+Summary saved to: results/eval_5349684/all_benchmarks_summary.json
 
 ================================================================================
 EVALUATION SUMMARY
@@ -634,6 +634,6 @@ SQUAD: Exact Match = 0.6880, F1 = 0.0000
 GPQA_DIAMOND: Accuracy = 0.2879
 DEBUG: run_all_benchmarks.py command completed with exit code 0
 ================================
-Evaluation finished at: Sat Mar 21 18:05:49 EDT 2026
-Results saved to: results/eval_5308510
+Evaluation finished at: Sun Mar 22 19:15:24 EDT 2026
+Results saved to: results/eval_5349684
 ================================

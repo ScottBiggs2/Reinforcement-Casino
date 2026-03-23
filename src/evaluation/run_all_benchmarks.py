@@ -306,13 +306,16 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                 coding_res = benchmark_results["results"]
                 for task, task_results in coding_res.items():
                     if isinstance(task_results, dict):
-                        # lm-eval v0.4.11: humaneval uses pass@1,none; mbpp uses pass_at_1,none (note _ vs @)
+                        # lm-eval v0.4.11+: humaneval uses pass@1,create_test; mbpp uses pass_at_1,none
+                        # Note: we check for create_test variants first as they are often the "filtered" results we want
                         pass_at_1 = task_results.get(
-                            "pass@1,none",
-                            task_results.get("pass_at_1,none",
-                                task_results.get("pass@1",
-                                    task_results.get("pass_at_1",
-                                        task_results.get("acc", 0)))))
+                            "pass@1,create_test",
+                            task_results.get("pass_at_1,create_test",
+                                task_results.get("pass@1,none",
+                                    task_results.get("pass_at_1,none",
+                                        task_results.get("pass@1",
+                                            task_results.get("pass_at_1",
+                                                task_results.get("acc", 0)))))))
                         print(f"CODING ({task}): pass@1 = {pass_at_1:.4f}")
         elif benchmark_name == "ifeval":
             if "results" in benchmark_results:
