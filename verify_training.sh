@@ -26,6 +26,8 @@ source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/c
 conda activate /scratch/biggs.s/conda_envs/rl_casino
 
 export PYTHONPATH=.
+echo "Installing/verifying training requirements..."
+pip install -r requirements.txt -q
 
 MODEL="google/gemma-3-270m-it"
 NUM_STEPS=10
