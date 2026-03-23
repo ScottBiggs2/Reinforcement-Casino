@@ -55,7 +55,9 @@ for DS in "${DATASETS[@]}"; do
         --num_steps "$NUM_STEPS" \
         --subset_size "$SUBSET" \
         --output_base_dir "$VERIFY_OUT_DIR" \
-        --dataset_cache_dir "$VERIFY_CACHE_DIR" 2>&1
+        --dataset_cache_dir "$VERIFY_CACHE_DIR" \
+        --use_wandb \
+        --run_name "verify_${DS}_$(date +%Y%m%d_%H%M%S)" 2>&1
 
     if [ $? -eq 0 ]; then
         echo "  ✓ ${DS}: PASSED"
