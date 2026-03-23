@@ -33,7 +33,23 @@ class FlexibleCheckpointCallback(TrainerCallback):
         self.wandb_initialized = (wandb.run is not None)
 
     def on_train_begin(self, args, state, control, **kwargs):
-        # Only init if not already initialized (e.g. by Trainer)
+        # Save run metadata for provenance/self-documentation
+        metadata = {
+            "model_name": self.model_name,
+            "dataset_name": self.dataset_name,
+            "subset_size": self.subset_size,
+            "learning_rate": self.learning_rate,
+            "batch_size_per_device": self.batch_size,
+            "grad_accum": self.grad_accum,
+            "checkpoint_schedule": sorted(list(self.checkpoint_schedule)),
+            "run_name": self.run_name,
+        }
+        metadata_path = os.path.join(self.delta_log_dir, "run_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"  ✓ Saved run metadata to {metadata_path}")
+        
+        # Only init wandb if not already initialized (e.g. by Trainer)
         if self.use_wandb and not self.wandb_initialized and wandb.run is None:
             project_name = self.wandb_project if self.wandb_project else f"{self.model_name.replace('/', '_')}-dpo-subnetwork-emergence"
             wandb.init(

@@ -24,7 +24,8 @@ from trl import DPOTrainer, DPOConfig
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_manager import SparseMaskManager
-from src.utils.data_utils import load_dpo_dataset, dpo_collator_fn
+from src.utils.data_utils import dpo_collator_fn
+from src.utils.dataset_registry import get_dataset_config, load_dpo_dataset as registry_load_dpo
 from src.utils.logging_utils import FlexibleCheckpointCallback, CSVLoggerCallback
 from src.optimizers.sparse_adamw import SparseAdamW
 from src.mlps.bsr_sparse_mlp import replace_linear_modules, restore_linear_modules
@@ -58,10 +59,21 @@ def train(
     warmup_steps,
     disable_tf32,
     save_model,
+    dataset_key,
+    output_base_dir,
+    dataset_cache_dir,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
+    
+    # Set dataset cache directory
+    os.environ["HF_DATASETS_CACHE"] = dataset_cache_dir
+    
+    # Resolve dataset via registry
+    ds_config = get_dataset_config(dataset_key)
+    dataset_name = ds_config["hf_id"]
+    dataset_sanitized = ds_config["sanitized_name"]
     
     if run_name is None:
         # Construct a descriptive run name
@@ -79,24 +91,28 @@ def train(
         # Model info
         parts.append(sanitize_model_name(model_name))
         
+        # Dataset info
+        parts.append(dataset_sanitized)
+        
         run_name = "_".join(parts)
     
     wandb_project = "huggingface"
     os.environ["WANDB_PROJECT"] = wandb_project
-    run_dir = os.path.join("results", run_name)
+    run_dir = os.path.join(output_base_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
     
     print(f"\n{'='*60}")
     print(f"SPARSE DPO BSR TRAINING")
     print(f"{'='*60}")
     print(f"Run Directory: {run_dir}")
+    print(f"Dataset: {dataset_key} ({dataset_name})")
     print(f"Block Size BSR: {block_size_bsr}")
     
     # Load Components
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
     
-    dpo_dataset = load_dpo_dataset(argparse.Namespace(dataset_name="qihoo360/Light-R1-DPOData").dataset_name, subset_size=subset_size)
+    dpo_dataset = registry_load_dpo(dataset_key, subset_size=subset_size)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
@@ -166,7 +182,7 @@ def train(
         checkpoint_schedule=checkpoint_schedule,
         threshold=1e-3,
         model_name=model_name,
-        dataset_name="qihoo360/Light-R1-DPOData",
+        dataset_name=dataset_name,
         subset_size=subset_size,
         learning_rate=learning_rate,
         batch_size=batch_size,
@@ -242,6 +258,10 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
+    parser.add_argument("--dataset", type=str, default="light-r1",
+                       help="Dataset key (light-r1, tulu3, math-step-dpo, codepref) or HuggingFace ID")
+    parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs", help="Base directory for outputs")
+    parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets", help="Cache directory for HuggingFace datasets")
     
     def str2bool(v):
         if isinstance(v, bool): return v
@@ -288,4 +308,7 @@ if __name__ == "__main__":
         warmup_steps=args.warmup_steps,
         disable_tf32=args.disable_tf32,
         save_model=args.save_model,
+        dataset_key=args.dataset,
+        output_base_dir=args.output_base_dir,
+        dataset_cache_dir=args.dataset_cache_dir,
     )

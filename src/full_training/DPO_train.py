@@ -44,15 +44,40 @@ parser.add_argument(
     default="google/gemma-3-270m-it",
     help="HuggingFace model name to load (default: google/gemma-3-270m-it)"
 )
+parser.add_argument(
+    "--dataset",
+    type=str,
+    default="light-r1",
+    help="Dataset key from registry (light-r1, tulu3, math-step-dpo, codepref) or HuggingFace ID"
+)
 parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB")
 parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
+parser.add_argument("--num_steps", type=int, default=500, help="Number of training steps (default: 500)")
+parser.add_argument("--subset_size", type=int, default=None, help="Limit dataset size (default: None = full)")
+parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs", help="Base directory for all outputs (checkpoints, deltas)")
+parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets", help="Cache directory for HuggingFace datasets")
 args = parser.parse_args()
+
+# Set dataset cache directory
+os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir
+
 
 MODEL_NAME = args.model_name
 MODEL_NAME_SANITIZED = sanitize_model_name(MODEL_NAME)
-DATASET_NAME = "qihoo360/Light-R1-DPOData"
-OUTPUT_DIR = f"./checkpoints_{MODEL_NAME_SANITIZED}_dpo"
-DELTA_LOG_DIR = f"./delta_logs_{MODEL_NAME_SANITIZED}"
+
+# Dataset resolution via registry
+from src.utils.dataset_registry import get_dataset_config, sanitize_dataset_name
+DATASET_KEY = args.dataset
+DATASET_CONFIG = get_dataset_config(DATASET_KEY)
+DATASET_NAME = DATASET_CONFIG["hf_id"]
+DATASET_SANITIZED = DATASET_CONFIG["sanitized_name"]
+
+# Combined output path on scratch
+BASE_DIR = args.output_base_dir
+SUB_DIR = f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}"
+
+OUTPUT_DIR = os.path.join(BASE_DIR, "checkpoints", SUB_DIR)
+DELTA_LOG_DIR = os.path.join(BASE_DIR, "deltas", SUB_DIR)
 
 # Flexible checkpoint schedule
 # Save every 5 steps for first 25 steps, then every 25 steps after
@@ -68,12 +93,12 @@ CHECKPOINT_SCHEDULE = (
 
 
 THRESHOLD = 1e-5 # appendix A in Mukherjee et al 2025
-NUM_STEPS = 500
-SUBSET_SIZE = None  # reduce for faster bring-up
+NUM_STEPS = args.num_steps
+SUBSET_SIZE = args.subset_size
 
 WANDB_PROJECT = "huggingface"
 os.environ["WANDB_PROJECT"] = WANDB_PROJECT
-WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_lightR1_flexible_checkpoints"
+WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}_dpo_{NUM_STEPS}steps"
 
 print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 
@@ -81,9 +106,10 @@ print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 # 1. Load dataset
 #######################################
 
-from src.utils.data_utils import load_dpo_dataset, dpo_collator_fn
+from src.utils.dataset_registry import load_dpo_dataset as registry_load_dpo
+from src.utils.data_utils import dpo_collator_fn
 
-raw_ds = load_dpo_dataset(DATASET_NAME, subset_size=SUBSET_SIZE)
+raw_ds = registry_load_dpo(DATASET_KEY, subset_size=SUBSET_SIZE)
 train_dataset = raw_ds
 eval_dataset = None
 
