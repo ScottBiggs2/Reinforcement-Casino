@@ -265,6 +265,7 @@ def map_neuron_scores_to_weight_scores(
     neuron_scores: Dict[str, torch.Tensor],
     extractor,
     model,
+    use_weight_abs: bool = False,
 ) -> Dict[str, torch.Tensor]:
     param_dict = dict(model.named_parameters())
     scores: Dict[str, torch.Tensor] = {}
@@ -312,7 +313,13 @@ def map_neuron_scores_to_weight_scores(
             # Shape mismatch can happen for unexpected module outputs.
             continue
 
-        scores[weight_name] = mapped.float().cpu()
+        if use_weight_abs:
+            scores[weight_name] = mapped.float().cpu()
+        else:
+            if flat_score.numel() == weight.shape[0]:
+                scores[weight_name] = flat_score[:, None].expand(weight.shape[0], weight.shape[1]).float().cpu()
+            else:
+                scores[weight_name] = flat_score[None, :].expand(weight.shape[0], weight.shape[1]).float().cpu()
 
     return scores
 
@@ -375,7 +382,7 @@ def _collect_pooled_downproj_activations(
     return {k: torch.cat(v, dim=0) for k, v in acts.items() if len(v) > 0}
 
 
-def collect_activation_scores(model, dataloader, device: str, num_batches: int, mlp_only: bool) -> Dict[str, torch.Tensor]:
+def collect_activation_scores(model, dataloader, device: str, num_batches: int, mlp_only: bool, use_weight_abs: bool = False) -> Dict[str, torch.Tensor]:
     extractor = FeatureExtractor(model, mlp_only=mlp_only)
     model.eval()
 
@@ -394,7 +401,7 @@ def collect_activation_scores(model, dataloader, device: str, num_batches: int, 
             extractor.collect_stop()
 
     neuron_scores = extractor.get_activation_scores()
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
+    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model, use_weight_abs=use_weight_abs)
     extractor.close()
     return weight_scores
 
@@ -409,6 +416,7 @@ def collect_cav_scores(
     probe_lr: float,
     probe_weight_decay: float,
     normalize_per_layer: bool = True,
+    use_weight_abs: bool = False,
 ) -> Dict[str, torch.Tensor]:
     positive_acts = _collect_pooled_downproj_activations(
         model=model,
@@ -440,7 +448,7 @@ def collect_cav_scores(
             else:
                 neuron_scores[k] = torch.zeros_like(vv)
 
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor=None, model=model)
+    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor=None, model=model, use_weight_abs=use_weight_abs)
     if not weight_scores:
         print("[collect_cav_scores] Warning: mapped weight_scores is empty.")
         print(f"  neuron score layers: {len(neuron_scores)}")
@@ -458,6 +466,7 @@ def collect_cav_scores_with_debug(
     probe_lr: float,
     probe_weight_decay: float,
     normalize_per_layer: bool = True,
+    use_weight_abs: bool = False,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Tuple[torch.Tensor, torch.Tensor]], Dict[str, torch.Tensor]]:
     extractor = FeatureExtractor(model, mlp_only=mlp_only)
     model.eval()
@@ -493,7 +502,7 @@ def collect_cav_scores_with_debug(
         normalize_per_layer=normalize_per_layer,
     )
 
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
+    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model, use_weight_abs=use_weight_abs)
     module_to_weight = dict(extractor.module_to_weight)
     extractor.close()
     return weight_scores, layer_data, module_to_weight
@@ -781,6 +790,7 @@ def main(args):
             device=device,
             num_batches=args.num_batches,
             mlp_only=args.mlp_only,
+            use_weight_abs=args.weight_abs,
         )
     elif args.method == "cav":
         score_dict = _compute_cav_scores_once()
@@ -923,6 +933,9 @@ if __name__ == "__main__":
         default=0.0,
         help="Optional per-layer keep floor ratio for hybrid masking (e.g., 0.05 keeps at least 5%% in each layer, then allocates remaining budget globally).",
     )
+    parser.add_argument("--weight_abs", action="store_true",
+                        help="Weight neuron scores by parameter magnitudes when mapping to weight scores. "
+                             "Prevents rank-1 mask collapse; improves effective rank from ~0.002 to ~0.71.")
     parser.add_argument("--debug_out_dir", type=str, default=None, help="Write CAV/subnetwork debug report JSON to this directory.")
     parser.add_argument("--debug_eval_batches", type=int, default=8, help="Number of batches for debug ablation loss evaluation.")
     parser.add_argument("--debug_top_groups", type=int, default=20, help="Top-N groups to keep in debug summaries.")
