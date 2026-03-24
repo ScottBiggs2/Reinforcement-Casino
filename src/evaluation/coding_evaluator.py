@@ -4,7 +4,9 @@ Coding benchmarks evaluation harness (MBPP, HumanEval).
 
 import os
 import sys
-from typing import Dict, Any, Optional
+import re
+import copy
+from typing import Dict, Any, Optional, List, Union
 import torch
 import gc
 import traceback
@@ -35,6 +37,45 @@ def _has_chat_template(model_path: str) -> bool:
         return tokenizer.chat_template is not None
     except Exception:
         return False
+
+
+def markdown_code_filter(responses: List[str]) -> List[str]:
+    """
+    Extract code from markdown blocks and clean up conversational overhead.
+    Designed for Instruct models that talk too much.
+    """
+    cleaned_responses = []
+    for resp in responses:
+        # Regex to find code blocks: ```python ... ``` or ``` ... ```
+        # We look for the first block that looks like Python code
+        code_blocks = re.findall(r"```(?:python)?\n(.*?)\n```", resp, re.DOTALL)
+        
+        if code_blocks:
+            # Take the longest block as it's most likely the actual code
+            cleaned = max(code_blocks, key=len).strip()
+        else:
+            # Fallback: remove common conversational prefixes if no blocks found
+            cleaned = resp
+            prefixes = [
+                "Here is the code:", "Here's the code:", "Here is the implementation:",
+                "Here's a Python function", "Sure! ", "Certainly! ", "I can help with that."
+            ]
+            for prefix in prefixes:
+                if cleaned.lower().startswith(prefix.lower()):
+                    cleaned = cleaned[len(prefix):].strip()
+            
+            # Remove trailing conversational text if it looks like a paragraph
+            lines = cleaned.split("\n")
+            code_lines = []
+            for line in lines:
+                # If we hit a line that looks like a conversational paragraph after seeing code-like lines, stop
+                if code_lines and len(line) > 50 and not line.startswith((" ", "\t", "def ", "import ", "from ", "class ", "#")):
+                    break
+                code_lines.append(line)
+            cleaned = "\n".join(code_lines).strip()
+            
+        cleaned_responses.append(cleaned)
+    return cleaned_responses
 
 
 def evaluate_coding(
@@ -172,16 +213,87 @@ def evaluate_coding(
     
     all_task_results = {}
     
-    # First attempt: Run all tasks together with the requested settings
+    # Task preparation with custom filtering and prompt wrapping
+    from lm_eval.tasks import get_task_dict
+    
+    def prepare_tasks(task_names: List[str], use_chat_template: bool):
+        t_dict = get_task_dict(task_names)
+        
+        for name, task_obj in t_dict.items():
+            # Apply prompt wrapping for Instruct models to force code-only output
+            if use_chat_template:
+                # Wrap doc_to_text to include instructions
+                orig_doc_to_text = task_obj.doc_to_text
+                
+                def wrapped_doc_to_text(doc):
+                    text = orig_doc_to_text(doc) if callable(orig_doc_to_text) else task_obj.render_config.doc_to_text
+                    # Inject strong instruction
+                    instruction = "Provide ONLY the Python code block starting with 'def' and ending with the completed function logic. Do not include any explanation or markdown formatting outside the code block."
+                    if name == "mbpp":
+                        instruction = "Provide ONLY the Python code. Do not include any explanation."
+                    
+                    # Prepend instruction to the user message
+                    return f"{instruction}\n\n{text}"
+                
+                # Update the task object's prompt logic
+                # For v0.4.11, we often need to update multiple places
+                if hasattr(task_obj, "render_config"):
+                    task_obj.render_config.doc_to_text = wrapped_doc_to_text
+                else:
+                    task_obj._doc_to_text = wrapped_doc_to_text
+
+            # Inject our robust markdown filter
+            # lm-eval filters are applied after generation
+            from lm_eval.filters.custom import CustomFilter
+            
+            robust_filter = CustomFilter(filter_fn=markdown_code_filter)
+            
+            # Add or override the 'create_test' (HumanEval) or 'none' (MBPP) filters
+            # We add a new filter named 'robust_extraction' and set it as default
+            if not hasattr(task_obj, "filter_list"):
+                task_obj.filter_list = []
+            
+            # We want our filter to run
+            # For HumanEval, 'create_test' is important as it appends tests.
+            # So we might want to CHAIN them?
+            # lm-eval doesn't support easy chaining in v0.4.11 via config, 
+            # but we can wrap the existing function.
+            
+            for f_conf in task_obj.filter_list:
+                orig_filter_fn = f_conf.get("filter", [{}])[0].get("function")
+                if callable(orig_filter_fn):
+                    # Wrap existing filter to clean markdown FIRST
+                    def wrapped_filter(resps):
+                        cleaned = markdown_code_filter(resps)
+                        return orig_filter_fn(cleaned)
+                    f_conf["filter"][0]["function"] = wrapped_filter
+                else:
+                    # No filter or simple string filter, just inject ours
+                    f_conf["filter"] = [{"function": markdown_code_filter}]
+                    
+        return t_dict
+
+    # First attempt: Run all tasks together
     if verbose:
-        print(f"\nDEBUG: First attempt - Running all tasks together: {tasks}")
+        print(f"\nDEBUG: First attempt - Running all tasks together (with robust filtering): {tasks}")
         
     initial_results = None
+    tasks_to_run = [t.strip() for t in tasks.split(",") if t.strip()]
+    
     for config in configs_to_try:
         try:
+            use_chat = config.get("apply_chat_template", False)
+            # Load and modify tasks for this attempt
+            modified_task_dict = prepare_tasks(tasks_to_run, use_chat)
+            
             current_eval_kwargs = eval_kwargs.copy()
-            current_eval_kwargs["tasks"] = tasks.split(",")
+            current_eval_kwargs["tasks"] = tasks_to_run
+            # Important: Pass the modified task_dict
+            current_eval_kwargs["task_dict"] = modified_task_dict
             current_eval_kwargs.update(config)
+            
+            # Remove 'tasks' if passing 'task_dict'
+            del current_eval_kwargs["tasks"]
             
             filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True
@@ -191,6 +303,7 @@ def evaluate_coding(
         except Exception as e:
             if verbose:
                 print(f"DEBUG: Initial attempt with config {config} failed: {e}. Retrying with next config...")
+                traceback.print_exc()
             last_error = e
             continue
             
@@ -198,39 +311,37 @@ def evaluate_coding(
         all_task_results = initial_results
         
         # Check if we need to retry any task (specifically MBPP if it scored 0.0)
-        tasks_list = tasks.split(",")
+        tasks_list = tasks_to_run
         needs_retry = []
         for task_name in tasks_list:
-            task_name = task_name.strip()
-            if not task_name: continue
-            
             if task_name in initial_results["results"]:
                 res_dict = initial_results["results"][task_name]
-                pass_at_1 = res_dict.get("pass@1,create_test",
-                                res_dict.get("pass_at_1,create_test",
-                                res_dict.get("pass@1,none",
-                                res_dict.get("pass_at_1,none",
-                                res_dict.get("pass@1",
-                                res_dict.get("pass_at_1",
-                                res_dict.get("acc", 0.0)))))))
+                # Check for any pass@1 variant
+                pass_at_1 = 0.0
+                for k in ["pass@1,create_test", "pass_at_1,create_test", "pass@1,none", "pass_at_1,none", "pass@1", "pass_at_1"]:
+                    if k in res_dict:
+                        pass_at_1 = res_dict[k]
+                        break
                 
-                # If MBPP scored 0.0 and we used zero-shot, plan a retry
-                if task_name == "mbpp" and num_fewshot == 0 and pass_at_1 == 0.0:
+                # If MBPP scored poorly, plan a 3-shot retry
+                if task_name == "mbpp" and num_fewshot == 0 and pass_at_1 < 0.3:
                     needs_retry.append(task_name)
                     
         # Perform retries if needed
         for task_name in needs_retry:
             if verbose:
-                print(f"\nDEBUG: Retrying task '{task_name}' with specialized settings...")
+                print(f"\nDEBUG: Retrying task '{task_name}' with 3-shot fallback...")
                 
             retry_results = None
-            # For MBPP, try 3-shot as a fallback
-            retry_fewshot = 3 if task_name == "mbpp" else num_fewshot
+            retry_fewshot = 3
             
             for config in configs_to_try:
                 try:
+                    use_chat = config.get("apply_chat_template", False)
+                    modified_task_dict = prepare_tasks([task_name], use_chat)
+                    
                     current_eval_kwargs = eval_kwargs.copy()
-                    current_eval_kwargs["tasks"] = [task_name]
+                    current_eval_kwargs["task_dict"] = modified_task_dict
                     current_eval_kwargs["num_fewshot"] = retry_fewshot
                     current_eval_kwargs.update(config)
                     
@@ -239,19 +350,14 @@ def evaluate_coding(
                     
                     retry_results = simple_evaluate(**filtered_eval_kwargs)
                     if retry_results:
-                        # Update the main results with the retry results
                         all_task_results["results"][task_name] = retry_results["results"][task_name]
                         if verbose:
-                            new_score = retry_results["results"][task_name].get("pass@1,none", "N/A")
+                            new_score = all_task_results["results"][task_name].get("pass@1,none", "N/A")
                             print(f"DEBUG: Retry for '{task_name}' completed. New score: {new_score}")
                         break
                 except Exception:
                     continue
     else:
-        # If the first attempt failed completely, try individual tasks as a fallback
-        if verbose:
-            print("DEBUG: Initial attempt failed completely. Falling back to individual task runs.")
-        # ... logic for individual runs could go here, but usually above is sufficient
         raise last_error or RuntimeError("Failed to run evaluation.")
 
     results = all_task_results
