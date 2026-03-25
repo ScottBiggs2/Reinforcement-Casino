@@ -284,7 +284,7 @@ if __name__ == "__main__":
     parser.add_argument("--mlp_only", action="store_true", default=True)
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
-    parser.add_argument("--dataset", type=str, default="open-r1/OpenR1-Math-220k")
+    parser.add_argument("--dataset", type=str, default="math-220k")
     parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
     parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets")
     

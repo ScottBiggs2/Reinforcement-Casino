@@ -25,7 +25,7 @@ def sanitize_model_name(model_name: str) -> str:
 
 parser = argparse.ArgumentParser(description="Dense Baseline GRPO Training Script")
 parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
-parser.add_argument("--dataset", type=str, default="open-r1/OpenR1-Math-220k")
+parser.add_argument("--dataset", type=str, default="math-220k")
 parser.add_argument("--run_name", type=str, default=None)
 parser.add_argument("--use_wandb", action="store_true")
 parser.add_argument("--num_steps", type=int, default=1000)

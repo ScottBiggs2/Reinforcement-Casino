@@ -45,7 +45,7 @@ VERIFY_CACHE_DIR="/scratch/biggs.s/hf_cache_verify"
 # Default mask to verify the sparse script's parameter injection
 DEFAULT_MASK="masks/top_10.0pct_momentum_w25_step25.pt"
 
-DATASETS=("light-r1" "math-step-dpo")
+DATASETS=("math-220k")
 PASS_COUNT=0
 FAIL_COUNT=0
 

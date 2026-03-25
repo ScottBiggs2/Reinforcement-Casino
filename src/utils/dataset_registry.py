@@ -42,6 +42,15 @@ DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {
         "sanitized_name": "math_step_dpo",
         "field_map": None,  # Has standard prompt/chosen/rejected fields
     },
+    "math-220k": {
+        "hf_id": "open-r1/OpenR1-Math-220k",
+        "domain": "math",
+        "description": "OpenR1 Math 220k (GRPO Math Standard)",
+        "sanitized_name": "math_220k",
+        "field_map": {
+            "problem": "prompt"
+        },
+    },
     "codepref": {
         "hf_id": "Vezora/Code-Preference-Pairs",
         "domain": "coding",

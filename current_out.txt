@@ -1,6 +1,6 @@
-Job started at: Wed Mar 25 19:08:04 EDT 2026
+Job started at: Wed Mar 25 19:17:53 EDT 2026
 Running on node: d1028
-Job ID: 5425796
+Job ID: 5426167
 GPU: 0
 Working dir: /home/biggs.s/rl_casino
 Installing/verifying training requirements...
@@ -17,29 +17,25 @@ Testing DENSE GRPO on dataset: light-r1
   warnings.warn(
 /home/biggs.s/miniconda/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
   warnings.warn(
+`torch_dtype` is deprecated! Use `dtype` instead!
 [dataset_registry] Resolved 'light-r1' → qihoo360/Light-R1-DPOData for GRPO (domain: math_reasoning)
 Loading GRPO dataset: qihoo360/Light-R1-DPOData
-
-Map:   0%|          | 0/2970 [00:00<?, ? examples/s]
-Map:  77%|███████▋  | 2291/2970 [00:00<00:00, 22780.70 examples/s]
-Map: 100%|██████████| 2970/2970 [00:00<00:00, 20998.35 examples/s]
-`torch_dtype` is deprecated! Use `dtype` instead!
 ✓ Loaded 64 GRPO examples
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:12<00:38, 12.85s/it]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:29<00:30, 15.19s/it]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:40<00:12, 13.00s/it]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:41<00:00,  8.24s/it]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:41<00:00, 10.25s/it]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.24it/s]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.19it/s]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.21it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.73it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.49it/s]
 Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 116, in <module>
-    cfg = GRPOConfig(
-        output_dir=OUTPUT_DIR,
-    ...<15 lines>...
-        beta=0.1,
+  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 143, in <module>
+    trainer = GRPOTrainer(
+        model=model,
+    ...<4 lines>...
+        processing_class=tokenizer,
     )
-TypeError: GRPOConfig.__init__() got an unexpected keyword argument 'max_length'
+TypeError: GRPOTrainer.__init__() got an unexpected keyword argument 'data_collator'
   ✗ DENSE light-r1: FAILED
 
 ============================================================
@@ -76,11 +72,11 @@ Loading GRPO dataset: qihoo360/Light-R1-DPOData
 ✓ Loaded 64 GRPO examples
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.17it/s]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.12it/s]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.12it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.61it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.39it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.24it/s]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.22it/s]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.23it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.75it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.51it/s]
 Loading masks from masks/verify_meta_llama_llama_3.1_8b_instruct_light_r1_step10.pt...
 Traceback (most recent call last):
   File "/home/biggs.s/rl_casino/src/full_training/sparse_grpo_bsr.py", line 308, in <module>
@@ -107,32 +103,25 @@ Testing DENSE GRPO on dataset: math-step-dpo
   warnings.warn(
 /home/biggs.s/miniconda/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
   warnings.warn(
+`torch_dtype` is deprecated! Use `dtype` instead!
 [dataset_registry] Resolved 'math-step-dpo' → xinlai/Math-Step-DPO-10K for GRPO (domain: math)
 Loading GRPO dataset: xinlai/Math-Step-DPO-10K
-
-Map:   0%|          | 0/10795 [00:00<?, ? examples/s]
-Map:  24%|██▎       | 2560/10795 [00:00<00:00, 25458.96 examples/s]
-Map:  48%|████▊     | 5233/10795 [00:00<00:00, 26200.03 examples/s]
-Map:  74%|███████▎  | 7954/10795 [00:00<00:00, 26657.61 examples/s]
-Map:  99%|█████████▊| 10653/10795 [00:00<00:00, 26784.98 examples/s]
-Map: 100%|██████████| 10795/10795 [00:00<00:00, 24794.56 examples/s]
-`torch_dtype` is deprecated! Use `dtype` instead!
 ✓ Loaded 64 GRPO examples
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
 Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.24it/s]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.20it/s]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.19it/s]
 Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.22it/s]
 Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.74it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.51it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.50it/s]
 Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 116, in <module>
-    cfg = GRPOConfig(
-        output_dir=OUTPUT_DIR,
-    ...<15 lines>...
-        beta=0.1,
+  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 143, in <module>
+    trainer = GRPOTrainer(
+        model=model,
+    ...<4 lines>...
+        processing_class=tokenizer,
     )
-TypeError: GRPOConfig.__init__() got an unexpected keyword argument 'max_length'
+TypeError: GRPOTrainer.__init__() got an unexpected keyword argument 'data_collator'
   ✗ DENSE math-step-dpo: FAILED
 
 ============================================================
@@ -169,11 +158,11 @@ Loading GRPO dataset: xinlai/Math-Step-DPO-10K
 ✓ Loaded 64 GRPO examples
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.25it/s]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.20it/s]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.22it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.74it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.50it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.21it/s]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.19it/s]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.20it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.71it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.48it/s]
 Loading masks from masks/verify_meta_llama_llama_3.1_8b_instruct_math_step_dpo_step10.pt...
 Traceback (most recent call last):
   File "/home/biggs.s/rl_casino/src/full_training/sparse_grpo_bsr.py", line 308, in <module>
@@ -203,5 +192,5 @@ Checking output directories in /scratch/biggs.s/rl_casino_verify_outputs for DEN
   ✗ Not found: /scratch/biggs.s/rl_casino_verify_outputs/deltas/*_light_r1_grpo_dense*
   ✗ Not found: /scratch/biggs.s/rl_casino_verify_outputs/deltas/*_math_step_dpo_grpo_dense*
 
-Job finished at: Wed Mar 25 19:10:42 EDT 2026
+Job finished at: Wed Mar 25 19:19:18 EDT 2026
 VERIFICATION FAILED: 4 test(s) had errors
