@@ -70,6 +70,7 @@ for DS in "${DATASETS[@]}"; do
         --dataset_cache_dir "$VERIFY_CACHE_DIR" \
         --num_generations 4 \
         --generation_batch_size 4 \
+        --use_wandb \
         --run_name "verify_grpo_dense_${DS}_$(date +%Y%m%d_%H%M%S)" 2>&1
 
     if [ $? -eq 0 ]; then
@@ -114,6 +115,7 @@ for DS in "${DATASETS[@]}"; do
         --dataset_cache_dir "$VERIFY_CACHE_DIR" \
         --num_generations 4 \
         --generation_batch_size 4 \
+        --use_wandb \
         --run_name "verify_grpo_sparse_${DS}_$(date +%Y%m%d_%H%M%S)" 2>&1
 
     if [ $? -eq 0 ]; then
