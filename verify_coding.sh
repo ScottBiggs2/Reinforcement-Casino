@@ -39,7 +39,7 @@ export CUDA_MODULE_LOADING=LAZY
 
 echo "Running coding verification with limit=10..."
 $PYTHON_BIN src/evaluation/run_all_benchmarks.py \
-  --tasks "humaneval,mbpp" \
+  --benchmarks coding \
   --limit 10 \
   --use_vllm \
   --verbose \
