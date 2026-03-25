@@ -93,8 +93,15 @@ def plot_one(csv_path: Path, out_path: Path):
     # CKA
     ax = axes[0, 1]
     if has_valid(cka):
-        ax.plot(x, cka, marker="o", linewidth=1.3, markersize=3, color="tab:purple")
+        ax.plot(x, cka, marker="o", linewidth=1.3, markersize=3, color="tab:purple", label="CKA")
+        if has_valid(random_baseline):
+            ax.plot(
+                x, random_baseline,
+                linestyle="--", linewidth=1.1, color="gray", alpha=0.7,
+                label="random baseline",
+            )
         ax.set_ylim(0, 1)
+        ax.legend(fontsize=8)
         ax.set_title("Per-layer CKA")
     else:
         ax.text(0.5, 0.5, "No CKA data", ha="center", va="center")
@@ -127,6 +134,13 @@ def plot_one(csv_path: Path, out_path: Path):
         drawn = True
     if has_valid(erank_b):
         ax.plot(x, erank_b, marker="o", linewidth=1.3, markersize=3, label="erank_b_norm")
+        drawn = True
+    if has_valid(random_baseline):
+        ax.plot(
+            x, random_baseline,
+            linestyle="--", linewidth=1.1, color="gray", alpha=0.7,
+            label="random baseline",
+        )
         drawn = True
     if drawn:
         ax.set_ylim(0, 1)
