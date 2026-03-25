@@ -30,6 +30,13 @@ echo "Installing/verifying training requirements..."
 pip install -r requirements.txt -q
 
 MODEL="google/gemma-3-270m-it"
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --model_path) MODEL="$2"; shift ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
 NUM_STEPS=10
 SUBSET=64
 VERIFY_OUT_DIR="/scratch/biggs.s/rl_casino_verify_outputs"
@@ -75,6 +82,24 @@ for DS in "${DATASETS[@]}"; do
     echo ""
 
     echo "============================================================"
+    echo "Building Warm Start Magnitude Mask for testing: "
+    echo "============================================================"
+    SANITIZED_MODEL=$(echo "$MODEL" | tr '/-' '__' | tr '[:upper:]' '[:lower:]')
+    SANITIZED_DS=$(echo "$DS" | tr '-' '_')
+    DELTA_DIR="${VERIFY_OUT_DIR}/deltas/${SANITIZED_MODEL}_${SANITIZED_DS}_grpo_dense"
+    
+    GENERATED_MASK="masks/verify_${SANITIZED_MODEL}_${SANITIZED_DS}_step${NUM_STEPS}.pt"
+    
+    python src/warm_start/even_better_mask_finder.py \
+        --delta_log_dir "$DELTA_DIR" \
+        --method magnitude \
+        --sparsity_percent 97.5 \
+        --target_step "$NUM_STEPS" \
+        --mlp_only \
+        --output_file "$GENERATED_MASK"
+
+
+    echo "============================================================"
     echo "Testing SPARSE GRPO on dataset: ${DS}"
     echo "============================================================"
 
@@ -84,7 +109,7 @@ for DS in "${DATASETS[@]}"; do
         --n_steps "$NUM_STEPS" \
         --subset_size "$SUBSET" \
         --optimizer sparse_adamw \
-        --mask "$DEFAULT_MASK" \
+        --mask "$GENERATED_MASK" \
         --output_base_dir "$VERIFY_OUT_DIR" \
         --dataset_cache_dir "$VERIFY_CACHE_DIR" \
         --num_generations 4 \
