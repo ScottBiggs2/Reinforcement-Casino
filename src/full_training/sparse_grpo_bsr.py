@@ -233,23 +233,11 @@ def train(
         warmup_steps=warmup_steps,
     )
     
-    def grpo_collator_fn(examples):
-        prompts = [ex.get("prompt", "") for ex in examples]
-        enc_prompt = [tokenizer(p, truncation=True, max_length=512, return_tensors="pt") for p in prompts]
-        batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-        for k in ("input_ids", "attention_mask"):
-            batch_prompt[k] = batch_prompt[k].to(torch.long)
-        return {
-            "prompt_input_ids": batch_prompt["input_ids"],
-            "prompt_attention_mask": batch_prompt["attention_mask"],
-        }
-    
     trainer = GRPOTrainer(
         model=model,
         args=cfg,
         train_dataset=train_dataset,
         reward_funcs=[accuracy_reward, format_number_reward, format_reasoning_reward],
-        data_collator=grpo_collator_fn,
         processing_class=tokenizer,
         optimizers=(optimizer, None),
         callbacks=callbacks
