@@ -18,7 +18,6 @@ from src.utils.mask_utils import (
     compute_jaccard_similarity,
     save_masks
 )
-from src.cold_start.utils.activation_hooks import FeatureExtractor
 from src.cold_start.utils.cav_probes import compute_cav_scores, CAVProbeScorer
 from src.cold_start.utils.snip_scorer import compute_snip_scores, dpo_style_preference_loss
 
@@ -382,28 +381,35 @@ def _collect_pooled_downproj_activations(
     return {k: torch.cat(v, dim=0) for k, v in acts.items() if len(v) > 0}
 
 
-def collect_activation_scores(model, dataloader, device: str, num_batches: int, mlp_only: bool, use_weight_abs: bool = False) -> Dict[str, torch.Tensor]:
-    extractor = FeatureExtractor(model, mlp_only=mlp_only)
-    model.eval()
+def collect_activation_scores(
+    model,
+    dataloader,
+    device: str,
+    num_batches: int,
+    mlp_only: bool,
+    use_weight_abs: bool = False,
+) -> Dict[str, torch.Tensor]:
+    """Score neurons by mean |activation| across chosen + rejected sequences."""
+    chosen_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="chosen", mlp_only=mlp_only,
+    )
+    rejected_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="rejected", mlp_only=mlp_only,
+    )
 
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            if idx >= num_batches:
-                break
-            chosen_ids = batch["chosen_input_ids"].to(device)
-            chosen_mask = batch["chosen_attention_mask"].to(device)
-            rejected_ids = batch["rejected_input_ids"].to(device)
-            rejected_mask = batch["rejected_attention_mask"].to(device)
+    neuron_scores: Dict[str, torch.Tensor] = {}
+    for name in sorted(set(chosen_acts) | set(rejected_acts)):
+        parts = []
+        if name in chosen_acts:
+            parts.append(chosen_acts[name])
+        if name in rejected_acts:
+            parts.append(rejected_acts[name])
+        combined = torch.cat(parts, dim=0)          # [N, D]
+        neuron_scores[name] = combined.abs().mean(dim=0)  # [D]
 
-            extractor.collect_activation_stats_start()
-            _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
-            _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
-            extractor.collect_stop()
-
-    neuron_scores = extractor.get_activation_scores()
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model, use_weight_abs=use_weight_abs)
-    extractor.close()
-    return weight_scores
+    return map_neuron_scores_to_weight_scores(neuron_scores, extractor=None, model=model, use_weight_abs=use_weight_abs)
 
 
 def collect_cav_scores(
@@ -419,20 +425,12 @@ def collect_cav_scores(
     use_weight_abs: bool = False,
 ) -> Dict[str, torch.Tensor]:
     positive_acts = _collect_pooled_downproj_activations(
-        model=model,
-        dataloader=dataloader,
-        device=device,
-        num_batches=num_batches,
-        which="chosen",
-        mlp_only=mlp_only,
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="chosen", mlp_only=mlp_only,
     )
     negative_acts = _collect_pooled_downproj_activations(
-        model=model,
-        dataloader=dataloader,
-        device=device,
-        num_batches=num_batches,
-        which="rejected",
-        mlp_only=mlp_only,
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="rejected", mlp_only=mlp_only,
     )
 
     scorer = CAVProbeScorer()
@@ -468,31 +466,27 @@ def collect_cav_scores_with_debug(
     normalize_per_layer: bool = True,
     use_weight_abs: bool = False,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Tuple[torch.Tensor, torch.Tensor]], Dict[str, torch.Tensor]]:
-    extractor = FeatureExtractor(model, mlp_only=mlp_only)
-    model.eval()
+    chosen_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="chosen", mlp_only=mlp_only,
+    )
+    rejected_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="rejected", mlp_only=mlp_only,
+    )
 
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            if idx >= num_batches:
-                break
+    # Build labeled_activations: {layer_name: (X [N, D], y [N])}
+    layer_data: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
+    for name in sorted(set(chosen_acts) & set(rejected_acts)):
+        pos = chosen_acts[name]   # [N_pos, D]
+        neg = rejected_acts[name]  # [N_neg, D]
+        X = torch.cat([pos, neg], dim=0)
+        y = torch.cat([
+            torch.ones(pos.shape[0], dtype=torch.long),
+            torch.zeros(neg.shape[0], dtype=torch.long),
+        ], dim=0)
+        layer_data[name] = (X, y)
 
-            chosen_ids = batch["chosen_input_ids"].to(device)
-            chosen_mask = batch["chosen_attention_mask"].to(device)
-            chosen_plens = batch["chosen_prompt_lens"].to(device)
-            
-            rejected_ids = batch["rejected_input_ids"].to(device)
-            rejected_mask = batch["rejected_attention_mask"].to(device)
-            rejected_plens = batch["rejected_prompt_lens"].to(device)
-
-            extractor.collect_labeled_start(label=1, response_start_idx=chosen_plens)
-            _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
-            extractor.collect_stop()
-
-            extractor.collect_labeled_start(label=0, response_start_idx=rejected_plens)
-            _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
-            extractor.collect_stop()
-
-    layer_data = extractor.get_labeled_activations()
     neuron_scores = compute_cav_scores(
         labeled_activations=layer_data,
         epochs=probe_epochs,
@@ -502,9 +496,16 @@ def collect_cav_scores_with_debug(
         normalize_per_layer=normalize_per_layer,
     )
 
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model, use_weight_abs=use_weight_abs)
-    module_to_weight = dict(extractor.module_to_weight)
-    extractor.close()
+    # module_to_weight: strip trailing ".weight" from parameter names
+    module_to_weight: Dict[str, str] = {
+        pname[:-7]: pname
+        for pname in dict(model.named_parameters())
+        if pname.endswith(".weight")
+    }
+
+    weight_scores = map_neuron_scores_to_weight_scores(
+        neuron_scores, extractor=None, model=model, use_weight_abs=use_weight_abs
+    )
     return weight_scores, layer_data, module_to_weight
 
 
@@ -766,6 +767,7 @@ def main(args):
                 probe_lr=args.probe_lr,
                 probe_weight_decay=args.probe_weight_decay,
                 normalize_per_layer=not args.no_layer_norm,
+                use_weight_abs=args.weight_abs,
             )
             layer_data = layer_data_local
             module_to_weight = module_to_weight_local
@@ -781,6 +783,7 @@ def main(args):
             probe_lr=args.probe_lr,
             probe_weight_decay=args.probe_weight_decay,
             normalize_per_layer=not args.no_layer_norm,
+            use_weight_abs=args.weight_abs,
         )
 
     if args.method == "activation":
@@ -829,6 +832,7 @@ def main(args):
         device=device,
         add_tie_break_noise=True,
         min_layer_keep_ratio=args.min_layer_keep_ratio,
+        local_pool=args.local_pool,
     )
 
     if args.method == "cav":
@@ -932,6 +936,15 @@ if __name__ == "__main__":
         type=float,
         default=0.0,
         help="Optional per-layer keep floor ratio for hybrid masking (e.g., 0.05 keeps at least 5%% in each layer, then allocates remaining budget globally).",
+    )
+    parser.add_argument(
+        "--local_pool", action="store_true",
+        help=(
+            "Use per-layer mask selection instead of global cross-layer ranking. "
+            "Default (off): one global threshold across all weights. "
+            "With --local_pool: each weight matrix independently keeps its top keep_frac elements, "
+            "giving uniform sparsity per layer."
+        ),
     )
     parser.add_argument("--weight_abs", action="store_true",
                         help="Weight neuron scores by parameter magnitudes when mapping to weight scores. "

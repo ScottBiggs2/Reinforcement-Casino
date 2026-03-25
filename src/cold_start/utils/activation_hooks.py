@@ -31,7 +31,7 @@ class FeatureExtractor:
                     def _hook(mod, inp, out):
                         act = inp[0].detach().float()
 
-                        # Pool over real tokens when an attention mask is available.
+                        # Global mean pool over real (non-padding) tokens.
                         if self._current_attention_mask is not None:
                             mask = self._current_attention_mask
                             if mask.dim() == 2 and mask.shape[:2] == act.shape[:2]:

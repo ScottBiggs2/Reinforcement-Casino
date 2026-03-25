@@ -146,7 +146,11 @@ def main(args):
         print("[CAV] Training linear probes...")
         scorer = CAVProbeScorer()
         neuron_scores = scorer.score(pos_acts, neg_acts, mag_weight=args.mag_weight)
-        masks = scorer.scores_to_masks(neuron_scores, model, sparsity_percent=args.sparsity)
+        masks = scorer.scores_to_masks(
+            neuron_scores, model,
+            sparsity_percent=args.sparsity,
+            local_pool=args.local_pool,
+        )
 
         metadata = {
             "method": "cav",
@@ -156,6 +160,7 @@ def main(args):
             "dataset": DATASET_NAME,
             "seed": args.seed,
             "mag_weight": args.mag_weight,
+            "local_pool": args.local_pool,
         }
 
     elif args.method == "snip":
@@ -165,7 +170,7 @@ def main(args):
             model, tokenizer, chosen_texts, input_device,
             max_length=args.max_length, batch_size=args.batch_size,
         )
-        masks = scorer.scores_to_masks(snip_scores, sparsity_percent=args.sparsity)
+        masks = scorer.scores_to_masks(snip_scores, sparsity_percent=args.sparsity, local_pool=args.local_pool)
 
         metadata = {
             "method": "snip",
@@ -210,6 +215,16 @@ if __name__ == "__main__":
             "relative to the discriminative CAV signal. "
             "0.0 = pure discriminative (original); 1.0 = equal blend (default). "
             "Higher values retain more shared-subnetwork weights."
+        ),
+    )
+    parser.add_argument(
+        "--local-pool", dest="local_pool", action="store_true",
+        help=(
+            "[CAV only] Use per-layer neuron selection instead of global cross-layer ranking. "
+            "Default (off): one global threshold — high-signal layers keep more neurons, "
+            "low-signal layers keep fewer, sparsity varies per layer. "
+            "With --local-pool: each layer independently keeps keep_frac * intermediate_size "
+            "neurons, giving uniform sparsity across layers."
         ),
     )
 

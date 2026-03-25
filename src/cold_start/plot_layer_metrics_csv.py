@@ -32,6 +32,14 @@ def read_rows(path: Path):
         return list(csv.DictReader(f))
 
 
+def expected_random_jaccard(density_a: float, density_b: float) -> float:
+    """Expected Jaccard between two independent random masks with given densities."""
+    denom = density_a + density_b - density_a * density_b
+    if denom <= 0:
+        return 0.0
+    return (density_a * density_b) / denom
+
+
 def plot_one(csv_path: Path, out_path: Path):
     rows = read_rows(csv_path)
     if not rows:
@@ -47,14 +55,35 @@ def plot_one(csv_path: Path, out_path: Path):
     erank_a = [to_float(r.get("effective_rank_a_norm")) for r in rows]
     erank_b = [to_float(r.get("effective_rank_b_norm")) for r in rows]
 
+    # Per-layer random baseline: E[Jaccard] = d_a*d_b / (d_a+d_b - d_a*d_b)
+    random_baseline = []
+    for sa, sb in zip(sparsity_a, sparsity_b):
+        if math.isnan(sa) or math.isnan(sb):
+            # Fall back to using whichever sparsity is available
+            s = sa if not math.isnan(sa) else sb
+            d = (1.0 - s) if not math.isnan(s) else float("nan")
+            if math.isnan(d):
+                random_baseline.append(float("nan"))
+            else:
+                random_baseline.append(expected_random_jaccard(d, d))
+        else:
+            random_baseline.append(expected_random_jaccard(1.0 - sa, 1.0 - sb))
+
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle(csv_path.name, fontsize=12)
 
     # Jaccard
     ax = axes[0, 0]
     if has_valid(jaccard):
-        ax.plot(x, jaccard, marker="o", linewidth=1.3, markersize=3)
-        ax.set_ylim(0, 1)
+        ax.plot(x, jaccard, marker="o", linewidth=1.3, markersize=3, label="Jaccard")
+        if has_valid(random_baseline):
+            ax.plot(
+                x, random_baseline,
+                linestyle="--", linewidth=1.1, color="gray", alpha=0.7,
+                label="random baseline",
+            )
+        ax.set_ylim(0, max(1, max((v for v in jaccard if not math.isnan(v)), default=1) * 1.05))
+        ax.legend(fontsize=8)
         ax.set_title("Per-layer Jaccard")
     else:
         ax.text(0.5, 0.5, "No Jaccard data", ha="center", va="center")

@@ -2,6 +2,43 @@ import torch
 import os
 import json
 
+def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale):
+    """Per-layer top-k: each weight matrix independently keeps keep_frac of its elements."""
+    keep_frac = 1.0 - sparsity_percent / 100.0
+    print(f"\n=== Creating Per-layer Local Masks (target sparsity: {sparsity_percent}%) ===")
+
+    masks = {}
+    total_params = 0
+    total_kept = 0
+
+    for name, score in scores_dict.items():
+        if score is None or score.numel() == 0:
+            masks[name] = torch.zeros_like(score, dtype=torch.float32).cpu()
+            continue
+
+        s = score.to(device=device, dtype=torch.float32)
+        n = s.numel()
+        n_keep = max(1, int(keep_frac * n))
+
+        flat = s.reshape(-1)
+        if add_tie_break_noise:
+            scale = max(flat.abs().max().item() * tie_break_noise_scale, 1e-12)
+            flat = flat + torch.randn_like(flat) * scale
+
+        idx = torch.topk(flat, k=n_keep, largest=True, sorted=False).indices
+        mask_flat = torch.zeros(n, device=device, dtype=torch.float32)
+        mask_flat[idx] = 1.0
+
+        masks[name] = mask_flat.reshape(score.shape).cpu()
+        total_params += n
+        total_kept += n_keep
+
+    actual_sparsity = 100.0 - (total_kept / max(total_params, 1) * 100.0)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Actual keep: {total_kept:,} | Actual sparsity: {actual_sparsity:.4f}%")
+    return masks
+
+
 def create_mask_from_scores_gpu_efficient(
     scores_dict,
     sparsity_percent,
@@ -9,18 +46,26 @@ def create_mask_from_scores_gpu_efficient(
     add_tie_break_noise: bool = True,
     tie_break_noise_scale: float = 1e-10,
     min_layer_keep_ratio: float = 0.0,
+    local_pool: bool = False,
 ):
     """
-    Create exact global top-k masks from score tensors.
+    Create sparse masks from score tensors.
 
-        IMPORTANT: this function performs *global* ranking across all provided
-        parameter tensors.
+        Default (local_pool=False): *global* ranking — one threshold across all
+        parameter tensors, so high-scoring layers keep more and low-scoring
+        layers keep fewer weights.
 
-        Optional hybrid mode:
+        local_pool=True: *per-layer* ranking — each weight matrix independently
+        keeps its top keep_frac elements, giving uniform sparsity per layer.
+
+        Optional hybrid mode (local_pool=False only):
             - If min_layer_keep_ratio > 0, each non-empty layer keeps at least
                 floor(min_layer_keep_ratio * layer_numel) parameters.
             - Remaining budget is allocated by global top-k over the full model.
     """
+    if local_pool:
+        return _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale)
+
     print(f"\n=== Creating Exact Global Masks (target sparsity: {sparsity_percent}%) ===")
 
     if not scores_dict:

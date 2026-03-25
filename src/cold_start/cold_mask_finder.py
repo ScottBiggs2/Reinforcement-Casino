@@ -297,6 +297,7 @@ def main(args):
         fisher_scores,
         args.sparsity_percent,
         device=device,
+        local_pool=args.local_pool,
     )
 
     model_sanitized = sanitize_model_name(args.model_name)
@@ -364,6 +365,14 @@ if __name__ == "__main__":
     parser.add_argument("--reference_mask", type=str, default=None,
                         help="Optional reference mask to compute similarity metrics against.")
     parser.add_argument("--force_cpu", action="store_true")
+    parser.add_argument(
+        "--local_pool", action="store_true",
+        help=(
+            "Use per-layer mask selection instead of global cross-layer ranking. "
+            "Default (off): one global threshold across all weights. "
+            "With --local_pool: each weight matrix independently keeps its top keep_frac elements."
+        ),
+    )
     args = parser.parse_args()
     main(args)
 

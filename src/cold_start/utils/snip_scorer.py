@@ -54,24 +54,33 @@ class SNIPScorer:
         print(f"[SNIPScorer] Scored {len(scores)} MLP weight matrices.")
         return scores
 
-    def scores_to_masks(self, scores, sparsity_percent=90.0):
-        """Keep the global top-k saliency weights and drop the rest."""
+    def scores_to_masks(self, scores, sparsity_percent=90.0, local_pool=False):
+        """Keep top-k saliency weights.
+
+        Args:
+            local_pool: If False (default), one global threshold across all layers.
+                        If True, each weight matrix independently keeps keep_frac elements.
+        """
         keep_frac = 1.0 - sparsity_percent / 100.0
 
-        all_scores = torch.cat([s.flatten() for s in scores.values()])
-        n_keep     = max(1, int(keep_frac * all_scores.numel()))
-        threshold, _ = torch.topk(all_scores, n_keep)
-        threshold  = threshold.min().item()
-
-        masks = {name: (score >= threshold).float() for name, score in scores.items()}
+        if local_pool:
+            masks = {}
+            for name, score in scores.items():
+                flat = score.flatten()
+                n_keep = max(1, int(keep_frac * flat.numel()))
+                threshold = torch.topk(flat, n_keep).values.min().item()
+                masks[name] = (score >= threshold).float()
+        else:
+            all_scores = torch.cat([s.flatten() for s in scores.values()])
+            n_keep     = max(1, int(keep_frac * all_scores.numel()))
+            threshold  = torch.topk(all_scores, n_keep).values.min().item()
+            masks = {name: (score >= threshold).float() for name, score in scores.items()}
 
         total  = sum(m.numel() for m in masks.values())
         kept   = sum(m.sum().item() for m in masks.values())
         actual = 100.0 * (1.0 - kept / total) if total > 0 else 0.0
-        print(
-            f"[SNIPScorer] {len(masks)} masks, threshold={threshold:.2e}, "
-            f"actual sparsity={actual:.2f}%"
-        )
+        mode   = "local (per-layer)" if local_pool else "global (cross-layer)"
+        print(f"[SNIPScorer] {len(masks)} masks ({mode}), actual sparsity={actual:.2f}%")
         return masks
 
 

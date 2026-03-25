@@ -47,39 +47,78 @@ class CAVProbeScorer:
         print("[CAVProbeScorer] Probe training done.")
         return neuron_scores
 
-    def scores_to_masks(self, neuron_scores, model, sparsity_percent=90.0):
-        """Broadcast neuron scores to `gate_proj`, `up_proj`, and `down_proj` masks."""
-        keep_frac = 1.0 - sparsity_percent / 100.0
-        masks = {}
+    def scores_to_masks(self, neuron_scores, model, sparsity_percent=90.0, local_pool=False):
+        """Broadcast neuron scores to `gate_proj`, `up_proj`, and `down_proj` masks.
 
+        Args:
+            local_pool: If False (default), use a single global threshold across all
+                layers — neurons compete globally, so high-signal layers keep more and
+                low-signal layers keep fewer.  This avoids the flat per-layer sparsity
+                that per-layer selection produces.
+                If True, each layer independently keeps `keep_frac * intermediate_size`
+                neurons (original behavior, uniform sparsity per layer).
+        """
+        keep_frac = 1.0 - sparsity_percent / 100.0
+
+        # Collect the (name, param, hook_key, scores) tuples we'll need regardless of mode.
+        candidates = []
         for name, param in model.named_parameters():
             if "mlp" not in name or len(param.shape) != 2 or ".weight" not in name:
                 continue
-
-            mlp_prefix = name.rsplit(".", 2)[0]   # "model.layers.X.mlp"
+            mlp_prefix = name.rsplit(".", 2)[0]
             hook_key   = mlp_prefix + ".down_proj"
-
             if hook_key not in neuron_scores:
                 continue
+            if "gate_proj" not in name and "up_proj" not in name and "down_proj" not in name:
+                continue
+            candidates.append((name, param, hook_key, neuron_scores[hook_key]))
 
-            scores = neuron_scores[hook_key]           # [intermediate_size]
+        if not candidates:
+            return {}
+
+        if not local_pool:
+            # --- Global selection: one threshold across all layers ---
+            # Each hook_key (down_proj) represents one layer's neuron scores.
+            # Deduplicate so each neuron is counted once in the global pool.
+            seen_hooks = {}
+            for name, param, hook_key, scores in candidates:
+                if hook_key not in seen_hooks:
+                    seen_hooks[hook_key] = scores
+
+            flat_all = torch.cat([s for s in seen_hooks.values()])
+            n_keep   = max(1, int(keep_frac * flat_all.numel()))
+            threshold = torch.topk(flat_all, n_keep, largest=True, sorted=False).values.min().item()
+
+            # Build per-hook keep_1d using the global threshold.
+            keep_1d_per_hook = {
+                hook_key: (scores >= threshold).float()
+                for hook_key, scores in seen_hooks.items()
+            }
+        else:
+            # --- Local selection: each layer independently ---
+            keep_1d_per_hook = {}
+            for name, param, hook_key, scores in candidates:
+                if hook_key in keep_1d_per_hook:
+                    continue
+                intermediate_size = scores.shape[0]
+                n_keep = max(1, int(keep_frac * intermediate_size))
+                _, top_idx = torch.topk(scores, n_keep)
+                keep_1d = torch.zeros(intermediate_size)
+                keep_1d[top_idx] = 1.0
+                keep_1d_per_hook[hook_key] = keep_1d
+
+        masks = {}
+        for name, param, hook_key, scores in candidates:
+            keep_1d = keep_1d_per_hook[hook_key]
             intermediate_size = scores.shape[0]
-            n_keep = max(1, int(keep_frac * intermediate_size))
-
-            _, top_idx = torch.topk(scores, n_keep)
-            keep_1d = torch.zeros(intermediate_size)
-            keep_1d[top_idx] = 1.0
 
             if "gate_proj" in name or "up_proj" in name:
-                # [intermediate_size, hidden_size] → keep row n
                 assert param.shape[0] == intermediate_size, (
                     f"Shape mismatch: {name} row dim {param.shape[0]} "
                     f"!= intermediate_size {intermediate_size}"
                 )
                 mask = keep_1d.unsqueeze(1).expand(param.shape).clone()
-
             elif "down_proj" in name:
-                # [hidden_size, intermediate_size] → keep col n
                 assert param.shape[1] == intermediate_size, (
                     f"Shape mismatch: {name} col dim {param.shape[1]} "
                     f"!= intermediate_size {intermediate_size}"
@@ -93,8 +132,9 @@ class CAVProbeScorer:
         total  = sum(m.numel() for m in masks.values())
         kept   = sum(m.sum().item() for m in masks.values())
         actual = 100.0 * (1.0 - kept / total) if total > 0 else 0.0
+        mode_str = "local (per-layer)" if local_pool else "global (cross-layer)"
         print(
-            f"[CAVProbeScorer] {len(masks)} masks generated. "
+            f"[CAVProbeScorer] {len(masks)} masks generated ({mode_str}). "
             f"Actual sparsity: {actual:.2f}%"
         )
         return masks
