@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job script to verify the coding evaluation fix
-# Usage: sbatch verify_coding.sh <MODEL_PATH>
+# Usage: sbatch verify_coding.sh --model_path <HUGGINGFACE_ID_OR_PATH> [other options]
 
 #SBATCH --job-name=verify_coding
 #SBATCH --output=logs/verify_coding_%j.out
@@ -22,9 +22,9 @@ mkdir -p logs results/verify_coding
 echo "Verification started at: $(date)"
 echo "Model Path: $1"
 
-# Check for model path
+# Check for arguments
 if [ -z "$1" ]; then
-    echo "ERROR: Model path argument is required."
+    echo "ERROR: Arguments are required (e.g. --model_path <PATH>)."
     exit 1
 fi
 
@@ -43,8 +43,8 @@ $PYTHON_BIN src/evaluation/run_all_benchmarks.py \
   --limit 10 \
   --use_vllm \
   --verbose \
-  --model_path "$1" \
-  --output_dir "results/verify_coding_${SLURM_JOB_ID}"
+  --output_dir "results/verify_coding_${SLURM_JOB_ID}" \
+  "$@"
 
 echo "Verification finished at: $(date)"
 echo "Results available in: results/verify_coding_${SLURM_JOB_ID}"
