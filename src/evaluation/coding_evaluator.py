@@ -348,8 +348,6 @@ def evaluate_coding(
                     import lm_eval.evaluator
                     
                     # Cleanup previous vLLM engine if any
-                    import torch
-                    import gc
                     gc.collect()
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()

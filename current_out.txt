@@ -1,4 +1,4 @@
-Verification started at: Wed Mar 25 13:21:21 EDT 2026
+Verification started at: Wed Mar 25 17:59:36 EDT 2026
 Model Path: --model_path
 Running coding verification with limit=10...
 DEBUG: run_all_benchmarks.py starting
@@ -12,138 +12,12 @@ Running CODING benchmark (Subprocess Isolated)
 
 Error running coding subprocess: Returns non-zero exit code 1
 Stderr:
-pretrained=pretrained=meta-llama/Llama-3.1-8B-Instruct,dtype=float16,max_model_len=4096,enable_chunked_prefill=False,max_num_batched_tokens=4096,max_num_seqs=32,gpu_memory_utilization=0.7
-        appears to be an instruct or chat variant but chat template is not applied. Recommend setting `apply_chat_template` (optionally
-        `fewshot_as_multiturn`).
-generation_kwargs: {'temperature': 0.0, 'max_gen_toks': 512, 'do_sample': False} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
-
-Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
-
-Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:21<01:05, 21.98s/it]
-
-Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:37<00:35, 17.97s/it]
-
-Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:53<00:17, 17.25s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:57<00:00, 12.18s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:57<00:00, 14.48s/it]
-
-Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 296, in evaluate_coding
-    initial_results = simple_evaluate(**filtered_eval_kwargs)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/utils.py", line 498, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/evaluator.py", line 292, in simple_evaluate
-    task_dict = get_task_dict(
-                ^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 634, in get_task_dict
-    raise TypeError(
-TypeError: Expected a 'str' or 'list' but received <class 'dict'>.
-pretrained=pretrained=meta-llama/Llama-3.1-8B-Instruct,dtype=float16,max_model_len=4096,enable_chunked_prefill=False,max_num_batched_tokens=4096,max_num_seqs=32,gpu_memory_utilization=0.7
-        appears to be an instruct or chat variant but chat template is not applied. Recommend setting `apply_chat_template` (optionally
-        `fewshot_as_multiturn`).
-generation_kwargs: {'temperature': 0.0, 'max_gen_toks': 512, 'do_sample': False} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
-
-Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
-
-Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:04<00:12,  4.24s/it]
-
-Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:11<00:12,  6.16s/it]
-
-Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:16<00:05,  5.59s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:18<00:00,  3.96s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:18<00:00,  4.53s/it]
-
-Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 296, in evaluate_coding
-    initial_results = simple_evaluate(**filtered_eval_kwargs)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/utils.py", line 498, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/evaluator.py", line 254, in simple_evaluate
-    lm = lm_eval.api.registry.get_model(model).create_from_arg_string(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/api/model.py", line 157, in create_from_arg_string
-    return cls(**args, **args2)
-           ^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/models/vllm_causallms.py", line 202, in __init__
-    self.model = LLM(**self.model_args)  # type: ignore[invalid-argument-type]
-                 ^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/entrypoints/llm.py", line 177, in __init__
-    self.llm_engine = LLMEngine.from_engine_args(
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 573, in from_engine_args
-    engine = cls(
-             ^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 348, in __init__
-    self._initialize_kv_caches()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 496, in _initialize_kv_caches
-    self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/executor/gpu_executor.py", line 129, in initialize_cache
-    self.driver_worker.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 270, in initialize_cache
-    self._init_cache_engine()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 275, in _init_cache_engine
-    self.cache_engine = [
-                        ^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 276, in <listcomp>
-    CacheEngine(self.cache_config, self.model_config,
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 63, in __init__
-    self.gpu_cache = self._allocate_kv_cache(
-                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 82, in _allocate_kv_cache
-    torch.zeros(kv_cache_shape,
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.25 GiB. GPU 0 has a total capacity of 79.25 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 78.00 GiB memory in use. Of the allocated memory 77.37 GiB is allocated by PyTorch, with 23.32 MiB allocated in private pools (e.g., CUDA Graphs), and 93.32 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
 Traceback (most recent call last):
   File "<string>", line 38, in <module>
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 356, in evaluate_coding
-    raise last_error or RuntimeError("Failed to run evaluation.")
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 296, in evaluate_coding
-    initial_results = simple_evaluate(**filtered_eval_kwargs)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/utils.py", line 498, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/evaluator.py", line 254, in simple_evaluate
-    lm = lm_eval.api.registry.get_model(model).create_from_arg_string(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/api/model.py", line 157, in create_from_arg_string
-    return cls(**args, **args2)
-           ^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/models/vllm_causallms.py", line 202, in __init__
-    self.model = LLM(**self.model_args)  # type: ignore[invalid-argument-type]
-                 ^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/entrypoints/llm.py", line 177, in __init__
-    self.llm_engine = LLMEngine.from_engine_args(
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 573, in from_engine_args
-    engine = cls(
-             ^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 348, in __init__
-    self._initialize_kv_caches()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 496, in _initialize_kv_caches
-    self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/executor/gpu_executor.py", line 129, in initialize_cache
-    self.driver_worker.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 270, in initialize_cache
-    self._init_cache_engine()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 275, in _init_cache_engine
-    self.cache_engine = [
-                        ^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 276, in <listcomp>
-    CacheEngine(self.cache_config, self.model_config,
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 63, in __init__
-    self.gpu_cache = self._allocate_kv_cache(
-                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 82, in _allocate_kv_cache
-    torch.zeros(kv_cache_shape,
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.25 GiB. GPU 0 has a total capacity of 79.25 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 78.00 GiB memory in use. Of the allocated memory 77.37 GiB is allocated by PyTorch, with 23.32 MiB allocated in private pools (e.g., CUDA Graphs), and 93.32 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 119, in evaluate_coding
+    print(f"CUDA Available: {torch.cuda.is_available()}")
+                             ^^^^^
+UnboundLocalError: cannot access local variable 'torch' where it is not associated with a value
 
 Stdout:
 DEBUG: Running coding with filtered_kwargs:
@@ -156,182 +30,20 @@ DEBUG: Running coding with filtered_kwargs:
 ============================================================
 CODING EVALUATION: humaneval,mbpp
 ------------------------------------------------------------
-CUDA Available: True
-CUDA Device: NVIDIA A100-SXM4-80GB
-Total Memory: 85.10 GB
-------------------------------------------------------------
-Environment Variables:
-  VLLM_WORKER_MULTIPROC_METHOD: spawn
-  CUDA_VISIBLE_DEVICES: 0
-  CUDA_MODULE_LOADING: LAZY
-  HF_ALLOW_CODE_EVAL: 1
-  HF_XET_HIGH_PERFORMANCE: 1
-============================================================
-
-Running coding evaluation for tasks: humaneval,mbpp
-Model: meta-llama/Llama-3.1-8B-Instruct
-Chat template: True
-
-DEBUG: First attempt - Running all tasks together (with robust filtering): humaneval,mbpp
-WARNING 03-25 13:22:07 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-25 13:22:14 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-25 13:22:15 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-25 13:22:15 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-25 13:23:13 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-25 13:23:14 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-25 13:23:14 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-25 13:23:17 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-25 13:23:17 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-25 13:23:20 model_runner.py:1523] Graph capturing finished in 3 secs.
-DEBUG: Initial attempt with config {'apply_chat_template': True} failed: Expected a 'str' or 'list' but received <class 'dict'>.. Retrying with next config...
-WARNING 03-25 13:23:57 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-25 13:23:57 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-25 13:23:58 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-25 13:23:58 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-25 13:24:16 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-25 13:24:17 gpu_executor.py:122] # GPU blocks: 20489, # CPU blocks: 2048
-INFO 03-25 13:24:17 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.04x
-DEBUG: Initial attempt with config {} failed: CUDA out of memory. Tried to allocate 1.25 GiB. GPU 0 has a total capacity of 79.25 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 78.00 GiB memory in use. Of the allocated memory 77.37 GiB is allocated by PyTorch, with 23.32 MiB allocated in private pools (e.g., CUDA Graphs), and 93.32 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables). Retrying with next config...
 
 
-Summary saved to: results/verify_coding_5416994/all_benchmarks_summary.json
+Summary saved to: results/verify_coding_5424069/all_benchmarks_summary.json
 
 ================================================================================
 EVALUATION SUMMARY
 ================================================================================
-CODING: ERROR - Subprocess crashed: Command '['/scratch/biggs.s/conda_envs/rl_casino/bin/python', '-c', '\nimport sys\nimport json\nimport os\nimport traceback\nimport inspect\n\nsys.path.append(\'/home/biggs.s/rl_casino/src\')\n\ntry:\n    from evaluation.coding_evaluator import evaluate_coding\n    \n    # Introspect exactly what arguments this evaluator accepts so we don\'t throw an unexpected keyword arg\n    raw_kwargs = {\'model\': \'vllm\', \'limit\': 10, \'batch_size\': \'auto\', \'device\': None, \'trust_remote_code\': False, \'apply_chat_template\': None, \'confirm_run_unsafe_code\': True}\n    evaluator_signature = inspect.signature(evaluate_coding)\n    \n    # Check if the evaluator accepts **kwargs\n    accepts_var_kwargs = any(\n        param.kind == inspect.Parameter.VAR_KEYWORD\n        for param in evaluator_signature.parameters.values()\n    )\n    \n    # Defensive filtering: only pass arguments that the function actually accepts or if it takes **kwargs\n    filtered_kwargs = {}\n    for key, value in raw_kwargs.items():\n        if accepts_var_kwargs or key in evaluator_signature.parameters:\n            filtered_kwargs[key] = value\n            \n    # Always ensure \'method\' is handled if accepted\n    if "method" in evaluator_signature.parameters and "method" not in filtered_kwargs:\n        filtered_kwargs["method"] = \'lm_eval\'\n        \n    if True:\n        print(f"DEBUG: Running coding with filtered_kwargs:")\n        for k, v in filtered_kwargs.items():\n            print(f"  - {k}: {v} (type: {type(v)})")\n    \n    results = evaluate_coding(model_path=\'meta-llama/Llama-3.1-8B-Instruct\', **filtered_kwargs)\n    \n    # Write to transport file\n    with open(\'/tmp/tmptvymc00n.json\', \'w\') as f:\n        json.dump(results, f, default=str)\nexcept Exception as e:\n    traceback.print_exc()\n    sys.exit(1)\n']' returned non-zero exit status 1.
-Stderr: pretrained=pretrained=meta-llama/Llama-3.1-8B-Instruct,dtype=float16,max_model_len=4096,enable_chunked_prefill=False,max_num_batched_tokens=4096,max_num_seqs=32,gpu_memory_utilization=0.7
-        appears to be an instruct or chat variant but chat template is not applied. Recommend setting `apply_chat_template` (optionally
-        `fewshot_as_multiturn`).
-generation_kwargs: {'temperature': 0.0, 'max_gen_toks': 512, 'do_sample': False} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
-
-Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
-
-Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:21<01:05, 21.98s/it]
-
-Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:37<00:35, 17.97s/it]
-
-Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:53<00:17, 17.25s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:57<00:00, 12.18s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:57<00:00, 14.48s/it]
-
-Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 296, in evaluate_coding
-    initial_results = simple_evaluate(**filtered_eval_kwargs)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/utils.py", line 498, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/evaluator.py", line 292, in simple_evaluate
-    task_dict = get_task_dict(
-                ^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/tasks/__init__.py", line 634, in get_task_dict
-    raise TypeError(
-TypeError: Expected a 'str' or 'list' but received <class 'dict'>.
-pretrained=pretrained=meta-llama/Llama-3.1-8B-Instruct,dtype=float16,max_model_len=4096,enable_chunked_prefill=False,max_num_batched_tokens=4096,max_num_seqs=32,gpu_memory_utilization=0.7
-        appears to be an instruct or chat variant but chat template is not applied. Recommend setting `apply_chat_template` (optionally
-        `fewshot_as_multiturn`).
-generation_kwargs: {'temperature': 0.0, 'max_gen_toks': 512, 'do_sample': False} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
-
-Loading safetensors checkpoint shards:   0% Completed | 0/4 [00:00<?, ?it/s]
-
-Loading safetensors checkpoint shards:  25% Completed | 1/4 [00:04<00:12,  4.24s/it]
-
-Loading safetensors checkpoint shards:  50% Completed | 2/4 [00:11<00:12,  6.16s/it]
-
-Loading safetensors checkpoint shards:  75% Completed | 3/4 [00:16<00:05,  5.59s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:18<00:00,  3.96s/it]
-
-Loading safetensors checkpoint shards: 100% Completed | 4/4 [00:18<00:00,  4.53s/it]
-
-Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 296, in evaluate_coding
-    initial_results = simple_evaluate(**filtered_eval_kwargs)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/utils.py", line 498, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/evaluator.py", line 254, in simple_evaluate
-    lm = lm_eval.api.registry.get_model(model).create_from_arg_string(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/api/model.py", line 157, in create_from_arg_string
-    return cls(**args, **args2)
-           ^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/models/vllm_causallms.py", line 202, in __init__
-    self.model = LLM(**self.model_args)  # type: ignore[invalid-argument-type]
-                 ^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/entrypoints/llm.py", line 177, in __init__
-    self.llm_engine = LLMEngine.from_engine_args(
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 573, in from_engine_args
-    engine = cls(
-             ^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 348, in __init__
-    self._initialize_kv_caches()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 496, in _initialize_kv_caches
-    self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/executor/gpu_executor.py", line 129, in initialize_cache
-    self.driver_worker.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 270, in initialize_cache
-    self._init_cache_engine()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 275, in _init_cache_engine
-    self.cache_engine = [
-                        ^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 276, in <listcomp>
-    CacheEngine(self.cache_config, self.model_config,
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 63, in __init__
-    self.gpu_cache = self._allocate_kv_cache(
-                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 82, in _allocate_kv_cache
-    torch.zeros(kv_cache_shape,
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.25 GiB. GPU 0 has a total capacity of 79.25 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 78.00 GiB memory in use. Of the allocated memory 77.37 GiB is allocated by PyTorch, with 23.32 MiB allocated in private pools (e.g., CUDA Graphs), and 93.32 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
-Traceback (most recent call last):
+CODING: ERROR - Subprocess crashed: Command '['/scratch/biggs.s/conda_envs/rl_casino/bin/python', '-c', '\nimport sys\nimport json\nimport os\nimport traceback\nimport inspect\n\nsys.path.append(\'/home/biggs.s/rl_casino/src\')\n\ntry:\n    from evaluation.coding_evaluator import evaluate_coding\n    \n    # Introspect exactly what arguments this evaluator accepts so we don\'t throw an unexpected keyword arg\n    raw_kwargs = {\'model\': \'vllm\', \'limit\': 10, \'batch_size\': \'auto\', \'device\': None, \'trust_remote_code\': False, \'apply_chat_template\': None, \'confirm_run_unsafe_code\': True}\n    evaluator_signature = inspect.signature(evaluate_coding)\n    \n    # Check if the evaluator accepts **kwargs\n    accepts_var_kwargs = any(\n        param.kind == inspect.Parameter.VAR_KEYWORD\n        for param in evaluator_signature.parameters.values()\n    )\n    \n    # Defensive filtering: only pass arguments that the function actually accepts or if it takes **kwargs\n    filtered_kwargs = {}\n    for key, value in raw_kwargs.items():\n        if accepts_var_kwargs or key in evaluator_signature.parameters:\n            filtered_kwargs[key] = value\n            \n    # Always ensure \'method\' is handled if accepted\n    if "method" in evaluator_signature.parameters and "method" not in filtered_kwargs:\n        filtered_kwargs["method"] = \'lm_eval\'\n        \n    if True:\n        print(f"DEBUG: Running coding with filtered_kwargs:")\n        for k, v in filtered_kwargs.items():\n            print(f"  - {k}: {v} (type: {type(v)})")\n    \n    results = evaluate_coding(model_path=\'meta-llama/Llama-3.1-8B-Instruct\', **filtered_kwargs)\n    \n    # Write to transport file\n    with open(\'/tmp/tmpyuomiaz3.json\', \'w\') as f:\n        json.dump(results, f, default=str)\nexcept Exception as e:\n    traceback.print_exc()\n    sys.exit(1)\n']' returned non-zero exit status 1.
+Stderr: Traceback (most recent call last):
   File "<string>", line 38, in <module>
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 356, in evaluate_coding
-    raise last_error or RuntimeError("Failed to run evaluation.")
-  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 296, in evaluate_coding
-    initial_results = simple_evaluate(**filtered_eval_kwargs)
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/utils.py", line 498, in _wrapper
-    return fn(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/evaluator.py", line 254, in simple_evaluate
-    lm = lm_eval.api.registry.get_model(model).create_from_arg_string(
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/api/model.py", line 157, in create_from_arg_string
-    return cls(**args, **args2)
-           ^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/lm_eval/models/vllm_causallms.py", line 202, in __init__
-    self.model = LLM(**self.model_args)  # type: ignore[invalid-argument-type]
-                 ^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/entrypoints/llm.py", line 177, in __init__
-    self.llm_engine = LLMEngine.from_engine_args(
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 573, in from_engine_args
-    engine = cls(
-             ^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 348, in __init__
-    self._initialize_kv_caches()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/engine/llm_engine.py", line 496, in _initialize_kv_caches
-    self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/executor/gpu_executor.py", line 129, in initialize_cache
-    self.driver_worker.initialize_cache(num_gpu_blocks, num_cpu_blocks)
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 270, in initialize_cache
-    self._init_cache_engine()
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 275, in _init_cache_engine
-    self.cache_engine = [
-                        ^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/worker.py", line 276, in <listcomp>
-    CacheEngine(self.cache_config, self.model_config,
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 63, in __init__
-    self.gpu_cache = self._allocate_kv_cache(
-                     ^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/scratch/biggs.s/conda_envs/rl_casino/lib/python3.11/site-packages/vllm/worker/cache_engine.py", line 82, in _allocate_kv_cache
-    torch.zeros(kv_cache_shape,
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.25 GiB. GPU 0 has a total capacity of 79.25 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 78.00 GiB memory in use. Of the allocated memory 77.37 GiB is allocated by PyTorch, with 23.32 MiB allocated in private pools (e.g., CUDA Graphs), and 93.32 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+  File "/home/biggs.s/rl_casino/src/evaluation/coding_evaluator.py", line 119, in evaluate_coding
+    print(f"CUDA Available: {torch.cuda.is_available()}")
+                             ^^^^^
+UnboundLocalError: cannot access local variable 'torch' where it is not associated with a value
 
 Stdout: DEBUG: Running coding with filtered_kwargs:
   - model: vllm (type: <class 'str'>)
@@ -343,42 +55,6 @@ Stdout: DEBUG: Running coding with filtered_kwargs:
 ============================================================
 CODING EVALUATION: humaneval,mbpp
 ------------------------------------------------------------
-CUDA Available: True
-CUDA Device: NVIDIA A100-SXM4-80GB
-Total Memory: 85.10 GB
-------------------------------------------------------------
-Environment Variables:
-  VLLM_WORKER_MULTIPROC_METHOD: spawn
-  CUDA_VISIBLE_DEVICES: 0
-  CUDA_MODULE_LOADING: LAZY
-  HF_ALLOW_CODE_EVAL: 1
-  HF_XET_HIGH_PERFORMANCE: 1
-============================================================
 
-Running coding evaluation for tasks: humaneval,mbpp
-Model: meta-llama/Llama-3.1-8B-Instruct
-Chat template: True
-
-DEBUG: First attempt - Running all tasks together (with robust filtering): humaneval,mbpp
-WARNING 03-25 13:22:07 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-25 13:22:14 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-25 13:22:15 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-25 13:22:15 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-25 13:23:13 model_runner.py:1067] Loading model weights took 14.9888 GB
-INFO 03-25 13:23:14 gpu_executor.py:122] # GPU blocks: 20417, # CPU blocks: 2048
-INFO 03-25 13:23:14 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 79.75x
-INFO 03-25 13:23:17 model_runner.py:1395] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
-INFO 03-25 13:23:17 model_runner.py:1399] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
-INFO 03-25 13:23:20 model_runner.py:1523] Graph capturing finished in 3 secs.
-DEBUG: Initial attempt with config {'apply_chat_template': True} failed: Expected a 'str' or 'list' but received <class 'dict'>.. Retrying with next config...
-WARNING 03-25 13:23:57 config.py:1668] Casting torch.bfloat16 to torch.float16.
-INFO 03-25 13:23:57 llm_engine.py:237] Initializing an LLM engine (v0.6.3.post1) with config: model='meta-llama/Llama-3.1-8B-Instruct', speculative_config=None, tokenizer='meta-llama/Llama-3.1-8B-Instruct', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=4096, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=meta-llama/Llama-3.1-8B-Instruct, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
-INFO 03-25 13:23:58 model_runner.py:1056] Starting to load model meta-llama/Llama-3.1-8B-Instruct...
-INFO 03-25 13:23:58 weight_utils.py:243] Using model weights format ['*.safetensors']
-INFO 03-25 13:24:16 model_runner.py:1067] Loading model weights took 14.9575 GB
-INFO 03-25 13:24:17 gpu_executor.py:122] # GPU blocks: 20489, # CPU blocks: 2048
-INFO 03-25 13:24:17 gpu_executor.py:126] Maximum concurrency for 4096 tokens per request: 80.04x
-DEBUG: Initial attempt with config {} failed: CUDA out of memory. Tried to allocate 1.25 GiB. GPU 0 has a total capacity of 79.25 GiB of which 1.23 GiB is free. Including non-PyTorch memory, this process has 78.00 GiB memory in use. Of the allocated memory 77.37 GiB is allocated by PyTorch, with 23.32 MiB allocated in private pools (e.g., CUDA Graphs), and 93.32 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables). Retrying with next config...
-
-Verification finished at: Wed Mar 25 13:24:19 EDT 2026
-Results available in: results/verify_coding_5416994
+Verification finished at: Wed Mar 25 18:00:00 EDT 2026
+Results available in: results/verify_coding_5424069
