@@ -286,14 +286,24 @@ def evaluate_coding(
             # Load and modify tasks for this attempt
             modified_task_dict = prepare_tasks(tasks_to_run, use_chat)
             
+            import lm_eval.evaluator
+            
             current_eval_kwargs = eval_kwargs.copy()
-            current_eval_kwargs["tasks"] = modified_task_dict
+            current_eval_kwargs["tasks"] = tasks_to_run
             current_eval_kwargs.update(config)
             
             filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None and k != "apply_chat_template"}
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True
             
-            initial_results = simple_evaluate(**filtered_eval_kwargs)
+            original_get_task_dict = lm_eval.evaluator.get_task_dict
+            def mock_get_task_dict(*args, **kwargs):
+                return modified_task_dict
+                
+            try:
+                lm_eval.evaluator.get_task_dict = mock_get_task_dict
+                initial_results = simple_evaluate(**filtered_eval_kwargs)
+            finally:
+                lm_eval.evaluator.get_task_dict = original_get_task_dict
             break
         except Exception as e:
             if verbose:
@@ -335,15 +345,38 @@ def evaluate_coding(
                     use_chat = config.get("apply_chat_template", False)
                     modified_task_dict = prepare_tasks([task_name], use_chat)
                     
+                    import lm_eval.evaluator
+                    
+                    # Cleanup previous vLLM engine if any
+                    import torch
+                    import gc
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    
+                    try:
+                        from vllm.distributed.parallel_state import destroy_model_parallel
+                        destroy_model_parallel()
+                    except ImportError:
+                        pass
+                        
                     current_eval_kwargs = eval_kwargs.copy()
-                    current_eval_kwargs["tasks"] = modified_task_dict
+                    current_eval_kwargs["tasks"] = [task_name]
                     current_eval_kwargs["num_fewshot"] = retry_fewshot
                     current_eval_kwargs.update(config)
                     
                     filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None and k != "apply_chat_template"}
                     filtered_eval_kwargs["confirm_run_unsafe_code"] = True
                     
-                    retry_results = simple_evaluate(**filtered_eval_kwargs)
+                    original_get_task_dict = lm_eval.evaluator.get_task_dict
+                    def mock_retry_get_task_dict(*args, **kwargs):
+                        return modified_task_dict
+                    
+                    try:
+                        lm_eval.evaluator.get_task_dict = mock_retry_get_task_dict
+                        retry_results = simple_evaluate(**filtered_eval_kwargs)
+                    finally:
+                        lm_eval.evaluator.get_task_dict = original_get_task_dict
                     if retry_results:
                         all_task_results["results"][task_name] = retry_results["results"][task_name]
                         if verbose:
