@@ -287,15 +287,10 @@ def evaluate_coding(
             modified_task_dict = prepare_tasks(tasks_to_run, use_chat)
             
             current_eval_kwargs = eval_kwargs.copy()
-            current_eval_kwargs["tasks"] = tasks_to_run
-            # Important: Pass the modified task_dict
-            current_eval_kwargs["task_dict"] = modified_task_dict
+            current_eval_kwargs["tasks"] = modified_task_dict
             current_eval_kwargs.update(config)
             
-            # Remove 'tasks' if passing 'task_dict'
-            del current_eval_kwargs["tasks"]
-            
-            filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
+            filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None and k != "apply_chat_template"}
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True
             
             initial_results = simple_evaluate(**filtered_eval_kwargs)
@@ -341,11 +336,11 @@ def evaluate_coding(
                     modified_task_dict = prepare_tasks([task_name], use_chat)
                     
                     current_eval_kwargs = eval_kwargs.copy()
-                    current_eval_kwargs["task_dict"] = modified_task_dict
+                    current_eval_kwargs["tasks"] = modified_task_dict
                     current_eval_kwargs["num_fewshot"] = retry_fewshot
                     current_eval_kwargs.update(config)
                     
-                    filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
+                    filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None and k != "apply_chat_template"}
                     filtered_eval_kwargs["confirm_run_unsafe_code"] = True
                     
                     retry_results = simple_evaluate(**filtered_eval_kwargs)
