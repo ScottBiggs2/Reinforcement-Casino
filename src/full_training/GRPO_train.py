@@ -1,281 +1,153 @@
+#!/usr/bin/env python3
+"""
+Dense Baseline GRPO Training - Math Focused
+
+Used to collect delta statistics for sparse mask generation.
+"""
+
 import os
 import json
 import argparse
+import re
 import torch
 import wandb
-from datasets import load_dataset
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    TrainingArguments,
-    TrainerCallback,
-    DataCollatorWithPadding,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import GRPOTrainer, GRPOConfig
-from typing import List, Dict, Any
+import sys
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-#######################################
-# 0. Config
-#######################################
+from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset
 
 def sanitize_model_name(model_name: str) -> str:
-    """
-    Convert HuggingFace model name to filesystem-safe string.
-    
-    Examples:
-        "google/gemma-3-270m-it" -> "google_gemma_3_270m_it"
-        "meta-llama/Llama-3.1-8B" -> "meta_llama_llama_3_1_8b"
-    """
-    # Replace "/" with "_", replace "-" with "_", convert to lowercase
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
-    # Remove any remaining special characters that might cause issues
-    sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
-    # Collapse multiple underscores
-    while "__" in sanitized:
-        sanitized = sanitized.replace("__", "_")
-    return sanitized.strip("_")
+    return "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized).strip("_")
 
-
-parser = argparse.ArgumentParser(description="GRPO Training Script")
-parser.add_argument(
-    "--model_name",
-    type=str,
-    default="google/gemma-3-270m-it",
-    help="HuggingFace model name to load (default: google/gemma-3-270m-it)"
-)
+parser = argparse.ArgumentParser(description="Dense Baseline GRPO Training Script")
+parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
+parser.add_argument("--dataset", type=str, default="open-r1/OpenR1-Math-220k")
+parser.add_argument("--run_name", type=str, default=None)
+parser.add_argument("--use_wandb", action="store_true")
+parser.add_argument("--num_steps", type=int, default=1000)
+parser.add_argument("--subset_size", type=int, default=None)
+parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
+parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets")
+parser.add_argument("--num_generations", type=int, default=8)
+parser.add_argument("--generation_batch_size", type=int, default=8)
 args = parser.parse_args()
+
+os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir
 
 MODEL_NAME = args.model_name
 MODEL_NAME_SANITIZED = sanitize_model_name(MODEL_NAME)
-DATASET_NAME = "open-r1/OpenR1-Math-220k"  # OpenR1 dataset
-OUTPUT_DIR = f"./checkpoints_{MODEL_NAME_SANITIZED}_grpo"
-DELTA_LOG_DIR = f"./delta_logs_{MODEL_NAME_SANITIZED}_grpo"
 
-# Flexible checkpoint schedule
-# Save every 5 steps for first 25 steps, then every 25 steps after
-# CHECKPOINT_SCHEDULE = (
-#     list(range(5, 25, 5)) +  # [5, 10, 15, 20, 25]
-#     list(range(50, 101, 25))  # [50, 75, 100]
-# )
+DATASET_KEY = args.dataset
+DATASET_CONFIG = get_dataset_config(DATASET_KEY)
+DATASET_NAME = DATASET_CONFIG["hf_id"]
+DATASET_SANITIZED = DATASET_CONFIG["sanitized_name"]
+
+BASE_DIR = args.output_base_dir
+SUB_DIR = f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}_grpo_dense"
+
+OUTPUT_DIR = os.path.join(BASE_DIR, "checkpoints", SUB_DIR)
+DELTA_LOG_DIR = os.path.join(BASE_DIR, "deltas", SUB_DIR)
 
 CHECKPOINT_SCHEDULE = (
-    list(range(10, 90, 10)) +  # [10, 20, 30, 40, 50, 60, 70, 80, 90]
-    list(range(100, 1001, 100))  # [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+    list(range(10, 51, 10)) +  # [10, 20, 30, 40, 50]
+    list(range(100, 501, 100))  # [100, 200, 300, 400, 500]
 )
-# [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 
-THRESHOLD = 1e-3
-NUM_STEPS = 1000
-SUBSET_SIZE = None  # reduce for faster bring-up
+THRESHOLD = 1e-5
+NUM_STEPS = args.num_steps
+SUBSET_SIZE = args.subset_size
 
-WANDB_PROJECT = f"{MODEL_NAME_SANITIZED}-grpo-subnetwork-emergence"
-WANDB_RUN_NAME = f"{MODEL_NAME_SANITIZED}_openr1_flexible_checkpoints"
+WANDB_PROJECT = "huggingface"
+os.environ["WANDB_PROJECT"] = WANDB_PROJECT
+WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}_grpo_{NUM_STEPS}steps"
 
-print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
+# =========================================================================
+# Math Reward Functions
+# =========================================================================
+def parse_reasoning_response(text: str) -> dict:
+    pattern = r"<think>\s*(.*?)\s*</think>\s*(.*)"
+    match = re.search(pattern, text, re.DOTALL)
+    if not match: return {"thinking_content": "", "response": text}
+    return {"thinking_content": match.group(1).strip(), "response": match.group(2).strip()}
 
-#######################################
-# 1. Load dataset
-#######################################
+def get_completion_content(completion) -> str:
+    if isinstance(completion, list): return " ".join(msg.get("content", "") if isinstance(msg, dict) else str(msg) for msg in completion)
+    return str(completion)
 
-raw_ds = load_dataset(DATASET_NAME, split="default")  # Use default split
+def parse_responses(completions: list) -> list[dict]:
+    return [parse_reasoning_response(get_completion_content(c)) for c in completions]
 
-def normalize_record(rec):
-    """
-    Normalize OpenR1 dataset record to format expected by GRPO.
-    OpenR1 has 'prompt' and 'solution' fields.
-    """
-    prompt_raw = rec.get("prompt", "")
-    solution_raw = rec.get("solution", "")
-    
-    # Handle prompt - could be string or list
-    if isinstance(prompt_raw, list):
-        prompt_text = "\n".join(
-            m.get("value", "") if isinstance(m, dict) else str(m)
-            for m in prompt_raw
-        ).strip()
-    elif isinstance(prompt_raw, dict):
-        prompt_text = prompt_raw.get("value", str(prompt_raw))
-    else:
-        prompt_text = str(prompt_raw).strip()
-    
-    # Handle solution - could be string or list
-    if isinstance(solution_raw, list):
-        solution_text = "\n".join(
-            m.get("value", "") if isinstance(m, dict) else str(m)
-            for m in solution_raw
-        ).strip()
-    elif isinstance(solution_raw, dict):
-        solution_text = solution_raw.get("value", str(solution_raw))
-    else:
-        solution_text = str(solution_raw).strip()
-    
-    return {"prompt": prompt_text, "solution": solution_text}
-
-norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
-
-# (Optional) take a subset to iterate quickly
-if SUBSET_SIZE is not None:
-    norm_ds = norm_ds.select(range(min(SUBSET_SIZE, len(norm_ds))))
-
-train_dataset = norm_ds
-eval_dataset = None
-
-#######################################
-# 2. Load tokenizer
-#######################################
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-tokenizer.padding_side = "right"
-
-
-def grpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-    """
-    Collator function for GRPO training.
-    GRPO expects prompts and generates completions, so we only need to tokenize prompts.
-    """
-    # If the dataset was already preprocessed, just stack/pad those tensors.
-    if "prompt_input_ids" in examples[0]:
-        def pad_stack(key):
-            seqs = [torch.tensor(ex[key]) if not torch.is_tensor(ex[key]) else ex[key] for ex in examples]
-            lens = [s.size(-1) for s in seqs]
-            maxlen = max(lens)
-            out = torch.full((len(seqs), maxlen), fill_value=0, dtype=torch.long)
-            mask = torch.zeros((len(seqs), maxlen), dtype=torch.long)
-            for i, s in enumerate(seqs):
-                out[i, : s.size(-1)] = s.to(torch.long)
-                mask[i, : s.size(-1)] = 1
-            return out, mask
-
-        p_ids, p_mask = pad_stack("prompt_input_ids")
-        return {
-            "prompt_input_ids": p_ids,
-            "prompt_attention_mask": p_mask,
-        }
-
-    # Otherwise, we expect raw strings.
-    prompts = [ex.get("prompt", "") for ex in examples]
-
-    enc_prompt = [tokenizer(p, truncation=True, max_length=512, return_tensors="pt") for p in prompts]
-    batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-
-    for k in ("input_ids", "attention_mask"):
-        batch_prompt[k] = batch_prompt[k].to(torch.long)
-
-    return {
-        "prompt_input_ids": batch_prompt["input_ids"],
-        "prompt_attention_mask": batch_prompt["attention_mask"],
-    }
-
-
-#######################################
-# 3. Reward function for GRPO
-
-# TODO: Replace with proper reward function, not this dumb-ahh placeholder XD 
-#######################################
-
-def reward_function(completions: List[str] | List[List[Dict[str, str]]], **kwargs) -> List[float]:
-    """
-    Reward function for GRPO training.
-    
-    For OpenR1, we can use a simple reward based on:
-    - Length of completion (encourage longer reasoning)
-    - Presence of solution markers (if present in dataset)
-    - Or use a more sophisticated reward model
-    
-    This is a simple placeholder - you may want to replace with a proper reward model.
-    
-    Args:
-        completions: List of strings or list of conversational messages
-        **kwargs: Additional dataset columns (e.g., ground_truth, solution)
-    """
+def accuracy_reward(completions, solution, **kwargs) -> list[float]:
+    parsed_responses = parse_responses(completions)
     rewards = []
-    for completion in completions:
-        # Handle conversational format (list of dicts)
-        if isinstance(completion, list):
-            # Extract text from conversational format
-            completion_text = " ".join(
-                msg.get("content", "") if isinstance(msg, dict) else str(msg)
-                for msg in completion
-            )
-        else:
-            completion_text = str(completion)
-        
-        # Simple reward: encourage longer completions with reasoning
-        # You can replace this with a proper reward model
-        base_reward = len(completion_text.split()) / 100.0  # Normalize by word count
-        
-        # Bonus for having solution markers (if dataset uses them)
-        if "<SOLUTION>" in completion_text or "</SOLUTION>" in completion_text:
-            base_reward += 0.5
-        
-        # Bonus for having reasoning markers
-        if "<think>" in completion_text.lower() or "<start_working_out>" in completion_text.lower():
-            base_reward += 0.3
-        
-        # Check if ground truth solution is provided in kwargs
-        if "solution" in kwargs:
-            # Could add reward based on matching solution (simplified here)
-            pass
-        
-        rewards.append(min(base_reward, 1.0))  # Cap at 1.0
-    
+    for r, ans in zip(parsed_responses, solution):
+        model_answer = r["response"].strip()
+        ans = str(ans) if ans is not None else ""
+        target_ans = ans.split("####")[1].strip() if "####" in ans else ans.strip()
+        numbers = re.findall(r'-?\d+\.?\d*', model_answer.replace(',', ''))
+        model_last_num = numbers[-1] if numbers else ""
+        target_numbers = re.findall(r'-?\d+\.?\d*', target_ans.replace(',', ''))
+        target_last_num = target_numbers[-1] if target_numbers else target_ans
+        rewards.append(1.0 if model_answer == target_ans or (model_last_num and target_last_num and model_last_num == target_last_num) else 0.0)
     return rewards
 
+def format_number_reward(completions, **kwargs) -> list[float]:
+    return [0.5 if re.findall(r'-?\d+\.?\d*', r["response"].replace(',', '')) else 0.0 for r in parse_responses(completions)]
 
-#######################################
-# 4. Load policy model (trainable)
-#######################################
+def format_reasoning_reward(completions, **kwargs) -> list[float]:
+    return [0.5 if r["thinking_content"] and r["response"] else 0.0 for r in parse_responses(completions)]
 
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-)
-model.config.use_cache = False  # Trainer compat
+# =========================================================================
+# Initialization
+# =========================================================================
+train_dataset = load_grpo_dataset(DATASET_KEY, subset_size=SUBSET_SIZE)
 
-#######################################
-# 5. GRPOConfig
-#######################################
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
+tokenizer.padding_side = "right"
+
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype=torch.bfloat16, device_map="auto")
+model.config.use_cache = False
 
 cfg = GRPOConfig(
     output_dir=OUTPUT_DIR,
     run_name=WANDB_RUN_NAME,
-    report_to=["wandb"],
+    report_to=["wandb"] if args.use_wandb else [],
     per_device_train_batch_size=2,
-    gradient_accumulation_steps=8,
+    gradient_accumulation_steps=4,
     learning_rate=5e-6,
     max_steps=NUM_STEPS,
     num_train_epochs=1,
-    bf16=True,
-    fp16=False,
+    bf16=True, fp16=False,
     logging_steps=1,
-    save_steps=999999,  # Disabled - we'll handle saving in callback
-    save_total_limit=None,
+    save_steps=999999,
     remove_unused_columns=False,
-    # GRPO-specific knobs:
-    num_generations=8,  # Number of generations per prompt for group-based advantage estimation
-    generation_batch_size=8,  # Batch size for generation
+    num_generations=args.num_generations,
+    generation_batch_size=args.generation_batch_size,
     max_length=1024,
     max_prompt_length=512,
-    beta=0.1,  # KL penalty coefficient (controls deviation from reference policy)
+    beta=0.1,
 )
+
+def grpo_collator_fn(examples):
+    prompts = [ex.get("prompt", "") for ex in examples]
+    enc_prompt = [tokenizer(p, truncation=True, max_length=512, return_tensors="pt") for p in prompts]
+    batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+    for k in ("input_ids", "attention_mask"): batch_prompt[k] = batch_prompt[k].to(torch.long)
+    return {"prompt_input_ids": batch_prompt["input_ids"], "prompt_attention_mask": batch_prompt["attention_mask"]}
 
 trainer = GRPOTrainer(
     model=model,
     args=cfg,
     train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    reward_funcs=[reward_function],  # GRPOTrainer expects a list of reward functions
+    reward_funcs=[accuracy_reward, format_number_reward, format_reasoning_reward],
     data_collator=grpo_collator_fn,
     processing_class=tokenizer,
 )
-
-#######################################
-# 6. Snapshot initial params θ(0)
-#######################################
 
 base_state = {}
 with torch.no_grad():
@@ -285,28 +157,17 @@ with torch.no_grad():
 os.makedirs(DELTA_LOG_DIR, exist_ok=True)
 torch.save(base_state, os.path.join(DELTA_LOG_DIR, "base_state.pt"))
 
-#######################################
-# 7. Flexible Checkpoint Callback
-#######################################
-
 class FlexibleCheckpointCallback(TrainerCallback):
-    """
-    Callback that saves deltas on a flexible schedule and tracks statistics.
-    
-    Schedule: Every 5 steps for first 25 steps, then every 25 steps after.
-    Identical to DPO_train.py callback.
-    """
-    
     def __init__(self, base_state, delta_log_dir, checkpoint_schedule, threshold):
         self.base_state = base_state
         self.delta_log_dir = delta_log_dir
-        self.checkpoint_schedule = set(checkpoint_schedule)  # Use set for O(1) lookup
+        self.checkpoint_schedule = set(checkpoint_schedule)
         self.threshold = threshold
         os.makedirs(self.delta_log_dir, exist_ok=True)
         self.wandb_initialized = False
 
     def on_train_begin(self, args, state, control, **kwargs):
-        if not self.wandb_initialized:
+        if not self.wandb_initialized and "wandb" in args.report_to:
             wandb.init(
                 project=WANDB_PROJECT,
                 name=args.run_name,
@@ -318,8 +179,6 @@ class FlexibleCheckpointCallback(TrainerCallback):
                     "batch_size_per_device": args.per_device_train_batch_size,
                     "grad_accum": args.gradient_accumulation_steps,
                     "checkpoint_schedule": sorted(list(self.checkpoint_schedule)),
-                    "num_generations": args.num_generations if hasattr(args, 'num_generations') else None,
-                    "generation_batch_size": args.generation_batch_size if hasattr(args, 'generation_batch_size') else None,
                 },
             )
             self.wandb_initialized = True
@@ -327,7 +186,6 @@ class FlexibleCheckpointCallback(TrainerCallback):
     def on_step_end(self, args, state, control, **kwargs):
         model = kwargs["model"]
         step = state.global_step
-
         layer_stats = {}
         full_deltas_to_save = {}
 
@@ -335,38 +193,25 @@ class FlexibleCheckpointCallback(TrainerCallback):
             for name, param in model.named_parameters():
                 current = param.detach().float().cpu()
                 diff = current - self.base_state[name]
-
                 l2 = torch.norm(diff).item()
                 frac_big = (diff.abs() > self.threshold).float().mean().item()
-
-                layer_stats[name] = {
-                    "l2_from_init": l2,
-                    "frac_big_from_init": frac_big,
-                }
-
-                # Check if this step is in our checkpoint schedule
+                layer_stats[name] = {"l2_from_init": l2, "frac_big_from_init": frac_big}
                 if step in self.checkpoint_schedule:
                     full_deltas_to_save[name] = diff.clone()
 
-        # Always save stats (cheap JSON file)
         stats_path = os.path.join(self.delta_log_dir, f"stats_step_{step}.json")
-        with open(stats_path, "w") as f:
-            json.dump(layer_stats, f)
+        with open(stats_path, "w") as f: json.dump(layer_stats, f)
 
-        # Aggregate summaries for wandb
         all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
         all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
-        mean_l2 = sum(all_l2) / len(all_l2)
-        mean_frac = sum(all_frac) / len(all_frac)
+        mean_l2 = sum(all_l2) / len(all_l2) if all_l2 else 0.0
+        mean_frac = sum(all_frac) / len(all_frac) if all_frac else 0.0
 
-        attn_l2 = []
-        mlp_l2 = []
+        attn_l2, mlp_l2 = [], []
         for n, st in layer_stats.items():
             low = n.lower()
-            if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
-                attn_l2.append(st["l2_from_init"])
-            if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
-                mlp_l2.append(st["l2_from_init"])
+            if any(x in low for x in ["attn", "q_proj", "k_proj", "v_proj", "o_proj"]): attn_l2.append(st["l2_from_init"])
+            if any(x in low for x in ["mlp", "ffn", "feed_forward", "gate_proj", "up_proj", "down_proj"]): mlp_l2.append(st["l2_from_init"])
 
         wandb.log({
             "step": step,
@@ -376,44 +221,17 @@ class FlexibleCheckpointCallback(TrainerCallback):
             "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
         }, step=step)
 
-        # Save full deltas on checkpoint schedule
         if step in self.checkpoint_schedule:
             delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
             torch.save(full_deltas_to_save, delta_file)
             print(f"  ✓ Saved checkpoint at step {step}")
-            # Note: Not uploading to wandb since artifacts are already saved on cloud GPU
 
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
-        if self.wandb_initialized:
-            wandb.finish()
+        if self.wandb_initialized: wandb.finish()
 
-#######################################
-# 8. Register callback and train
-#######################################
+trainer.add_callback(FlexibleCheckpointCallback(base_state, DELTA_LOG_DIR, CHECKPOINT_SCHEDULE, THRESHOLD))
 
-trainer.add_callback(
-    FlexibleCheckpointCallback(
-        base_state=base_state,
-        delta_log_dir=DELTA_LOG_DIR,
-        checkpoint_schedule=CHECKPOINT_SCHEDULE,
-        threshold=THRESHOLD,
-    )
-)
-
-print(f"\n{'='*60}")
-print(f"Starting GRPO training with flexible checkpoint schedule")
-print(f"{'='*60}")
-print(f"Checkpoints will be saved at steps: {CHECKPOINT_SCHEDULE}")
-print(f"Total steps: {NUM_STEPS}")
-print(f"{'='*60}\n")
-
+print(f"\n{'='*60}\nStarting DENSE GRPO training with delta tracking\n{'='*60}")
 trainer.train()
-
-print(f"\n{'='*60}")
-print(f"Training complete!")
-print(f"{'='*60}")
-print(f"Deltas saved to: {DELTA_LOG_DIR}")
-print(f"Model checkpoints saved to: {OUTPUT_DIR}")
-print(f"{'='*60}\n")
