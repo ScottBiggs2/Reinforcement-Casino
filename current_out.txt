@@ -1,6 +1,6 @@
-Job started at: Wed Mar 25 20:12:20 EDT 2026
-Running on node: d1028
-Job ID: 5427597
+Job started at: Wed Mar 25 20:18:51 EDT 2026
+Running on node: d1026
+Job ID: 5427779
 GPU: 0
 Working dir: /home/biggs.s/rl_casino
 Installing/verifying training requirements...
@@ -23,54 +23,62 @@ Testing DENSE GRPO on dataset: math-220k
 ✓ Loaded 64 GRPO examples from open-r1/OpenR1-Math-220k
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.17it/s]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.08it/s]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.10it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.59it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.37it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:14<00:43, 14.51s/it]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:23<00:22, 11.09s/it]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:35<00:11, 11.55s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:38<00:00,  8.30s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:38<00:00,  9.66s/it]
 The model is already on multiple devices. Skipping the move to device specified in `args`.
 Warning: The cache directory for DeepSpeed Triton autotune, /home/biggs.s/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:02<00:06,  2.13s/it]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:05<00:06,  3.15s/it]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:10<00:03,  3.71s/it]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:11<00:00,  2.70s/it]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:11<00:00,  2.88s/it]
-The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'eos_token_id': 128009, 'pad_token_id': 128009}.
-
-============================================================
-Starting DENSE GRPO training with delta tracking
-============================================================
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:03<00:10,  3.59s/it]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:16<00:17,  8.92s/it]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:21<00:07,  7.38s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:22<00:00,  4.93s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:22<00:00,  5.74s/it]
 Traceback (most recent call last):
-  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 1549, in get_optimizer_cls_and_kwargs
-    from bitsandbytes.optim import AdamW, Lion, RMSprop
-ModuleNotFoundError: No module named 'bitsandbytes'
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 231, in <module>
-    trainer.train()
-    ~~~~~~~~~~~~~^^
-  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 2325, in train
-    return inner_training_loop(
-        args=args,
-    ...<2 lines>...
-        ignore_keys_for_eval=ignore_keys_for_eval,
+  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 138, in <module>
+    trainer = GRPOTrainer(
+        model=model,
+    ...<3 lines>...
+        processing_class=tokenizer,
     )
-  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 2432, in _inner_training_loop
-    self.create_optimizer_and_scheduler(num_training_steps=max_steps)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 1258, in create_optimizer_and_scheduler
-    self.create_optimizer()
-    ~~~~~~~~~~~~~~~~~~~~~^^
-  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 1307, in create_optimizer
-    optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args, opt_model)
-                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 1604, in get_optimizer_cls_and_kwargs
-    raise ValueError("Trainer tried to instantiate bnb optimizer but `bitsandbytes` is not installed!")
-ValueError: Trainer tried to instantiate bnb optimizer but `bitsandbytes` is not installed!
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/trl/trainer/grpo_trainer.py", line 595, in __init__
+    self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/accelerate/accelerator.py", line 1806, in prepare_model
+    model = model.to(self.device)
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/modeling_utils.py", line 4343, in to
+    return super().to(*args, **kwargs)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1371, in to
+    return self._apply(convert)
+           ~~~~~~~~~~~^^^^^^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/nn/modules/module.py", line 930, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  [Previous line repeated 2 more times]
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/nn/modules/module.py", line 957, in _apply
+    param_applied = fn(param)
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1357, in convert
+    return t.to(
+           ~~~~^
+        device,
+        ^^^^^^^
+        dtype if t.is_floating_point() or t.is_complex() else None,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        non_blocking,
+        ^^^^^^^^^^^^^
+    )
+    ^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 224.00 MiB. GPU 0 has a total capacity of 39.49 GiB of which 72.12 MiB is free. Including non-PyTorch memory, this process has 39.41 GiB memory in use. Of the allocated memory 39.01 GiB is allocated by PyTorch, and 663.50 KiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
   ✗ DENSE math-220k: FAILED
 
 ============================================================
@@ -84,8 +92,8 @@ CUDA available: True
 CUDA version: 12.8
 GPU count: 1
 Current device: 0
-GPU name: NVIDIA A100-SXM4-80GB
-GPU memory: 85.10 GB
+GPU name: NVIDIA A100-SXM4-40GB
+GPU memory: 42.41 GB
 
 ✓ Using device: cuda
 Scanning deltas from: /scratch/biggs.s/rl_casino_verify_outputs/deltas/meta_llama_llama_3.1_8b_instruct_math_220k_grpo_dense
@@ -96,3 +104,50 @@ Testing SPARSE GRPO on dataset: math-220k
   warnings.warn(
 /home/biggs.s/miniconda/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
   warnings.warn(
+`torch_dtype` is deprecated! Use `dtype` instead!
+
+============================================================
+SPARSE GRPO MATH TRAINING
+============================================================
+Dataset: math-220k (open-r1/OpenR1-Math-220k)
+[dataset_registry] Resolved 'math-220k' → open-r1/OpenR1-Math-220k for GRPO (domain: math)
+[dataset_registry] Applying field remapping: {'problem': 'prompt'}
+✓ Loaded 64 GRPO examples from open-r1/OpenR1-Math-220k
+
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:03<00:09,  3.05s/it]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:03<00:03,  1.78s/it]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:04<00:01,  1.30s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.17it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:04<00:00,  1.21s/it]
+Loading masks from masks/verify_meta_llama_llama_3.1_8b_instruct_math_220k_step10.pt...
+Traceback (most recent call last):
+  File "/home/biggs.s/rl_casino/src/full_training/sparse_grpo_bsr.py", line 297, in <module>
+    train(
+    ~~~~~^
+        model_name=args.model_name,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<25 lines>...
+        grad_accum=args.grad_accum
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/biggs.s/rl_casino/src/full_training/sparse_grpo_bsr.py", line 177, in train
+    mask_manager = SparseMaskManager(mask_path, device=device)
+  File "/home/biggs.s/rl_casino/src/utils/mask_manager.py", line 17, in __init__
+    raise FileNotFoundError(f"Mask file not found: {mask_path}")
+FileNotFoundError: Mask file not found: masks/verify_meta_llama_llama_3.1_8b_instruct_math_220k_step10.pt
+  ✗ SPARSE math-220k: FAILED
+
+============================================================
+Verification Summary
+============================================================
+Passed: 0 / 2
+Failed: 2 / 2
+
+Checking output directories in /scratch/biggs.s/rl_casino_verify_outputs for DENSE delta logs:
+/scratch/biggs.s/rl_casino_verify_outputs/deltas/meta_llama_llama_3_1_8b_instruct_math_220k_grpo_dense
+  ✓ Found: /scratch/biggs.s/rl_casino_verify_outputs/deltas/*_math_220k_grpo_dense*
+
+Job finished at: Wed Mar 25 20:21:33 EDT 2026
+VERIFICATION FAILED: 2 test(s) had errors
