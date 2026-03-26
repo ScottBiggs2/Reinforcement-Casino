@@ -1,6 +1,6 @@
-Job started at: Wed Mar 25 19:28:39 EDT 2026
+Job started at: Wed Mar 25 19:36:32 EDT 2026
 Running on node: d1028
-Job ID: 5426406
+Job ID: 5426717
 GPU: 0
 Working dir: /home/biggs.s/rl_casino
 Installing/verifying training requirements...
@@ -17,157 +17,86 @@ Testing DENSE GRPO on dataset: math-220k
   warnings.warn(
 /home/biggs.s/miniconda/lib/python3.13/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
   warnings.warn(
+`torch_dtype` is deprecated! Use `dtype` instead!
 [dataset_registry] Resolved 'math-220k' → open-r1/OpenR1-Math-220k for GRPO (domain: math)
 [dataset_registry] Applying field remapping: {'problem': 'prompt'}
-
-Generating train split:   0%|          | 0/93733 [00:00<?, ? examples/s]
-Generating train split:   1%|          | 1000/93733 [00:00<00:44, 2062.70 examples/s]
-Generating train split:   2%|▏         | 2000/93733 [00:00<00:26, 3526.08 examples/s]
-Generating train split:   3%|▎         | 3000/93733 [00:00<00:19, 4611.67 examples/s]
-Generating train split:   4%|▍         | 4000/93733 [00:00<00:16, 5596.12 examples/s]
-Generating train split:   5%|▌         | 5000/93733 [00:01<00:13, 6363.60 examples/s]
-Generating train split:   6%|▋         | 6000/93733 [00:01<00:13, 6341.75 examples/s]
-Generating train split:   7%|▋         | 7000/93733 [00:01<00:12, 6999.99 examples/s]
-Generating train split:   9%|▊         | 8000/93733 [00:01<00:12, 6855.17 examples/s]
-Generating train split:  11%|█         | 10374/93733 [00:01<00:12, 6714.68 examples/s]
-Generating train split:  12%|█▏        | 11374/93733 [00:02<00:23, 3516.02 examples/s]
-Generating train split:  14%|█▍        | 13374/93733 [00:02<00:17, 4657.19 examples/s]
-Generating train split:  15%|█▌        | 14374/93733 [00:02<00:15, 5264.32 examples/s]
-Generating train split:  16%|█▋        | 15374/93733 [00:02<00:13, 5656.95 examples/s]
-Generating train split:  17%|█▋        | 16374/93733 [00:03<00:12, 6092.31 examples/s]
-Generating train split:  19%|█▊        | 17374/93733 [00:03<00:11, 6414.26 examples/s]
-Generating train split:  21%|██        | 19748/93733 [00:03<00:10, 6811.19 examples/s]
-Generating train split:  22%|██▏       | 20748/93733 [00:03<00:10, 7085.34 examples/s]
-Generating train split:  23%|██▎       | 21748/93733 [00:04<00:22, 3197.49 examples/s]
-Generating train split:  25%|██▌       | 23748/93733 [00:04<00:15, 4456.25 examples/s]
-Generating train split:  26%|██▋       | 24748/93733 [00:04<00:13, 5064.71 examples/s]
-Generating train split:  27%|██▋       | 25748/93733 [00:04<00:12, 5455.79 examples/s]
-Generating train split:  29%|██▊       | 26748/93733 [00:05<00:11, 5635.85 examples/s]
-Generating train split:  31%|███       | 29122/93733 [00:05<00:10, 6033.67 examples/s]
-Generating train split:  32%|███▏      | 30122/93733 [00:05<00:10, 6152.46 examples/s]
-Generating train split:  33%|███▎      | 31122/93733 [00:05<00:10, 6150.37 examples/s]
-Generating train split:  34%|███▍      | 32122/93733 [00:07<00:26, 2344.83 examples/s]
-Generating train split:  36%|███▋      | 34122/93733 [00:07<00:16, 3641.47 examples/s]
-Generating train split:  39%|███▊      | 36122/93733 [00:07<00:12, 4703.35 examples/s]
-Generating train split:  41%|████      | 38495/93733 [00:07<00:11, 4849.12 examples/s]
-Generating train split:  42%|████▏     | 39495/93733 [00:07<00:10, 5271.83 examples/s]
-Generating train split:  43%|████▎     | 40495/93733 [00:08<00:09, 5498.68 examples/s]
-Generating train split:  44%|████▍     | 41495/93733 [00:08<00:09, 5711.60 examples/s]
-Generating train split:  45%|████▌     | 42495/93733 [00:09<00:19, 2624.64 examples/s]
-Generating train split:  47%|████▋     | 44495/93733 [00:09<00:12, 3790.15 examples/s]
-Generating train split:  49%|████▊     | 45495/93733 [00:09<00:11, 4133.07 examples/s]
-Generating train split:  51%|█████     | 47868/93733 [00:10<00:09, 4760.45 examples/s]
-Generating train split:  52%|█████▏    | 48868/93733 [00:10<00:09, 4969.20 examples/s]
-Generating train split:  53%|█████▎    | 49868/93733 [00:10<00:08, 5240.27 examples/s]
-Generating train split:  54%|█████▍    | 50868/93733 [00:10<00:07, 5684.99 examples/s]
-Generating train split:  55%|█████▌    | 51868/93733 [00:10<00:07, 5795.68 examples/s]
-Generating train split:  56%|█████▋    | 52868/93733 [00:11<00:18, 2177.69 examples/s]
-Generating train split:  59%|█████▊    | 54868/93733 [00:12<00:11, 3395.76 examples/s]
-Generating train split:  61%|██████    | 57241/93733 [00:12<00:08, 4057.84 examples/s]
-Generating train split:  62%|██████▏   | 58241/93733 [00:12<00:07, 4464.37 examples/s]
-Generating train split:  63%|██████▎   | 59241/93733 [00:12<00:07, 4878.07 examples/s]
-Generating train split:  64%|██████▍   | 60241/93733 [00:12<00:06, 5156.56 examples/s]
-Generating train split:  65%|██████▌   | 61241/93733 [00:13<00:06, 5182.36 examples/s]
-Generating train split:  66%|██████▋   | 62241/93733 [00:13<00:05, 5506.84 examples/s]
-Generating train split:  67%|██████▋   | 63241/93733 [00:14<00:11, 2654.94 examples/s]
-Generating train split:  71%|███████   | 66614/93733 [00:14<00:06, 4043.06 examples/s]
-Generating train split:  72%|███████▏  | 67614/93733 [00:14<00:05, 4434.16 examples/s]
-Generating train split:  73%|███████▎  | 68614/93733 [00:14<00:05, 4851.82 examples/s]
-Generating train split:  74%|███████▍  | 69614/93733 [00:15<00:04, 5099.62 examples/s]
-Generating train split:  75%|███████▌  | 70614/93733 [00:15<00:04, 5571.95 examples/s]
-Generating train split:  76%|███████▋  | 71614/93733 [00:15<00:03, 5682.20 examples/s]
-Generating train split:  77%|███████▋  | 72614/93733 [00:16<00:08, 2488.26 examples/s]
-Generating train split:  81%|████████  | 75987/93733 [00:16<00:04, 3941.67 examples/s]
-Generating train split:  82%|████████▏ | 76987/93733 [00:16<00:03, 4281.21 examples/s]
-Generating train split:  83%|████████▎ | 77987/93733 [00:17<00:03, 4643.84 examples/s]
-Generating train split:  84%|████████▍ | 78987/93733 [00:17<00:02, 5211.49 examples/s]
-Generating train split:  85%|████████▌ | 79987/93733 [00:17<00:02, 5332.60 examples/s]
-Generating train split:  86%|████████▋ | 80987/93733 [00:17<00:02, 5936.20 examples/s]
-Generating train split:  87%|████████▋ | 81987/93733 [00:17<00:01, 6112.02 examples/s]
-Generating train split:  89%|████████▊ | 82987/93733 [00:18<00:03, 2908.07 examples/s]
-Generating train split:  91%|█████████ | 85360/93733 [00:18<00:02, 3867.33 examples/s]
-Generating train split:  92%|█████████▏| 86360/93733 [00:19<00:01, 4280.77 examples/s]
-Generating train split:  93%|█████████▎| 87360/93733 [00:19<00:01, 4699.10 examples/s]
-Generating train split:  94%|█████████▍| 88360/93733 [00:19<00:01, 5290.77 examples/s]
-Generating train split:  95%|█████████▌| 89360/93733 [00:19<00:00, 5643.45 examples/s]
-Generating train split:  96%|█████████▋| 90360/93733 [00:19<00:00, 5848.20 examples/s]
-Generating train split:  97%|█████████▋| 91360/93733 [00:19<00:00, 6071.50 examples/s]
-Generating train split:  99%|█████████▊| 92360/93733 [00:19<00:00, 6241.79 examples/s]
-Generating train split: 100%|█████████▉| 93360/93733 [00:20<00:00, 3017.27 examples/s]
-Generating train split: 100%|██████████| 93733/93733 [00:20<00:00, 4501.47 examples/s]
-
-Map:   0%|          | 0/93733 [00:00<?, ? examples/s]
-Map:   2%|▏         | 1446/93733 [00:00<00:06, 14095.72 examples/s]
-Map:   3%|▎         | 2933/93733 [00:00<00:06, 14543.77 examples/s]
-Map:   5%|▌         | 5001/93733 [00:00<00:06, 14012.76 examples/s]
-Map:   7%|▋         | 6559/93733 [00:00<00:05, 14545.87 examples/s]
-Map:   9%|▉         | 8708/93733 [00:00<00:05, 14449.99 examples/s]
-Map:  12%|█▏        | 10931/93733 [00:00<00:05, 14541.72 examples/s]
-Map:  13%|█▎        | 12408/93733 [00:00<00:05, 14599.01 examples/s]
-Map:  15%|█▍        | 13990/93733 [00:00<00:05, 14932.08 examples/s]
-Map:  17%|█▋        | 16209/93733 [00:01<00:05, 14879.05 examples/s]
-Map:  19%|█▉        | 17704/93733 [00:01<00:05, 14894.64 examples/s]
-Map:  21%|██        | 19222/93733 [00:01<00:04, 14967.83 examples/s]
-Map:  22%|██▏       | 20726/93733 [00:01<00:04, 14986.52 examples/s]
-Map:  24%|██▍       | 22823/93733 [00:01<00:04, 14607.17 examples/s]
-Map:  26%|██▌       | 24306/93733 [00:01<00:04, 14665.37 examples/s]
-Map:  28%|██▊       | 26520/93733 [00:01<00:04, 14656.08 examples/s]
-Map:  31%|███       | 28695/93733 [00:01<00:04, 14599.33 examples/s]
-Map:  33%|███▎      | 30766/93733 [00:02<00:04, 14332.28 examples/s]
-Map:  35%|███▌      | 32946/93733 [00:02<00:04, 14392.88 examples/s]
-Map:  37%|███▋      | 34951/93733 [00:02<00:04, 13635.67 examples/s]
-Map:  40%|███▉      | 37029/93733 [00:02<00:04, 13699.76 examples/s]
-Map:  41%|████      | 38496/93733 [00:02<00:03, 13892.92 examples/s]
-Map:  43%|████▎     | 40029/93733 [00:02<00:03, 14237.03 examples/s]
-Map:  44%|████▍     | 41491/93733 [00:02<00:03, 14206.31 examples/s]
-Map:  46%|████▋     | 43578/93733 [00:03<00:03, 14099.29 examples/s]
-Map:  48%|████▊     | 45000/93733 [00:03<00:03, 14048.48 examples/s]
-Map:  50%|█████     | 46869/93733 [00:03<00:03, 13477.98 examples/s]
-Map:  52%|█████▏    | 48869/93733 [00:03<00:03, 13321.58 examples/s]
-Map:  54%|█████▎    | 50264/93733 [00:03<00:03, 13470.34 examples/s]
-Map:  55%|█████▌    | 51717/93733 [00:03<00:03, 13738.44 examples/s]
-Map:  57%|█████▋    | 53122/93733 [00:03<00:02, 13819.82 examples/s]
-Map:  59%|█████▊    | 55011/93733 [00:03<00:02, 13369.91 examples/s]
-Map:  60%|██████    | 56415/93733 [00:03<00:02, 13540.23 examples/s]
-Map:  62%|██████▏   | 57967/93733 [00:04<00:02, 14069.71 examples/s]
-Map:  64%|██████▍   | 60126/93733 [00:04<00:02, 14185.06 examples/s]
-Map:  66%|██████▌   | 61639/93733 [00:04<00:02, 14427.19 examples/s]
-Map:  68%|██████▊   | 63654/93733 [00:04<00:02, 13910.70 examples/s]
-Map:  69%|██████▉   | 65110/93733 [00:04<00:02, 14072.24 examples/s]
-Map:  72%|███████▏  | 67156/93733 [00:04<00:01, 13792.27 examples/s]
-Map:  73%|███████▎  | 68611/93733 [00:04<00:01, 13947.94 examples/s]
-Map:  75%|███████▌  | 70676/93733 [00:04<00:01, 13839.43 examples/s]
-Map:  77%|███████▋  | 72158/93733 [00:05<00:01, 14059.67 examples/s]
-Map:  79%|███████▊  | 73590/93733 [00:05<00:01, 14124.64 examples/s]
-Map:  81%|████████  | 75790/93733 [00:05<00:01, 14305.75 examples/s]
-Map:  83%|████████▎ | 77981/93733 [00:05<00:01, 14369.47 examples/s]
-Map:  85%|████████▍ | 79449/93733 [00:05<00:00, 14444.26 examples/s]
-Map:  86%|████████▋ | 80922/93733 [00:05<00:00, 14514.62 examples/s]
-Map:  89%|████████▊ | 82981/93733 [00:05<00:00, 14219.47 examples/s]
-Map:  91%|█████████ | 85129/93733 [00:05<00:00, 14250.71 examples/s]
-Map:  93%|█████████▎| 86934/93733 [00:06<00:00, 13527.28 examples/s]
-Map:  94%|█████████▍| 88361/93733 [00:06<00:00, 13528.25 examples/s]
-Map:  96%|█████████▌| 89857/93733 [00:06<00:00, 13884.90 examples/s]
-Map:  98%|█████████▊| 91911/93733 [00:06<00:00, 13814.28 examples/s]
-Map: 100%|█████████▉| 93380/93733 [00:06<00:00, 14031.98 examples/s]
-Map: 100%|██████████| 93733/93733 [00:07<00:00, 13374.94 examples/s]
-`torch_dtype` is deprecated! Use `dtype` instead!
 ✓ Loaded 64 GRPO examples from open-r1/OpenR1-Math-220k
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:01<00:03,  1.25s/it]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:02<00:02,  1.06s/it]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:03<00:01,  1.11s/it]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:03<00:00,  1.32it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:03<00:00,  1.12it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.19it/s]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.11it/s]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.16it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.67it/s]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.43it/s]
+The model is already on multiple devices. Skipping the move to device specified in `args`.
+Warning: The cache directory for DeepSpeed Triton autotune, /home/biggs.s/.triton/autotune, appears to be on an NFS system. While this is generally acceptable, if you experience slowdowns or hanging when DeepSpeed exits, it is recommended to set the TRITON_CACHE_DIR environment variable to a non-NFS path.
+
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:04<00:13,  4.53s/it]
+Loading checkpoint shards:  50%|█████     | 2/4 [00:09<00:09,  4.67s/it]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [00:19<00:07,  7.36s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:21<00:00,  5.10s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [00:21<00:00,  5.38s/it]
+The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'eos_token_id': 128009, 'pad_token_id': 128009}.
+wandb: W&B API key is configured. Use `wandb login --relogin` to force relogin
+wandb: setting up run 896zeges
+wandb: Tracking run with wandb version 0.22.2
+wandb: Run data is saved locally in /home/biggs.s/rl_casino/wandb/run-20260325_193948-896zeges
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run verify_grpo_dense_math-220k_20260325_193638
+wandb: ⭐️ View project at https://wandb.ai/scottbiggs2001-northeastern-university/huggingface
+wandb: 🚀 View run at https://wandb.ai/scottbiggs2001-northeastern-university/huggingface/runs/896zeges
+wandb: Detected [huggingface_hub.inference] in use.
+wandb: Use W&B Weave for improved LLM call tracing. Install Weave with `pip install weave` then add `import weave` to the top of your script.
+wandb: For more information, check out the docs at: https://weave-docs.wandb.ai/
+
+============================================================
+Starting DENSE GRPO training with delta tracking
+============================================================
+
+  0%|          | 0/10 [00:00<?, ?it/s]wandb: wandb.init() called while a run is active and reinit is set to 'default', so returning the previous run.
 Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 143, in <module>
-    trainer = GRPOTrainer(
-        model=model,
-    ...<4 lines>...
-        processing_class=tokenizer,
+  File "/home/biggs.s/rl_casino/src/full_training/GRPO_train.py", line 229, in <module>
+    trainer.train()
+    ~~~~~~~~~~~~~^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 2325, in train
+    return inner_training_loop(
+        args=args,
+    ...<2 lines>...
+        ignore_keys_for_eval=ignore_keys_for_eval,
     )
-TypeError: GRPOTrainer.__init__() got an unexpected keyword argument 'data_collator'
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/transformers/trainer.py", line 2740, in _inner_training_loop
+    self.optimizer.step()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/accelerate/optimizer.py", line 179, in step
+    self.optimizer.step(closure)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/optim/lr_scheduler.py", line 133, in wrapper
+    return func.__get__(opt, opt.__class__)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/optim/optimizer.py", line 517, in wrapper
+    out = func(*args, **kwargs)
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/optim/optimizer.py", line 82, in _use_grad
+    ret = func(*args, **kwargs)
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/optim/adam.py", line 237, in step
+    has_complex = self._init_group(
+        group,
+    ...<5 lines>...
+        state_steps,
+    )
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/_dynamo/eval_frame.py", line 1044, in _fn
+    return fn(*args, **kwargs)
+  File "/home/biggs.s/miniconda/lib/python3.13/site-packages/torch/optim/adam.py", line 181, in _init_group
+    state["exp_avg_sq"] = torch.zeros_like(
+                          ~~~~~~~~~~~~~~~~^
+        p, memory_format=torch.preserve_format
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 112.00 MiB. GPU 0 has a total capacity of 79.25 GiB of which 7.50 MiB is free. Including non-PyTorch memory, this process has 79.23 GiB memory in use. Of the allocated memory 76.11 GiB is allocated by PyTorch, and 2.62 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mverify_grpo_dense_math-220k_20260325_193638[0m at: [34m[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20260325_193948-896zeges/logs[0m
   ✗ DENSE math-220k: FAILED
 
 ============================================================
@@ -204,14 +133,14 @@ Dataset: math-220k (open-r1/OpenR1-Math-220k)
 ✓ Loaded 64 GRPO examples from open-r1/OpenR1-Math-220k
 
 Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
-Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:02,  1.22it/s]
-Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.12it/s]
-Loading checkpoint shards:  75%|███████▌  | 3/4 [00:02<00:00,  1.15it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.65it/s]
-Loading checkpoint shards: 100%|██████████| 4/4 [00:02<00:00,  1.42it/s]
+Loading checkpoint shards:  25%|██▌       | 1/4 [00:35<01:45, 35.11s/it]
+Loading checkpoint shards:  50%|█████     | 2/4 [01:26<01:29, 44.87s/it]
+Loading checkpoint shards:  75%|███████▌  | 3/4 [01:48<00:34, 34.27s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [01:49<00:00, 21.02s/it]
+Loading checkpoint shards: 100%|██████████| 4/4 [01:49<00:00, 27.30s/it]
 Loading masks from masks/verify_meta_llama_llama_3.1_8b_instruct_math_220k_step10.pt...
 Traceback (most recent call last):
-  File "/home/biggs.s/rl_casino/src/full_training/sparse_grpo_bsr.py", line 308, in <module>
+  File "/home/biggs.s/rl_casino/src/full_training/sparse_grpo_bsr.py", line 296, in <module>
     train(
     ~~~~~^
         model_name=args.model_name,
@@ -235,7 +164,8 @@ Passed: 0 / 2
 Failed: 2 / 2
 
 Checking output directories in /scratch/biggs.s/rl_casino_verify_outputs for DENSE delta logs:
-  ✗ Not found: /scratch/biggs.s/rl_casino_verify_outputs/deltas/*_math_220k_grpo_dense*
+/scratch/biggs.s/rl_casino_verify_outputs/deltas/meta_llama_llama_3_1_8b_instruct_math_220k_grpo_dense
+  ✓ Found: /scratch/biggs.s/rl_casino_verify_outputs/deltas/*_math_220k_grpo_dense*
 
-Job finished at: Wed Mar 25 19:30:45 EDT 2026
+Job finished at: Wed Mar 25 19:43:45 EDT 2026
 VERIFICATION FAILED: 2 test(s) had errors

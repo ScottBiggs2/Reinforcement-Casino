@@ -8,8 +8,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a100:1
-#SBATCH --mem=64G
-#SBATCH --time=01:00:00
+#SBATCH --mem=128G
+#SBATCH --time=00:30:00
 
 # Job runs in the directory you submitted from
 cd "${SLURM_SUBMIT_DIR:-.}"

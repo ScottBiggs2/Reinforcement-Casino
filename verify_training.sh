@@ -30,6 +30,13 @@ echo "Installing/verifying training requirements..."
 pip install -r requirements.txt -q
 
 MODEL="google/gemma-3-270m-it"
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --model_path) MODEL="$2"; shift ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
 NUM_STEPS=10
 SUBSET=64
 VERIFY_OUT_DIR="/scratch/biggs.s/rl_casino_verify_outputs"

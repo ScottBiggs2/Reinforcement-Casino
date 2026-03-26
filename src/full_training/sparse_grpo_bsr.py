@@ -222,6 +222,7 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         bf16=True,
+        gradient_checkpointing=True,
         logging_steps=1,
         save_steps=999999,
         remove_unused_columns=False,
