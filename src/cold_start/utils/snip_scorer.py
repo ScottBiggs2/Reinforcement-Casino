@@ -1,42 +1,116 @@
-from typing import Dict
+"""Score MLP weights with one backward pass of gradient saliency."""
 
 import torch
 import torch.nn.functional as F
 
 
-def sequence_nll(
-    logits: torch.Tensor,
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
-) -> torch.Tensor:
-    """Token NLL averaged per sequence."""
-    shift_logits = logits[:, :-1, :].contiguous()
-    shift_labels = input_ids[:, 1:].contiguous()
-    shift_mask = attention_mask[:, 1:].contiguous().float()
+class SNIPScorer:
+    """Compute `|grad * weight|` for each MLP weight matrix."""
 
-    token_loss = F.cross_entropy(
-        shift_logits.view(-1, shift_logits.size(-1)),
-        shift_labels.view(-1),
-        reduction="none",
-    ).view(shift_labels.shape)
+    def score(self, model, tokenizer, chosen_texts, device, max_length=512, batch_size=8):
+        """Return per-parameter saliency scores without updating weights."""
+        model.eval()
+        model.zero_grad(set_to_none=True)
 
-    seq_loss = (token_loss * shift_mask).sum(dim=1) / shift_mask.sum(dim=1).clamp_min(1.0)
-    return seq_loss
+        total_loss = torch.tensor(0.0, device=device)
+        n_batches  = 0
+
+        for i in range(0, len(chosen_texts), batch_size):
+            batch = chosen_texts[i : i + batch_size]
+            enc = tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+            )
+            input_ids      = enc["input_ids"].to(device)
+            attention_mask = enc["attention_mask"].to(device)
+            labels = input_ids.clone()
+            labels[attention_mask == 0] = -100
+
+            out = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+            )
+            total_loss = total_loss + out.loss
+            n_batches  += 1
+
+        (total_loss / max(n_batches, 1)).backward()
+
+        scores = {}
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if "mlp" not in name or len(param.shape) != 2:
+                    continue
+                if param.grad is None:
+                    continue
+                scores[name] = (param.grad.abs() * param.detach().abs()).float().cpu()
+
+        model.zero_grad(set_to_none=True)
+        model.eval()
+
+        print(f"[SNIPScorer] Scored {len(scores)} MLP weight matrices.")
+        return scores
+
+    def scores_to_masks(self, scores, sparsity_percent=90.0, local_pool=False):
+        """Keep top-k saliency weights.
+
+        Args:
+            local_pool: If False (default), one global threshold across all layers.
+                        If True, each weight matrix independently keeps keep_frac elements.
+        """
+        keep_frac = 1.0 - sparsity_percent / 100.0
+
+        if local_pool:
+            masks = {}
+            for name, score in scores.items():
+                flat = score.flatten()
+                n_keep = max(1, int(keep_frac * flat.numel()))
+                threshold = torch.topk(flat, n_keep).values.min().item()
+                masks[name] = (score >= threshold).float()
+        else:
+            all_scores = torch.cat([s.flatten() for s in scores.values()])
+            n_keep     = max(1, int(keep_frac * all_scores.numel()))
+            threshold  = torch.topk(all_scores, n_keep).values.min().item()
+            masks = {name: (score >= threshold).float() for name, score in scores.items()}
+
+        total  = sum(m.numel() for m in masks.values())
+        kept   = sum(m.sum().item() for m in masks.values())
+        actual = 100.0 * (1.0 - kept / total) if total > 0 else 0.0
+        mode   = "local (per-layer)" if local_pool else "global (cross-layer)"
+        print(f"[SNIPScorer] {len(masks)} masks ({mode}), actual sparsity={actual:.2f}%")
+        return masks
+
+
+def _sequence_logprob(logits, input_ids, attention_mask):
+    """Return per-sample summed log-probability for non-padding next tokens."""
+    # Standard causal LM shift.
+    shift_logits = logits[:, :-1, :]
+    shift_labels = input_ids[:, 1:]
+    shift_mask = attention_mask[:, 1:].float()
+
+    log_probs = F.log_softmax(shift_logits, dim=-1)
+    token_logp = log_probs.gather(dim=-1, index=shift_labels.unsqueeze(-1)).squeeze(-1)
+    token_logp = token_logp * shift_mask
+    return token_logp.sum(dim=-1)
 
 
 def dpo_style_preference_loss(
-    chosen_logits: torch.Tensor,
-    chosen_ids: torch.Tensor,
-    chosen_mask: torch.Tensor,
-    rejected_logits: torch.Tensor,
-    rejected_ids: torch.Tensor,
-    rejected_mask: torch.Tensor,
-) -> torch.Tensor:
-    """A lightweight DPO-style ranking objective for scoring saliency."""
-    chosen_nll = sequence_nll(chosen_logits, chosen_ids, chosen_mask)
-    rejected_nll = sequence_nll(rejected_logits, rejected_ids, rejected_mask)
-    margin = rejected_nll - chosen_nll
-    return -F.logsigmoid(margin).mean()
+    chosen_logits,
+    chosen_ids,
+    chosen_mask,
+    rejected_logits,
+    rejected_ids,
+    rejected_mask,
+    beta: float = 1.0,
+):
+    """A simple DPO-style loss using model-only chosen-vs-rejected margins."""
+    chosen_lp = _sequence_logprob(chosen_logits, chosen_ids, chosen_mask)
+    rejected_lp = _sequence_logprob(rejected_logits, rejected_ids, rejected_mask)
+    margin = chosen_lp - rejected_lp
+    return -F.logsigmoid(beta * margin).mean()
 
 
 def compute_snip_scores(
@@ -45,14 +119,14 @@ def compute_snip_scores(
     device: str,
     num_batches: int,
     mlp_only: bool = True,
-) -> Dict[str, torch.Tensor]:
-    """Compute SNIP score |w * grad| from a small preference batch set."""
+):
+    """Compute SNIP scores for model weights from DPO-style preference gradients."""
     model.train()
     model.zero_grad(set_to_none=True)
 
-    batch_count = 0
-    for batch in dataloader:
-        if batch_count >= num_batches:
+    seen = 0
+    for idx, batch in enumerate(dataloader):
+        if idx >= num_batches:
             break
 
         chosen_ids = batch["chosen_input_ids"].to(device)
@@ -72,19 +146,20 @@ def compute_snip_scores(
             rejected_mask=rejected_mask,
         )
         loss.backward()
-        batch_count += 1
+        seen += 1
 
-    scores: Dict[str, torch.Tensor] = {}
+    scores = {}
     with torch.no_grad():
         for name, param in model.named_parameters():
+            if mlp_only and "mlp" not in name:
+                continue
+            if param.dim() != 2:
+                continue
             if param.grad is None:
                 continue
-            if param.dim() != 2 or not name.endswith(".weight"):
-                continue
-            if mlp_only and "mlp" not in name.lower():
-                continue
-            scores[name] = (param.detach().float().abs() * param.grad.detach().float().abs()).cpu()
+            scores[name] = (param.grad.abs() * param.detach().abs()).float().cpu()
 
     model.zero_grad(set_to_none=True)
     model.eval()
+    print(f"[compute_snip_scores] Scored {len(scores)} matrices over {seen} batches.")
     return scores

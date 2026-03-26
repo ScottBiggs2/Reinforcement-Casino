@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import os
 import sys
 from functools import partial
@@ -17,8 +18,7 @@ from src.utils.mask_utils import (
     compute_jaccard_similarity,
     save_masks
 )
-from src.cold_start.utils.activation_hooks import FeatureExtractor
-from src.cold_start.utils.cav_probes import compute_cav_scores
+from src.cold_start.utils.cav_probes import compute_cav_scores, CAVProbeScorer
 from src.cold_start.utils.snip_scorer import compute_snip_scores, dpo_style_preference_loss
 
 
@@ -40,16 +40,255 @@ def sanitize_model_name(model_name: str) -> str:
     return sanitized.strip("_")
 
 
+def summarize_layer_score_distribution(scores: Dict[str, torch.Tensor], top_n_preview: int = 8) -> Dict[str, object]:
+    """Print per-layer CAV score stats and return an aggregate summary."""
+    rows: List[Dict[str, float]] = []
+    for name, t in scores.items():
+        if t is None or t.numel() == 0:
+            continue
+        s = t.detach().float().reshape(-1).cpu()
+        rows.append(
+            {
+                "layer": name,
+                "mean": float(s.mean().item()),
+                "std": float(s.std(unbiased=False).item()),
+                "min": float(s.min().item()),
+                "max": float(s.max().item()),
+                "numel": float(s.numel()),
+            }
+        )
+
+    rows = sorted(rows, key=lambda x: x["layer"])
+    print("\n=== Per-layer score distribution (before masking) ===")
+    for r in rows:
+        print(
+            f"  {r['layer']}: mean={r['mean']:.6e}, std={r['std']:.6e}, "
+            f"min={r['min']:.6e}, max={r['max']:.6e}, n={int(r['numel'])}"
+        )
+
+    if not rows:
+        return {
+            "n_layers": 0,
+            "mean_std": 0.0,
+            "max_std": 0.0,
+            "min_std": 0.0,
+            "near_zero_std_layers": 0,
+            "weak_signal": True,
+        }
+
+    stds = [r["std"] for r in rows]
+    mins = [r["min"] for r in rows]
+    maxs = [r["max"] for r in rows]
+
+    preview = sorted(rows, key=lambda x: x["std"])[: max(1, top_n_preview)]
+    print("\nLowest-variance layers (possible CAV degeneracy):")
+    for r in preview:
+        print(f"  {r['layer']}: std={r['std']:.6e}, range=({r['min']:.6e}, {r['max']:.6e})")
+
+    near_zero_std_layers = sum(1 for s in stds if s <= 1e-10)
+    weak_signal = (max(stds) <= 1e-8) or (near_zero_std_layers == len(stds))
+    if weak_signal:
+        print(
+            "\n⚠ CAV score variance is near-zero across layers. "
+            "This suggests weak cold-start signal or score collapse before masking."
+        )
+
+    return {
+        "n_layers": len(rows),
+        "mean_std": float(sum(stds) / len(stds)),
+        "max_std": float(max(stds)),
+        "min_std": float(min(stds)),
+        "global_min": float(min(mins)),
+        "global_max": float(max(maxs)),
+        "near_zero_std_layers": int(near_zero_std_layers),
+        "weak_signal": bool(weak_signal),
+    }
+
+
+def maybe_add_score_noise(scores: Dict[str, torch.Tensor], noise_ratio: float) -> Dict[str, torch.Tensor]:
+    """Add tiny jitter to break ties when CAV scores are nearly uniform."""
+    if noise_ratio <= 0:
+        return scores
+
+    out: Dict[str, torch.Tensor] = {}
+    print(f"Adding CAV tie-break noise to scores (ratio={noise_ratio:.3e})...")
+    for name, t in scores.items():
+        s = t.detach().float().cpu()
+        scale = max(float(s.abs().max().item()) * noise_ratio, 1e-12)
+        out[name] = s + torch.randn_like(s) * scale
+    return out
+
+
+def summarize_mask_sparsity(masks: Dict[str, torch.Tensor], top_n_preview: int = 8) -> Dict[str, object]:
+    """Log per-layer sparsity to verify global allocation is non-uniform."""
+    rows = []
+    for name, m in masks.items():
+        mm = m.detach().float().cpu()
+        total = int(mm.numel())
+        kept = float(mm.sum().item())
+        sparsity = 1.0 - (kept / total if total > 0 else 0.0)
+        rows.append({"layer": name, "sparsity": float(sparsity), "total": total})
+
+    rows = sorted(rows, key=lambda x: x["layer"])
+    print("\n=== Per-layer mask sparsity ===")
+    for r in rows:
+        print(f"  {r['layer']}: sparsity={r['sparsity']:.6f} (n={r['total']})")
+
+    if not rows:
+        return {"n_layers": 0}
+
+    sparsities = [r["sparsity"] for r in rows]
+    print(
+        f"Sparsity range across layers: min={min(sparsities):.6f}, "
+        f"max={max(sparsities):.6f}, span={max(sparsities) - min(sparsities):.6f}"
+    )
+
+    flat_preview = sorted(rows, key=lambda x: x["sparsity"])[: max(1, top_n_preview)]
+    print("Lowest sparsity layers preview:")
+    for r in flat_preview:
+        print(f"  {r['layer']}: {r['sparsity']:.6f}")
+
+    return {
+        "n_layers": len(rows),
+        "min_sparsity": float(min(sparsities)),
+        "max_sparsity": float(max(sparsities)),
+        "mean_sparsity": float(sum(sparsities) / len(sparsities)),
+        "span": float(max(sparsities) - min(sparsities)),
+    }
+
+
+def effective_rank_normalized(mask_tensor: torch.Tensor, eps: float = 1e-12) -> Optional[float]:
+    """Entropy effective rank normalized by max rank for a 2D mask tensor."""
+    if mask_tensor.ndim < 2:
+        return None
+    W = mask_tensor.detach().float().reshape(mask_tensor.shape[0], -1).cpu()
+    m, n = W.shape
+    max_rank = min(m, n)
+    if max_rank <= 0:
+        return 0.0
+    s = torch.linalg.svdvals(W)
+    s = s[s > eps]
+    if s.numel() == 0:
+        return 0.0
+    p = s / s.sum()
+    entropy = -(p * torch.log(torch.clamp(p, min=eps))).sum().item()
+    erank = float(math.exp(entropy))
+    return erank / float(max_rank)
+
+
+def summarize_effective_rank(masks: Dict[str, torch.Tensor], threshold: float = 0.3) -> Dict[str, object]:
+    """Compute and log normalized effective rank for each layer after masking."""
+    rows = []
+    for name, m in masks.items():
+        val = effective_rank_normalized(m)
+        if val is None:
+            continue
+        rows.append({"layer": name, "erank_norm": float(val)})
+
+    rows = sorted(rows, key=lambda x: x["layer"])
+    print("\n=== Per-layer normalized effective rank (post-mask) ===")
+    for r in rows:
+        print(f"  {r['layer']}: erank_norm={r['erank_norm']:.6f}")
+
+    if not rows:
+        return {"n_layers": 0, "fraction_above_threshold": 0.0, "threshold": threshold}
+
+    values = [r["erank_norm"] for r in rows]
+    above = sum(1 for v in values if v > threshold)
+    print(
+        f"Effective-rank summary: mean={sum(values)/len(values):.6f}, "
+        f"min={min(values):.6f}, max={max(values):.6f}, "
+        f"layers_above_{threshold:.2f}={above}/{len(values)}"
+    )
+    if above < max(1, int(0.5 * len(values))):
+        print(
+            "⚠ Effective rank remains low in many layers. "
+            "Likely cause: degenerate/low-variance CAV scores in cold start."
+        )
+
+    return {
+        "n_layers": len(values),
+        "mean": float(sum(values) / len(values)),
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "threshold": float(threshold),
+        "num_above_threshold": int(above),
+        "fraction_above_threshold": float(above / len(values)),
+    }
+
+
+def run_cav_warmup_steps(model, dataloader, device: str, steps: int, lr: float) -> None:
+    """Run short DPO-style warmup updates before CAV scoring to strengthen signal."""
+    if steps <= 0:
+        return
+
+    print(f"\nRunning CAV warm-up for {steps} gradient steps (lr={lr})...")
+    model.train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    iterator = iter(dataloader)
+    losses: List[float] = []
+
+    for step in range(steps):
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            iterator = iter(dataloader)
+            batch = next(iterator)
+
+        chosen_ids = batch["chosen_input_ids"].to(device)
+        chosen_mask = batch["chosen_attention_mask"].to(device)
+        rejected_ids = batch["rejected_input_ids"].to(device)
+        rejected_mask = batch["rejected_attention_mask"].to(device)
+
+        optimizer.zero_grad(set_to_none=True)
+        chosen_logits = model(input_ids=chosen_ids, attention_mask=chosen_mask).logits
+        rejected_logits = model(input_ids=rejected_ids, attention_mask=rejected_mask).logits
+        loss = dpo_style_preference_loss(
+            chosen_logits=chosen_logits,
+            chosen_ids=chosen_ids,
+            chosen_mask=chosen_mask,
+            rejected_logits=rejected_logits,
+            rejected_ids=rejected_ids,
+            rejected_mask=rejected_mask,
+        )
+        loss.backward()
+        optimizer.step()
+        losses.append(float(loss.item()))
+
+    model.eval()
+    if losses:
+        print(f"Warm-up complete. Mean warm-up loss: {sum(losses)/len(losses):.6f}")
+
+
 def map_neuron_scores_to_weight_scores(
     neuron_scores: Dict[str, torch.Tensor],
-    extractor: FeatureExtractor,
+    extractor,
     model,
+    use_weight_abs: bool = False,
 ) -> Dict[str, torch.Tensor]:
     param_dict = dict(model.named_parameters())
     scores: Dict[str, torch.Tensor] = {}
 
+    module_to_weight = getattr(extractor, "module_to_weight", {}) if extractor is not None else {}
+
+    # Build a suffix index once for robust fallback matching.
+    suffix_to_param = {}
+    for pname in param_dict.keys():
+        if pname.endswith(".weight"):
+            suffix_to_param[pname] = pname
+
     for module_name, score in neuron_scores.items():
-        weight_name = extractor.module_to_weight.get(module_name)
+        weight_name = module_to_weight.get(module_name)
+        if weight_name is None:
+            candidate = f"{module_name}.weight"
+            if candidate in param_dict:
+                weight_name = candidate
+            else:
+                # Fallback: find unique parameter ending with "<module_name>.weight"
+                target_suffix = f"{module_name}.weight"
+                matches = [p for p in suffix_to_param.keys() if p.endswith(target_suffix)]
+                if len(matches) == 1:
+                    weight_name = matches[0]
         if weight_name is None or weight_name not in param_dict:
             continue
 
@@ -57,39 +296,120 @@ def map_neuron_scores_to_weight_scores(
         if weight.dim() != 2:
             continue
 
+        # Use per-weight magnitude to avoid constant row/column broadcast scores.
+        # Pure broadcasting makes each layer score matrix effectively rank-1,
+        # which leads to rank-collapsed binary masks after global thresholding.
+        weight_abs = weight.detach().float().abs().cpu()
+
         flat_score = score.reshape(-1)
-        if flat_score.numel() != weight.shape[0]:
+        if flat_score.numel() == weight.shape[0]:
+            # Neuron scores align with output dimension -> broadcast across columns.
+            mapped = flat_score[:, None].expand(weight.shape[0], weight.shape[1]) * weight_abs
+        elif flat_score.numel() == weight.shape[1]:
+            # Neuron scores align with input dimension (e.g., down_proj input).
+            mapped = flat_score[None, :].expand(weight.shape[0], weight.shape[1]) * weight_abs
+        else:
             # Shape mismatch can happen for unexpected module outputs.
             continue
 
-        row_scores = flat_score[:, None].expand(weight.shape[0], weight.shape[1])
-        scores[weight_name] = row_scores.float().cpu()
+        if use_weight_abs:
+            scores[weight_name] = mapped.float().cpu()
+        else:
+            if flat_score.numel() == weight.shape[0]:
+                scores[weight_name] = flat_score[:, None].expand(weight.shape[0], weight.shape[1]).float().cpu()
+            else:
+                scores[weight_name] = flat_score[None, :].expand(weight.shape[0], weight.shape[1]).float().cpu()
 
     return scores
 
 
-def collect_activation_scores(model, dataloader, device: str, num_batches: int, mlp_only: bool) -> Dict[str, torch.Tensor]:
-    extractor = FeatureExtractor(model, mlp_only=mlp_only)
-    model.eval()
+def _collect_pooled_downproj_activations(
+    model,
+    dataloader,
+    device: str,
+    num_batches: int,
+    which: str = "chosen",
+    mlp_only: bool = True,
+) -> Dict[str, torch.Tensor]:
+    """Collect pooled down_proj input activations directly from DPO batches."""
+    assert which in {"chosen", "rejected"}
 
+    acts: Dict[str, List[torch.Tensor]] = {}
+    hooks = []
+    current_mask = {"value": None}
+
+    for name, module in model.named_modules():
+        if not name.endswith("down_proj"):
+            continue
+        if mlp_only and "mlp" not in name:
+            continue
+        if not isinstance(module, torch.nn.Linear):
+            continue
+
+        acts[name] = []
+
+        def _make_hook(lname):
+            def _hook(mod, inp, out):
+                x = inp[0].detach().float()  # [B, T, H]
+                mask = current_mask["value"]
+                if mask is not None and mask.dim() == 2 and mask.shape[:2] == x.shape[:2]:
+                    m = mask.to(x.device).unsqueeze(-1).float()
+                    denom = m.sum(dim=1).clamp_min(1.0)
+                    pooled = (x * m).sum(dim=1) / denom
+                else:
+                    pooled = x.mean(dim=1)
+                acts[lname].append(pooled.cpu())
+            return _hook
+
+        hooks.append(module.register_forward_hook(_make_hook(name)))
+
+    model.eval()
     with torch.no_grad():
         for idx, batch in enumerate(dataloader):
             if idx >= num_batches:
                 break
-            chosen_ids = batch["chosen_input_ids"].to(device)
-            chosen_mask = batch["chosen_attention_mask"].to(device)
-            rejected_ids = batch["rejected_input_ids"].to(device)
-            rejected_mask = batch["rejected_attention_mask"].to(device)
 
-            extractor.collect_activation_stats_start()
-            _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
-            _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
-            extractor.collect_stop()
+            ids = batch[f"{which}_input_ids"].to(device)
+            mask = batch[f"{which}_attention_mask"].to(device)
+            current_mask["value"] = mask
+            _ = model(input_ids=ids, attention_mask=mask)
+            current_mask["value"] = None
 
-    neuron_scores = extractor.get_activation_scores()
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
-    extractor.close()
-    return weight_scores
+    for h in hooks:
+        h.remove()
+
+    return {k: torch.cat(v, dim=0) for k, v in acts.items() if len(v) > 0}
+
+
+def collect_activation_scores(
+    model,
+    dataloader,
+    device: str,
+    num_batches: int,
+    mlp_only: bool,
+    use_weight_abs: bool = False,
+) -> Dict[str, torch.Tensor]:
+    """Score neurons by mean |activation| across chosen + rejected sequences."""
+    chosen_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="chosen", mlp_only=mlp_only,
+    )
+    rejected_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="rejected", mlp_only=mlp_only,
+    )
+
+    neuron_scores: Dict[str, torch.Tensor] = {}
+    for name in sorted(set(chosen_acts) | set(rejected_acts)):
+        parts = []
+        if name in chosen_acts:
+            parts.append(chosen_acts[name])
+        if name in rejected_acts:
+            parts.append(rejected_acts[name])
+        combined = torch.cat(parts, dim=0)          # [N, D]
+        neuron_scores[name] = combined.abs().mean(dim=0)  # [D]
+
+    return map_neuron_scores_to_weight_scores(neuron_scores, extractor=None, model=model, use_weight_abs=use_weight_abs)
 
 
 def collect_cav_scores(
@@ -102,51 +422,35 @@ def collect_cav_scores(
     probe_lr: float,
     probe_weight_decay: float,
     normalize_per_layer: bool = True,
+    use_weight_abs: bool = False,
 ) -> Dict[str, torch.Tensor]:
-    extractor = FeatureExtractor(model, mlp_only=mlp_only)
-    model.eval()
-
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            if idx >= num_batches:
-                break
-
-            chosen_ids = batch["chosen_input_ids"].to(device)
-            chosen_mask = batch["chosen_attention_mask"].to(device)
-            rejected_ids = batch["rejected_input_ids"].to(device)
-            rejected_mask = batch["rejected_attention_mask"].to(device)
-
-            # Compute where the response starts (end of prompt) for each sequence.
-            # We use the first position where the padding mask is 0 from the right
-            # as a proxy. In practice the prompt occupies the first N tokens.
-            chosen_len = chosen_mask.sum(dim=1)  # number of real tokens per sample
-            rejected_len = rejected_mask.sum(dim=1)
-
-            # Use per-batch majority prompt length as response_start_idx.
-            # This is a reasonable approximation when prompt lengths are similar.
-            chosen_resp_start = int(chosen_len.min().item() // 2)  # heuristic: assume ~half is prompt
-            rejected_resp_start = int(rejected_len.min().item() // 2)
-
-            extractor.collect_labeled_start(label=1, response_start_idx=chosen_resp_start)
-            _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
-            extractor.collect_stop()
-
-            extractor.collect_labeled_start(label=0, response_start_idx=rejected_resp_start)
-            _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
-            extractor.collect_stop()
-
-    layer_data = extractor.get_labeled_activations()
-    neuron_scores = compute_cav_scores(
-        labeled_activations=layer_data,
-        epochs=probe_epochs,
-        lr=probe_lr,
-        weight_decay=probe_weight_decay,
-        device=device,
-        normalize_per_layer=normalize_per_layer,
+    positive_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="chosen", mlp_only=mlp_only,
+    )
+    negative_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="rejected", mlp_only=mlp_only,
     )
 
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
-    extractor.close()
+    scorer = CAVProbeScorer()
+    neuron_scores = scorer.score(positive_acts, negative_acts, mag_weight=1.0)
+
+    if normalize_per_layer:
+        for k, v in list(neuron_scores.items()):
+            vv = v.float()
+            vmin = vv.min()
+            vmax = vv.max()
+            if (vmax - vmin) > 1e-12:
+                neuron_scores[k] = (vv - vmin) / (vmax - vmin)
+            else:
+                neuron_scores[k] = torch.zeros_like(vv)
+
+    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor=None, model=model, use_weight_abs=use_weight_abs)
+    if not weight_scores:
+        print("[collect_cav_scores] Warning: mapped weight_scores is empty.")
+        print(f"  neuron score layers: {len(neuron_scores)}")
+        print("  sample neuron keys:", list(neuron_scores.keys())[:5])
     return weight_scores
 
 
@@ -160,32 +464,29 @@ def collect_cav_scores_with_debug(
     probe_lr: float,
     probe_weight_decay: float,
     normalize_per_layer: bool = True,
+    use_weight_abs: bool = False,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Tuple[torch.Tensor, torch.Tensor]], Dict[str, torch.Tensor]]:
-    extractor = FeatureExtractor(model, mlp_only=mlp_only)
-    model.eval()
+    chosen_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="chosen", mlp_only=mlp_only,
+    )
+    rejected_acts = _collect_pooled_downproj_activations(
+        model=model, dataloader=dataloader, device=device, num_batches=num_batches,
+        which="rejected", mlp_only=mlp_only,
+    )
 
-    with torch.no_grad():
-        for idx, batch in enumerate(dataloader):
-            if idx >= num_batches:
-                break
+    # Build labeled_activations: {layer_name: (X [N, D], y [N])}
+    layer_data: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
+    for name in sorted(set(chosen_acts) & set(rejected_acts)):
+        pos = chosen_acts[name]   # [N_pos, D]
+        neg = rejected_acts[name]  # [N_neg, D]
+        X = torch.cat([pos, neg], dim=0)
+        y = torch.cat([
+            torch.ones(pos.shape[0], dtype=torch.long),
+            torch.zeros(neg.shape[0], dtype=torch.long),
+        ], dim=0)
+        layer_data[name] = (X, y)
 
-            chosen_ids = batch["chosen_input_ids"].to(device)
-            chosen_mask = batch["chosen_attention_mask"].to(device)
-            chosen_plens = batch["chosen_prompt_lens"].to(device)
-            
-            rejected_ids = batch["rejected_input_ids"].to(device)
-            rejected_mask = batch["rejected_attention_mask"].to(device)
-            rejected_plens = batch["rejected_prompt_lens"].to(device)
-
-            extractor.collect_labeled_start(label=1, response_start_idx=chosen_plens)
-            _ = model(input_ids=chosen_ids, attention_mask=chosen_mask)
-            extractor.collect_stop()
-
-            extractor.collect_labeled_start(label=0, response_start_idx=rejected_plens)
-            _ = model(input_ids=rejected_ids, attention_mask=rejected_mask)
-            extractor.collect_stop()
-
-    layer_data = extractor.get_labeled_activations()
     neuron_scores = compute_cav_scores(
         labeled_activations=layer_data,
         epochs=probe_epochs,
@@ -195,9 +496,16 @@ def collect_cav_scores_with_debug(
         normalize_per_layer=normalize_per_layer,
     )
 
-    weight_scores = map_neuron_scores_to_weight_scores(neuron_scores, extractor, model)
-    module_to_weight = dict(extractor.module_to_weight)
-    extractor.close()
+    # module_to_weight: strip trailing ".weight" from parameter names
+    module_to_weight: Dict[str, str] = {
+        pname[:-7]: pname
+        for pname in dict(model.named_parameters())
+        if pname.endswith(".weight")
+    }
+
+    weight_scores = map_neuron_scores_to_weight_scores(
+        neuron_scores, extractor=None, model=model, use_weight_abs=use_weight_abs
+    )
     return weight_scores, layer_data, module_to_weight
 
 
@@ -442,6 +750,41 @@ def main(args):
 
     layer_data = None
     module_to_weight = None
+    score_variance_summary = None
+    mask_sparsity_summary = None
+    erank_summary = None
+
+    def _compute_cav_scores_once():
+        nonlocal layer_data, module_to_weight
+        if args.debug_out_dir:
+            s, layer_data_local, module_to_weight_local = collect_cav_scores_with_debug(
+                model=model,
+                dataloader=dataloader,
+                device=device,
+                num_batches=args.num_batches,
+                mlp_only=args.mlp_only,
+                probe_epochs=args.probe_epochs,
+                probe_lr=args.probe_lr,
+                probe_weight_decay=args.probe_weight_decay,
+                normalize_per_layer=not args.no_layer_norm,
+                use_weight_abs=args.weight_abs,
+            )
+            layer_data = layer_data_local
+            module_to_weight = module_to_weight_local
+            return s
+
+        return collect_cav_scores(
+            model=model,
+            dataloader=dataloader,
+            device=device,
+            num_batches=args.num_batches,
+            mlp_only=args.mlp_only,
+            probe_epochs=args.probe_epochs,
+            probe_lr=args.probe_lr,
+            probe_weight_decay=args.probe_weight_decay,
+            normalize_per_layer=not args.no_layer_norm,
+            use_weight_abs=args.weight_abs,
+        )
 
     if args.method == "activation":
         score_dict = collect_activation_scores(
@@ -450,32 +793,28 @@ def main(args):
             device=device,
             num_batches=args.num_batches,
             mlp_only=args.mlp_only,
+            use_weight_abs=args.weight_abs,
         )
     elif args.method == "cav":
-        if args.debug_out_dir:
-            score_dict, layer_data, module_to_weight = collect_cav_scores_with_debug(
-                model=model,
-                dataloader=dataloader,
-                device=device,
-                num_batches=args.num_batches,
-                mlp_only=args.mlp_only,
-                probe_epochs=args.probe_epochs,
-                probe_lr=args.probe_lr,
-                probe_weight_decay=args.probe_weight_decay,
-                normalize_per_layer=not args.no_layer_norm,
-            )
-        else:
-            score_dict = collect_cav_scores(
-                model=model,
-                dataloader=dataloader,
-                device=device,
-                num_batches=args.num_batches,
-                mlp_only=args.mlp_only,
-                probe_epochs=args.probe_epochs,
-                probe_lr=args.probe_lr,
-                probe_weight_decay=args.probe_weight_decay,
-                normalize_per_layer=not args.no_layer_norm,
-            )
+        score_dict = _compute_cav_scores_once()
+        score_variance_summary = summarize_layer_score_distribution(score_dict)
+
+        if score_variance_summary.get("weak_signal", False):
+            print("\nDetected weak cold-start CAV signal.")
+            if args.cav_warmup_steps > 0:
+                run_cav_warmup_steps(
+                    model=model,
+                    dataloader=dataloader,
+                    device=device,
+                    steps=args.cav_warmup_steps,
+                    lr=args.cav_warmup_lr,
+                )
+                score_dict = _compute_cav_scores_once()
+                score_variance_summary = summarize_layer_score_distribution(score_dict)
+
+            if score_variance_summary.get("weak_signal", False) and args.cav_score_noise_ratio > 0:
+                score_dict = maybe_add_score_noise(score_dict, noise_ratio=args.cav_score_noise_ratio)
+                score_variance_summary = summarize_layer_score_distribution(score_dict)
     elif args.method == "snip":
         score_dict = compute_snip_scores(
             model=model,
@@ -487,7 +826,18 @@ def main(args):
     else:
         raise ValueError(f"Unknown method: {args.method}")
 
-    masks = create_mask_from_scores_gpu_efficient(score_dict, sparsity_percent=args.sparsity_percent, device=device)
+    masks = create_mask_from_scores_gpu_efficient(
+        score_dict,
+        sparsity_percent=args.sparsity_percent,
+        device=device,
+        add_tie_break_noise=True,
+        min_layer_keep_ratio=args.min_layer_keep_ratio,
+        local_pool=args.local_pool,
+    )
+
+    if args.method == "cav":
+        mask_sparsity_summary = summarize_mask_sparsity(masks)
+        erank_summary = summarize_effective_rank(masks, threshold=args.erank_target)
 
     jaccard_results = None
     if args.reference_mask:
@@ -507,11 +857,21 @@ def main(args):
         "batch_size": args.batch_size,
         "mlp_only": args.mlp_only,
         "device": device,
+        "min_layer_keep_ratio": args.min_layer_keep_ratio,
     }
     if args.method == "cav":
         metadata["probe_epochs"] = args.probe_epochs
         metadata["probe_lr"] = args.probe_lr
         metadata["probe_weight_decay"] = args.probe_weight_decay
+        metadata["cav_warmup_steps"] = args.cav_warmup_steps
+        metadata["cav_warmup_lr"] = args.cav_warmup_lr
+        metadata["cav_score_noise_ratio"] = args.cav_score_noise_ratio
+        if score_variance_summary is not None:
+            metadata["score_variance_summary"] = score_variance_summary
+        if mask_sparsity_summary is not None:
+            metadata["mask_sparsity_summary"] = mask_sparsity_summary
+        if erank_summary is not None:
+            metadata["effective_rank_summary"] = erank_summary
 
     if jaccard_results:
         metadata["jaccard_similarity"] = {
@@ -563,6 +923,32 @@ if __name__ == "__main__":
     parser.add_argument("--no_layer_norm", action="store_true",
                         help="Disable per-layer z-score normalization of CAV scores. "
                              "Without normalization, later layers dominate mask selection.")
+    parser.add_argument("--cav_warmup_steps", type=int, default=0,
+                        help="Optional number of warm-up DPO gradient steps before CAV scoring when cold-start signal is weak.")
+    parser.add_argument("--cav_warmup_lr", type=float, default=1e-6,
+                        help="Learning rate for optional CAV warm-up steps.")
+    parser.add_argument("--cav_score_noise_ratio", type=float, default=1e-6,
+                        help="Fallback tie-break noise ratio added to CAV scores when score variance is near zero.")
+    parser.add_argument("--erank_target", type=float, default=0.3,
+                        help="Target threshold for normalized effective rank diagnostics.")
+    parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=0.0,
+        help="Optional per-layer keep floor ratio for hybrid masking (e.g., 0.05 keeps at least 5%% in each layer, then allocates remaining budget globally).",
+    )
+    parser.add_argument(
+        "--local_pool", action="store_true",
+        help=(
+            "Use per-layer mask selection instead of global cross-layer ranking. "
+            "Default (off): one global threshold across all weights. "
+            "With --local_pool: each weight matrix independently keeps its top keep_frac elements, "
+            "giving uniform sparsity per layer."
+        ),
+    )
+    parser.add_argument("--weight_abs", action="store_true",
+                        help="Weight neuron scores by parameter magnitudes when mapping to weight scores. "
+                             "Prevents rank-1 mask collapse; improves effective rank from ~0.002 to ~0.71.")
     parser.add_argument("--debug_out_dir", type=str, default=None, help="Write CAV/subnetwork debug report JSON to this directory.")
     parser.add_argument("--debug_eval_batches", type=int, default=8, help="Number of batches for debug ablation loss evaluation.")
     parser.add_argument("--debug_top_groups", type=int, default=20, help="Top-N groups to keep in debug summaries.")

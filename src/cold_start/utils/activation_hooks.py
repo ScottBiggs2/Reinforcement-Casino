@@ -1,148 +1,88 @@
+"""Collect pooled MLP activations with forward hooks."""
+
 import torch
 import torch.nn as nn
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+
+
+def infer_model_input_device(model) -> torch.device:
+    """Infer the device that should receive model inputs."""
+    if hasattr(model, "hf_device_map") and model.hf_device_map:
+        first_device = next(iter(model.hf_device_map.values()))
+        if isinstance(first_device, str) and first_device not in {"cpu", "disk"}:
+            return torch.device(first_device)
+
+    return next(model.parameters()).device
 
 
 class FeatureExtractor:
-    """Capture pooled activations from linear layers during forward passes.
+    """Capture one pooled activation vector per sample for each `down_proj` layer."""
 
-    Supports two collection modes:
-      - "activation": accumulate mean absolute activations per neuron.
-      - "labeled": collect per-example activation vectors for CAV probe training.
+    def __init__(self):
+        self.activations = defaultdict(list)
+        self._hooks = []
+        self._current_attention_mask = None
 
-    For labeled collection, `response_start_idx` can optionally be provided
-    alongside each label so that pooling is restricted to the response tokens
-    (positions >= response_start_idx), discarding the prompt tokens that are
-    shared between chosen and rejected samples and carry no discriminative
-    signal.
-    """
+    def register(self, model):
+        """Attach hooks to every down_proj layer. Returns self for chaining."""
+        for name, module in model.named_modules():
+            if name.endswith("down_proj") and isinstance(module, nn.Linear):
+                def _make_hook(lname):
+                    def _hook(mod, inp, out):
+                        act = inp[0].detach().float()
 
-    def __init__(self, model: nn.Module, mlp_only: bool = True):
-        self.model = model
-        self.mlp_only = mlp_only
-        self.handles: List[torch.utils.hooks.RemovableHandle] = []
-        self.module_to_weight: Dict[str, str] = {}
-        self.activation_sums: Dict[str, torch.Tensor] = {}
-        self.activation_counts: Dict[str, int] = defaultdict(int)
-        self.labeled_acts: Dict[str, List[torch.Tensor]] = defaultdict(list)
-        self.labeled_targets: Dict[str, List[torch.Tensor]] = defaultdict(list)
+                        # Global mean pool over real (non-padding) tokens.
+                        if self._current_attention_mask is not None:
+                            mask = self._current_attention_mask
+                            if mask.dim() == 2 and mask.shape[:2] == act.shape[:2]:
+                                mask = mask.to(act.device).unsqueeze(-1).float()
+                                denom = mask.sum(dim=1).clamp_min(1.0)
+                                pooled = (act * mask).sum(dim=1) / denom
+                            else:
+                                pooled = act.mean(dim=1)
+                        else:
+                            pooled = act.mean(dim=1)
 
-        self._collect_mode: Optional[str] = None
-        self._current_label: Optional[int] = None
-        self._response_start_idx: Optional[int] = None  # for response-only pooling
-        self._register_hooks()
+                        self.activations[lname].append(pooled.cpu())
+                    return _hook
+                h = module.register_forward_hook(_make_hook(name))
+                self._hooks.append(h)
 
-    def _register_hooks(self) -> None:
-        for module_name, module in self.model.named_modules():
-            if not isinstance(module, nn.Linear):
-                continue
-            if self.mlp_only and "mlp" not in module_name.lower():
-                continue
+        print(f"[FeatureExtractor] Hooked {len(self._hooks)} down_proj layers.")
+        return self
 
-            weight_name = f"{module_name}.weight" if module_name else "weight"
-            self.module_to_weight[module_name] = weight_name
-            handle = module.register_forward_hook(self._build_hook(module_name))
-            self.handles.append(handle)
+    def remove(self):
+        for h in self._hooks:
+            h.remove()
+        self._hooks.clear()
+        print("[FeatureExtractor] Hooks removed.")
 
-    def _build_hook(self, module_name: str):
-        def hook(_module, _inputs, output):
-            if self._collect_mode is None:
-                return
+    def clear(self):
+        self.activations.clear()
+        self._current_attention_mask = None
 
-            if isinstance(output, tuple):
-                output = output[0]
-            if not torch.is_tensor(output):
-                return
+    @torch.no_grad()
+    def collect(self, model, tokenizer, texts, device, max_length=512, batch_size=8):
+        """Run inference and return `{layer_name: Tensor[n_samples, hidden]}`."""
+        self.clear()
+        model.eval()
 
-            # Response-only pooling logic for CAV
-            # Discard prompt tokens as they carry no discriminative preference signal.
-            if self._collect_mode == "labeled" and output.dim() >= 3:
-                if isinstance(self._response_start_idx, torch.Tensor):
-                    # Handle per-example slicing
-                    pooled_list = []
-                    for i in range(output.shape[0]):
-                        start = self._response_start_idx[i].item()
-                        example_output = output[i, start:, :]
-                        pooled_list.append(_pool_hidden(example_output.unsqueeze(0)))
-                    pooled = torch.cat(pooled_list, dim=0)
-                elif self._response_start_idx is not None:
-                    # Single index fallback
-                    output = output[:, self._response_start_idx:, :]
-                    pooled = _pool_hidden(output)
-                else:
-                    pooled = _pool_hidden(output)
-            else:
-                pooled = _pool_hidden(output)
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            enc = tokenizer(
+                batch,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length,
+            )
+            input_ids = enc["input_ids"].to(device)
+            attention_mask = enc["attention_mask"].to(device)
+            self._current_attention_mask = attention_mask
+            model(input_ids=input_ids, attention_mask=attention_mask)
+            self._current_attention_mask = None
 
-            if pooled.numel() == 0:
-                return
-
-            if self._collect_mode == "activation":
-                layer_sum = pooled.abs().sum(dim=0).detach().cpu()
-                if module_name not in self.activation_sums:
-                    self.activation_sums[module_name] = layer_sum
-                else:
-                    self.activation_sums[module_name] += layer_sum
-                self.activation_counts[module_name] += pooled.shape[0]
-                return
-
-            if self._collect_mode == "labeled" and self._current_label is not None:
-                self.labeled_acts[module_name].append(pooled.detach().cpu())
-                targets = torch.full((pooled.shape[0],), self._current_label, dtype=torch.long)
-                self.labeled_targets[module_name].append(targets)
-
-        return hook
-
-    def collect_activation_stats_start(self) -> None:
-        self._collect_mode = "activation"
-        self._current_label = None
-        self._response_start_idx = None
-
-    def collect_labeled_start(self, label: int, response_start_idx: Optional[torch.Tensor] = None) -> None:
-        """Begin collecting labeled activations for CAV probe training.
-
-        Args:
-            label: Class label (1 = chosen/preferred, 0 = rejected).
-            response_start_idx: Token index (int) or tensor of indices (one per example)
-                at which the response begins. Positions before this are discarded.
-        """
-        self._collect_mode = "labeled"
-        self._current_label = int(label)
-        self._response_start_idx = response_start_idx
-
-    def collect_stop(self) -> None:
-        self._collect_mode = None
-        self._current_label = None
-        self._response_start_idx = None
-
-    def get_activation_scores(self) -> Dict[str, torch.Tensor]:
-        scores: Dict[str, torch.Tensor] = {}
-        for module_name, total in self.activation_sums.items():
-            count = max(1, self.activation_counts[module_name])
-            scores[module_name] = total / count
-        return scores
-
-    def get_labeled_activations(self) -> Dict[str, Tuple[torch.Tensor, torch.Tensor]]:
-        out: Dict[str, Tuple[torch.Tensor, torch.Tensor]] = {}
-        for module_name in self.labeled_acts.keys():
-            xs = self.labeled_acts[module_name]
-            ys = self.labeled_targets[module_name]
-            if not xs or not ys:
-                continue
-            out[module_name] = (torch.cat(xs, dim=0), torch.cat(ys, dim=0))
-        return out
-
-    def close(self) -> None:
-        for handle in self.handles:
-            handle.remove()
-        self.handles.clear()
-
-
-def _pool_hidden(hidden: torch.Tensor) -> torch.Tensor:
-    """Pool to [batch, hidden] for classifier-friendly features."""
-    if hidden.dim() == 2:
-        return hidden
-    if hidden.dim() >= 3:
-        return hidden.mean(dim=1)
-    return hidden.reshape(hidden.shape[0], -1)
+        return {
+            name: torch.cat(acts_list, dim=0)
+            for name, acts_list in self.activations.items()
+        }
