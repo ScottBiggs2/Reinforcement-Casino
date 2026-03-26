@@ -72,6 +72,66 @@ def load_dpo_dataset(dataset_name, subset_size=None, split="train"):
     return norm_ds
 
 
+def load_grpo_dataset(dataset_name, subset_size=None, split="train"):
+    """Load and normalize GRPO dataset from HuggingFace."""
+    print(f"Loading GRPO dataset: {dataset_name}")
+    raw_ds = load_dataset(dataset_name, split=split)
+    
+    def msg_to_text(x):
+        """Robustly convert any field value to plain text."""
+        if isinstance(x, str): return x
+        if isinstance(x, dict):
+            for key in ("value", "content", "text", "message"):
+                if key in x: return str(x[key])
+            return " ".join(str(v) for v in x.values() if isinstance(v, str))
+        if isinstance(x, list):
+            parts = []
+            for m in x:
+                if isinstance(m, dict):
+                    for key in ("value", "content", "text", "message"):
+                        if key in m:
+                            parts.append(str(m[key]))
+                            break
+                elif isinstance(m, str):
+                    parts.append(m)
+            return "\n".join(parts)
+        return str(x)
+
+    def extract_prompt(rec):
+        """Extract the human/user prompt from conversations or prompt field."""
+        convs = rec.get("conversations", None)
+        if convs and isinstance(convs, list):
+            human_parts = [
+                m["value"] for m in convs
+                if isinstance(m, dict) and m.get("from", m.get("role", "")).lower() in ("human", "user", "system") and "value" in m
+            ]
+            if human_parts: return "\n".join(human_parts).strip()
+        
+        prompt_raw = rec.get("prompt", "")
+        if isinstance(prompt_raw, list):
+            prompt_text = "\n".join(
+                m.get("value","") for m in prompt_raw
+                if isinstance(m, dict) and m.get("from","").lower() != "assistant"
+            ).strip()
+            if prompt_text: return prompt_text
+        
+        return msg_to_text(prompt_raw).strip()
+
+    def normalize_record(rec):
+        prompt_text = extract_prompt(rec)
+        solution_raw = rec.get("solution", rec.get("ground_truth", rec.get("answer", "")))
+        solution_text = msg_to_text(solution_raw).strip()
+        return {"prompt": prompt_text, "solution": solution_text}
+
+    norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
+    
+    if subset_size is not None:
+        norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
+    
+    print(f"✓ Loaded {len(norm_ds)} GRPO examples")
+    return norm_ds
+
+
 def dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torch.Tensor]:
     """Data collator for DPO training."""
     # If the dataset was already preprocessed/tokenized (unlikely in this flow but supported)

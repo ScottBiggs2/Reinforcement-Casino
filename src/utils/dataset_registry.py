@@ -42,6 +42,15 @@ DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {
         "sanitized_name": "math_step_dpo",
         "field_map": None,  # Has standard prompt/chosen/rejected fields
     },
+    "math-220k": {
+        "hf_id": "open-r1/OpenR1-Math-220k",
+        "domain": "math",
+        "description": "OpenR1 Math 220k (GRPO Math Standard)",
+        "sanitized_name": "math_220k",
+        "field_map": {
+            "problem": "prompt"
+        },
+    },
     "codepref": {
         "hf_id": "Vezora/Code-Preference-Pairs",
         "domain": "coding",
@@ -218,3 +227,79 @@ def _normalize_dataset(raw_ds, subset_size=None, label="dataset"):
     
     print(f"✓ Loaded {len(norm_ds)} examples from {label}")
     return norm_ds
+
+
+def load_grpo_dataset(key_or_hf_id: str, subset_size: Optional[int] = None, split: str = "train"):
+    """
+    Load and normalize a GRPO dataset, resolving registry keys.
+    """
+    from src.utils.data_utils import load_grpo_dataset as _base_load_grpo
+    
+    config = get_dataset_config(key_or_hf_id)
+    hf_id = config["hf_id"]
+    field_map = config.get("field_map")
+    
+    print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} for GRPO (domain: {config['domain']})")
+    
+    if field_map:
+        print(f"[dataset_registry] Applying field remapping: {field_map}")
+        raw_ds = load_dataset(hf_id, split=split)
+        raw_ds = _apply_field_map(raw_ds, field_map)
+        return _normalize_grpo_dataset(raw_ds, subset_size=subset_size, label=hf_id)
+    else:
+        return _base_load_grpo(hf_id, subset_size=subset_size, split=split)
+
+
+def _normalize_grpo_dataset(raw_ds, subset_size=None, label="dataset"):
+    def _msg_to_text(x):
+        if isinstance(x, str): return x
+        if isinstance(x, dict):
+            for key in ("value", "content", "text", "message"):
+                if key in x: return str(x[key])
+            return " ".join(str(v) for v in x.values() if isinstance(v, str))
+        if isinstance(x, list):
+            parts = []
+            for m in x:
+                if isinstance(m, dict):
+                    for key in ("value", "content", "text", "message"):
+                        if key in m:
+                            parts.append(str(m[key]))
+                            break
+                elif isinstance(m, str):
+                    parts.append(m)
+            return "\n".join(parts)
+        return str(x)
+
+    def _extract_prompt(rec):
+        convs = rec.get("conversations", None)
+        if convs and isinstance(convs, list):
+            human_parts = [
+                m["value"] for m in convs
+                if isinstance(m, dict) and m.get("from", m.get("role", "")).lower() in ("human", "user", "system") and "value" in m
+            ]
+            if human_parts: return "\n".join(human_parts).strip()
+        
+        prompt_raw = rec.get("prompt", "")
+        if isinstance(prompt_raw, list):
+            prompt_text = "\n".join(
+                m.get("value", "") for m in prompt_raw
+                if isinstance(m, dict) and m.get("from", "").lower() != "assistant"
+            ).strip()
+            if prompt_text: return prompt_text
+        
+        return _msg_to_text(prompt_raw).strip()
+
+    def normalize_record(rec):
+        prompt_text = _extract_prompt(rec)
+        solution_raw = rec.get("solution", rec.get("ground_truth", rec.get("answer", "")))
+        solution_text = _msg_to_text(solution_raw).strip()
+        return {"prompt": prompt_text, "solution": solution_text}
+
+    norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
+    
+    if subset_size is not None:
+        norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
+    
+    print(f"✓ Loaded {len(norm_ds)} GRPO examples from {label}")
+    return norm_ds
+
