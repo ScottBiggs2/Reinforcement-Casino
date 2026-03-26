@@ -427,9 +427,9 @@ Evaluation can be slow. To maximize throughput:
 ### Slurm Integration
 Submit a full evaluation job to a GPU cluster:
 ```bash
-sbatch run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
+sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
 ```
-*Note: Edit `run_evals_slurm.sh` to ensure `HF_TOKEN` is exported.*
+*Note: Edit `scripts/run_evals_slurm.sh` to ensure `HF_TOKEN` is exported.*
 
 ### Model Loading Examples
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job to run the attention masking diagnostic
-# Usage: sbatch run_diagnostics.sh
+# Usage: sbatch scripts/run_mask_diagnostics.sh
 
 #SBATCH --job-name=mask_diag
 #SBATCH --output=logs/mask_diag_%j.out
@@ -17,6 +17,9 @@ echo "Job started at: $(date)"
 echo "Running on node: $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$REPO_ROOT"
 echo "Working dir: $(pwd)"
 
 # Source conda

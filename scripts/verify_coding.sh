@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job script to verify the coding evaluation fix
-# Usage: sbatch verify_coding.sh --model_path <HUGGINGFACE_ID_OR_PATH> [other options]
+# Usage: sbatch scripts/verify_coding.sh --model_path <HUGGINGFACE_ID_OR_PATH> [other options]
 
 #SBATCH --job-name=verify_coding
 #SBATCH --output=logs/verify_coding_%j.out
@@ -15,8 +15,10 @@
 # Exit on any error
 set -e
 
-# Job runs in the directory you submitted from
-cd "${SLURM_SUBMIT_DIR:-.}"
+# Resolve repo root from this script location so relative paths work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$REPO_ROOT"
 mkdir -p logs results/verify_coding
 
 echo "Verification started at: $(date)"

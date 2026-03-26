@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job script to run the full evaluation suite
-# Usage: sbatch run_evals_slurm.sh --model_path <HUGGINGFACE_ID_OR_PATH>
+# Usage: sbatch scripts/run_evals_slurm.sh --model_path <HUGGINGFACE_ID_OR_PATH>
 
 #SBATCH --job-name=llm_eval_suite
 #SBATCH --output=logs/eval_%j.out
@@ -15,8 +15,10 @@
 # Exit on any error
 set -e
 
-# Job runs in the directory you submitted from
-cd "${SLURM_SUBMIT_DIR:-.}"
+# Resolve repo root from this script location so relative paths work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$REPO_ROOT"
 mkdir -p logs results
 
 echo "Evaluation started at: $(date)"
@@ -66,7 +68,7 @@ python -c "import torch; import vllm; import transformers; print(f'PyTorch: {tor
 # Install/Verify lm-eval inside the env using the dedicated eval requirements
 # (The main requirements.txt is for training systems; eval_requirements.txt handles the harness)
 # $PYTHON_BIN -m pip install -r requirements.txt -q
-bash install_lm_eval.sh
+bash scripts/install_lm_eval.sh
 $PYTHON_BIN -c "import lm_eval; print(f'lm-eval: {lm_eval.__version__}')"
 
 # Try using vLLM for 5-10x speedup (highly recommended for A100/H100)

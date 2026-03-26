@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verification: Run 10 steps of DPO training on each dataset to confirm everything works.
-# Submit from project root: sbatch verify_training.sh
+# Submit from anywhere: sbatch scripts/verify_training.sh
 #SBATCH --job-name=verify_dpo_datasets
 #SBATCH --output=logs/verify_training_%j.out
 #SBATCH --error=logs/verify_training_%j.err
@@ -11,8 +11,10 @@
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
 
-# Job runs in the directory you submitted from
-cd "${SLURM_SUBMIT_DIR:-.}"
+# Resolve repo root from this script location so relative paths work
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$REPO_ROOT"
 mkdir -p logs
 
 echo "Job started at: $(date)"
