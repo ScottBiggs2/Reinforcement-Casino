@@ -5,6 +5,12 @@ set -e
 
 echo "Installing lm-eval with Python 3.11 compatibility fixes..."
 
+# Fast path: if lm_eval already imports cleanly, skip heavy install.
+if python -c "import lm_eval" 2>/dev/null; then
+    echo "lm-eval already installed in this environment; skipping reinstall."
+    exit 0
+fi
+
 # Step 1: Upgrade pip and setuptools and clear cache
 echo "Step 1: Upgrading pip and clearing cache..."
 pip cache purge || true

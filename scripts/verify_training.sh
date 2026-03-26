@@ -29,7 +29,11 @@ conda activate /scratch/biggs.s/conda_envs/rl_casino
 
 export PYTHONPATH=.
 echo "Installing/verifying training requirements..."
-pip install -r requirements.txt -q
+if python -c "import trl" 2>/dev/null; then
+    echo "Training requirements already satisfied; skipping pip install."
+else
+    pip install -r requirements.txt -q
+fi
 
 MODEL="google/gemma-3-270m-it"
 while [[ "$#" -gt 0 ]]; do
