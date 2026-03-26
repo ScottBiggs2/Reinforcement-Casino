@@ -28,8 +28,14 @@ set -euo pipefail
 # 0. Paths and global config
 ########################################
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Slurm copies batch scripts to /var/spool/slurmd/... — BASH_SOURCE is NOT the repo path.
+# Always submit from the repo root:  cd .../rl_casino && sbatch scripts/run_full_pipeline.sh
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
 cd "$REPO_ROOT"
 
 RUN_ID="${RUN_ID_OVERRIDE:-$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}"
@@ -84,25 +90,13 @@ check_budget() {
 # 1. Env setup
 ########################################
 
-echo "Activating training env: ${TRAIN_ENV}"
+echo "Using training env: ${TRAIN_ENV}"
 if [ ! -x "$TRAIN_PY" ]; then
   echo "ERROR: TRAIN_PY not found at ${TRAIN_PY}" >&2
   exit 1
 fi
-
-# Source conda so that any python/pip fallback still sees the env
-if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-  # shellcheck disable=SC1091
-  source "$HOME/miniconda3/etc/profile.d/conda.sh"
-elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-  # shellcheck disable=SC1091
-  source "$HOME/anaconda3/etc/profile.d/conda.sh"
-elif [ -f "/opt/conda/etc/profile.d/conda.sh" ]; then
-  # shellcheck disable=SC1091
-  source "/opt/conda/etc/profile.d/conda.sh"
-fi
-
-conda activate "$TRAIN_ENV" || echo "Warning: conda activate failed; relying on TRAIN_PY directly."
+# Prefer explicit env binaries (works when conda.sh lives somewhere nonstandard on HPC)
+export PATH="${TRAIN_ENV}/bin:${PATH}"
 
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 

@@ -11,9 +11,13 @@
 #SBATCH --mem=128G
 #SBATCH --time=00:30:00
 
-# Resolve repo root from this script location so relative paths work
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Slurm copies batch scripts to spool — use submit directory as repo root.
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
@@ -23,16 +27,16 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
 echo "Working dir: $(pwd)"
 
-# Source conda
-source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
+ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+PYTHON_BIN="$ENV_PATH/bin/python"
+export PATH="$ENV_PATH/bin:$PATH"
 
 export PYTHONPATH=.
 echo "Installing/verifying training requirements..."
-if python -c "import trl" 2>/dev/null; then
+if "$PYTHON_BIN" -c "import trl" 2>/dev/null; then
     echo "Training requirements already satisfied; skipping pip install."
 else
-    pip install -r requirements.txt -q
+    "$PYTHON_BIN" -m pip install -r requirements.txt -q
 fi
 
 MODEL="google/gemma-3-270m-it"
@@ -67,7 +71,7 @@ for DS in "${DATASETS[@]}"; do
     echo "Testing DENSE GRPO on dataset: ${DS}"
     echo "============================================================"
 
-    python src/full_training/GRPO_train.py \
+    "$PYTHON_BIN" src/full_training/GRPO_train.py \
         --model_name "$MODEL" \
         --dataset "$DS" \
         --num_steps "$NUM_STEPS" \
@@ -97,7 +101,7 @@ for DS in "${DATASETS[@]}"; do
     
     GENERATED_MASK="masks/verify_${SANITIZED_MODEL}_${SANITIZED_DS}_step${NUM_STEPS}.pt"
     
-    python src/warm_start/even_better_mask_finder.py \
+    "$PYTHON_BIN" src/warm_start/even_better_mask_finder.py \
         --delta_log_dir "$DELTA_DIR" \
         --method magnitude \
         --sparsity_percent 97.5 \
@@ -110,7 +114,7 @@ for DS in "${DATASETS[@]}"; do
     echo "Testing SPARSE GRPO on dataset: ${DS}"
     echo "============================================================"
 
-    python src/full_training/sparse_grpo_bsr.py \
+    "$PYTHON_BIN" src/full_training/sparse_grpo_bsr.py \
         --model_name "$MODEL" \
         --dataset "$DS" \
         --n_steps "$NUM_STEPS" \

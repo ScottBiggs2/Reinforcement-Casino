@@ -460,9 +460,10 @@ sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct
 
 ### Full single-GPU pipeline
 
-To run the full DPO → masks → sparse DPO → eval pipeline on a single GPU:
+To run the full DPO → masks → sparse DPO → eval pipeline on a single GPU, **run `sbatch` from the repo root** (Slurm sets `SLURM_SUBMIT_DIR` to that path):
 
 ```bash
+cd /path/to/rl_casino
 sbatch scripts/run_full_pipeline.sh
 ```
 

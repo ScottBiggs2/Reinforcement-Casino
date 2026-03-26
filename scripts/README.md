@@ -4,12 +4,12 @@ Operational shell scripts live here so the repository root stays focused on sour
 
 ## How to run
 
-- Submit Slurm jobs from repo root (recommended):
-  - `sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"`
+- **Submit from the repository root** (required for Slurm):
+  - `cd /path/to/rl_casino && sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"`
   - `sbatch scripts/verify_coding.sh --model_path "google/gemma-3-270m-it"`
   - `sbatch scripts/verify_training.sh --model_path "google/gemma-3-270m-it"`
   - `sbatch scripts/verify_grpo_training.sh --model_path "google/gemma-3-270m-it"`
-- Most scripts now auto-resolve repo root using their own location, so relative paths like `src/...` and `masks/...` stay valid.
+- Slurm **copies** the batch script to `/var/spool/slurmd/...`, so scripts resolve the repo via **`SLURM_SUBMIT_DIR`** (the directory you ran `sbatch` from), not via `BASH_SOURCE`. Running `sbatch` from the wrong directory makes `cd` land in `/var/spool/slurmd` and breaks `mkdir logs`, Python paths, etc.
 
 ## Quick index
 

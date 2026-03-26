@@ -12,26 +12,31 @@
 
 ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
 PYTHON_BIN="$ENV_PATH/bin/python"
+export PATH="$ENV_PATH/bin:$PATH"
+
+# Slurm copies batch scripts to spool — use submit directory as repo root.
+# Submit from repo:  cd .../rl_casino && sbatch scripts/run_mask_diagnostics.sh
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
+mkdir -p logs
 
 echo "Job started at: $(date)"
 echo "Running on node: $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "$REPO_ROOT"
 echo "Working dir: $(pwd)"
-
-# Source conda
-source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
 
 export PYTHONPATH=.
 echo "Installing/verifying training requirements..."
-if python -c "import trl" 2>/dev/null; then
+if "$PYTHON_BIN" -c "import trl" 2>/dev/null; then
     echo "Training requirements already satisfied; skipping pip install."
 else
-    pip install -r requirements.txt -q
+    "$PYTHON_BIN" -m pip install -r requirements.txt -q
 fi
 
 echo "Running Attention Masking Diagnostic..."

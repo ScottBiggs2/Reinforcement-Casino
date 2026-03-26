@@ -43,10 +43,4 @@ masks/
 
 current_error.txt
 current_out.txt
-masks_out.txt
-*.pdf
-old_gpqa_eval.py
-reference_job.sh
-tmp_check.py
-coding_assistant_notes.md
-multi_gpu_example.sh
+
