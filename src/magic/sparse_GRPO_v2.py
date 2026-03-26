@@ -555,7 +555,7 @@ class SparseAdamW(torch.optim.Optimizer):
 def load_grpo_dataset(subset_size=None):
     """Load and normalize OpenR1 dataset for GRPO."""
     print(f"Loading dataset: {DATASET_NAME}")
-    raw_ds = load_dataset(DATASET_NAME, split="default")
+    raw_ds = load_dataset(DATASET_NAME, split="train")
     
     def normalize_record(rec):
         """
