@@ -8,9 +8,9 @@ Reinforcement Learning training infrastructure with Triton-accelerated sparse op
 - **Cold start:** Partially implemented. Mask gathering scripts exist in `cold_start/` (Fisher, CAV, SNIP) which output standard mask formats for training.
 - **BSR backprop:** Not yet tested. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; correctness and performance are unvalidated.
 
-A note here: AdamW decays **all** weights (BSR AdamW does not), so using it with the mask decays frozen weights which is incorrect. 
+A note here: AdamW decays **all** weights (BSR AdamW does not), so using it with the mask decays frozen weights which is incorrect.
 
-Junk, no learning evident. 
+Bring-up notes (may be outdated).
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
   --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
@@ -67,6 +67,32 @@ python src/full_training/sparse_dpo_bsr.py \
 - **Wandb account** (for experiment tracking)
 - **HuggingFace account** (for model access)
 
+## Conda Environments (HPC)
+
+Training scripts default to the `rl_casino` env. Evaluation harnesses (lm-evaluation-harness / coding eval) default to a separate env: `rl_casino_eval`. The steps for creation are the same, just with different naming schemes. The eval env is to be used in evaluation, the default to be used in training.  
+
+### Create eval env (clone to scratch)
+
+```bash
+conda create -n rl_casino_eval python=3.11.14 -y
+conda activate rl_casino_eval
+
+conda create --prefix /scratch/biggs.s/conda_envs/rl_casino_eval --clone /home/biggs.s/miniconda/envs/rl_casino_eval
+
+conda activate /scratch/biggs.s/conda_envs/rl_casino_eval
+# or
+conda activate /scratch/biggs.s/conda_envs/rl_casino
+
+```
+
+To preinstall eval deps (optional; the Slurm scripts will also install what they need):
+
+```bash
+pip install -r eval_requirements.txt
+```
+
+If your local miniconda path differs, update the `--clone ...` source path accordingly.
+
 ### Authentication
 
 ```bash
@@ -87,6 +113,7 @@ src/
 ├── magic/               # Triton-accelerated sparse training (legacy scripts)
 ├── utils/               # Utilities (checkpoint reconstruction, etc.)
 └── warm_start/         # Mask finding and warm start utilities
+scripts/                # Slurm and orchestration scripts (training, masks, eval, full pipeline)
 ```
 
 ## Full training (`src/full_training/`)
@@ -427,9 +454,26 @@ Evaluation can be slow. To maximize throughput:
 ### Slurm Integration
 Submit a full evaluation job to a GPU cluster:
 ```bash
-sbatch run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
+sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
 ```
-*Note: Edit `run_evals_slurm.sh` to ensure `HF_TOKEN` is exported.*
+*Note: The eval scripts use `ENV_PATH=/scratch/biggs.s/conda_envs/rl_casino_eval` by default. If needed, edit `scripts/run_evals_slurm.sh` / `scripts/verify_coding.sh` and ensure `HF_TOKEN` is exported.*
+
+### Full single-GPU pipeline
+
+To run the full DPO → masks → sparse DPO → eval pipeline on a single GPU, **run `sbatch` from the repo root** (Slurm sets `SLURM_SUBMIT_DIR` to that path):
+
+```bash
+cd /path/to/rl_casino
+sbatch scripts/run_full_pipeline.sh
+```
+
+The script requests **`gpu:h200:1`** on the `gpu` partition (Explorer-style headers in `scripts/run_full_pipeline.sh`). Edit `#SBATCH` lines there if your queue uses different GPU types or limits.
+
+This will:
+- Run dense DPO training on `light-r1` for a small number of steps (default base model: `meta-llama/Llama-3.1-8B-Instruct`; set `HF_TOKEN` for gated downloads).
+- Build warm-start (magnitude, momentum, Fisher) and cold-start (Fisher, CAV) masks.
+- Run sparse DPO training for each mask.
+- Submit evaluation jobs (base, dense, sparse models) with `--limit` for faster turnaround.
 
 ### Model Loading Examples
 

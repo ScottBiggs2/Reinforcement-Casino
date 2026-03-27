@@ -1,6 +1,6 @@
 #!/bin/bash
 # Ablation: DPO baseline and mask generation comparison
-# Run from project dir: sbatch run_dpo_and_masks.sh
+# Submit from anywhere: sbatch scripts/run_dpo_and_masks.sh
 #SBATCH --job-name=dpo_masks
 #SBATCH --output=logs/dpo_masks_%j.out
 #SBATCH --error=logs/dpo_masks_%j.err
@@ -11,9 +11,18 @@
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00 
 
-# Source conda and activate environment
-source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
+# Resolve repo root (Slurm copies scripts to spool — use submit directory)
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
+mkdir -p logs
+
+ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+export PATH="$ENV_PATH/bin:$PATH"
 
 # Set up PYTHONPATH
 export PYTHONPATH=.

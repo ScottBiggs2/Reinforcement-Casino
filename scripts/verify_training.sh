@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verification: Run 10 steps of DPO training on each dataset to confirm everything works.
-# Submit from project root: sbatch verify_training.sh
+# Submit from anywhere: sbatch scripts/verify_training.sh
 #SBATCH --job-name=verify_dpo_datasets
 #SBATCH --output=logs/verify_training_%j.out
 #SBATCH --error=logs/verify_training_%j.err
@@ -11,8 +11,14 @@
 #SBATCH --mem=64G
 #SBATCH --time=01:00:00
 
-# Job runs in the directory you submitted from
-cd "${SLURM_SUBMIT_DIR:-.}"
+# Slurm copies batch scripts to spool — use submit directory as repo root.
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
 mkdir -p logs
 
 echo "Job started at: $(date)"
@@ -21,13 +27,17 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
 echo "Working dir: $(pwd)"
 
-# Source conda
-source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
+ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+PYTHON_BIN="$ENV_PATH/bin/python"
+export PATH="$ENV_PATH/bin:$PATH"
 
 export PYTHONPATH=.
 echo "Installing/verifying training requirements..."
-pip install -r requirements.txt -q
+if "$PYTHON_BIN" -c "import trl" 2>/dev/null; then
+    echo "Training requirements already satisfied; skipping pip install."
+else
+    "$PYTHON_BIN" -m pip install -r requirements.txt -q
+fi
 
 MODEL="google/gemma-3-270m-it"
 while [[ "$#" -gt 0 ]]; do
@@ -58,7 +68,7 @@ for DS in "${DATASETS[@]}"; do
     echo "Testing dataset: ${DS}"
     echo "============================================================"
 
-    python src/full_training/DPO_train.py \
+    "$PYTHON_BIN" src/full_training/DPO_train.py \
         --model_name "$MODEL" \
         --dataset "$DS" \
         --num_steps "$NUM_STEPS" \

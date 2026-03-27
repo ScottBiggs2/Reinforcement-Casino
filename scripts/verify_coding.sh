@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job script to verify the coding evaluation fix
-# Usage: sbatch verify_coding.sh --model_path <HUGGINGFACE_ID_OR_PATH> [other options]
+# Usage: sbatch scripts/verify_coding.sh --model_path <HUGGINGFACE_ID_OR_PATH> [other options]
 
 #SBATCH --job-name=verify_coding
 #SBATCH --output=logs/verify_coding_%j.out
@@ -15,8 +15,14 @@
 # Exit on any error
 set -e
 
-# Job runs in the directory you submitted from
-cd "${SLURM_SUBMIT_DIR:-.}"
+# Slurm copies batch scripts to spool — use submit directory as repo root.
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
 mkdir -p logs results/verify_coding
 
 echo "Verification started at: $(date)"
@@ -28,7 +34,8 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+# Dedicated env for eval harness (lm-eval + coding benchmarks)
+ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino_eval"
 PYTHON_BIN="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 

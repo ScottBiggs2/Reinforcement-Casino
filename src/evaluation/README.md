@@ -18,7 +18,7 @@ The evaluation harnesses require `lm-evaluation-harness` for most benchmarks.
 Use the provided installation script which handles Python 3.11 compatibility issues:
 
 ```bash
-bash install_lm_eval.sh
+bash scripts/install_lm_eval.sh
 ```
 
 ### Manual Install

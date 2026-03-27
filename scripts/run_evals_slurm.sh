@@ -1,6 +1,6 @@
 #!/bin/bash
 # Slurm job script to run the full evaluation suite
-# Usage: sbatch run_evals_slurm.sh --model_path <HUGGINGFACE_ID_OR_PATH>
+# Usage: sbatch scripts/run_evals_slurm.sh --model_path <HUGGINGFACE_ID_OR_PATH>
 
 #SBATCH --job-name=llm_eval_suite
 #SBATCH --output=logs/eval_%j.out
@@ -15,8 +15,14 @@
 # Exit on any error
 set -e
 
-# Job runs in the directory you submitted from
-cd "${SLURM_SUBMIT_DIR:-.}"
+# Slurm copies batch scripts to spool — use submit directory as repo root.
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
 mkdir -p logs results
 
 echo "Evaluation started at: $(date)"
@@ -45,7 +51,8 @@ fi
 
 # Activate environment using the full path to the environment's python
 # This is much more robust on Slurm than 'conda activate'
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+# Dedicated env for eval harness (lm-eval + benchmark runners)
+ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino_eval"
 PYTHON_BIN="$ENV_PATH/bin/python"
 
 # Export PATH to ensure sub-scripts use the environment's binaries
@@ -66,14 +73,16 @@ python -c "import torch; import vllm; import transformers; print(f'PyTorch: {tor
 # Install/Verify lm-eval inside the env using the dedicated eval requirements
 # (The main requirements.txt is for training systems; eval_requirements.txt handles the harness)
 # $PYTHON_BIN -m pip install -r requirements.txt -q
-bash install_lm_eval.sh
+bash scripts/install_lm_eval.sh
 $PYTHON_BIN -c "import lm_eval; print(f'lm-eval: {lm_eval.__version__}')"
 
 # Try using vLLM for 5-10x speedup (highly recommended for A100/H100)
 # To use this, you must have installed it manually: pip install vllm
 echo "Checking for vLLM..."
 VLLM_ARG=""
-if $PYTHON_BIN -c "import vllm" 2>/dev/null; then
+if [ "${FORCE_HF_BACKEND:-0}" = "1" ]; then
+    echo "FORCE_HF_BACKEND=1 set: using Transformers backend (no vLLM)."
+elif $PYTHON_BIN -c "import vllm" 2>/dev/null; then
     echo "✓ Using vLLM backend"
     VLLM_ARG="--use_vllm"
 else
