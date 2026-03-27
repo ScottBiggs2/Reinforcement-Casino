@@ -286,39 +286,58 @@ submit_evals() {
   check_budget
   echo "=== Submitting eval jobs (base, dense, sparse) ==="
 
-  # Base model eval
-  echo "Submitting eval for base model: ${MODEL}"
-  sbatch_id_base=$(sbatch scripts/run_evals_slurm.sh \
-    --model_path "$MODEL" \
-    --limit "$EVAL_LIMIT" \
-    --output_dir "${EVAL_OUT_BASE}/${RUN_ID}/base" | awk '{print $4}')
-
-  # Dense model eval – assume final model under training outputs if present.
-  # Caller can adjust this path as their training scripts evolve.
-  dense_model_path="${TRAIN_OUT_BASE}/${RUN_ID}/results/final_model"
-  if [ -d "$dense_model_path" ]; then
-    echo "Submitting eval for dense model: ${dense_model_path}"
-    sbatch_id_dense=$(sbatch scripts/run_evals_slurm.sh \
-      --model_path "$dense_model_path" \
+  # Helper: submit eval with conservative backend/options for compatibility.
+  submit_eval_job() {
+    local model_path="$1"
+    local out_dir="$2"
+    local label="$3"
+    echo "Submitting eval for ${label}: ${model_path}"
+    sbatch --export=ALL,FORCE_HF_BACKEND=1 scripts/run_evals_slurm.sh \
+      --model_path "$model_path" \
       --limit "$EVAL_LIMIT" \
-      --output_dir "${EVAL_OUT_BASE}/${RUN_ID}/dense" | awk '{print $4}')
-  else
-    echo "WARNING: Dense model path not found at ${dense_model_path}; skipping dense eval."
+      --trust_remote_code \
+      --output_dir "$out_dir" | awk '{print $4}'
+  }
+
+  # Base model eval
+  sbatch_id_base=$(submit_eval_job "$MODEL" "${EVAL_OUT_BASE}/${RUN_ID}/base" "base model")
+
+  # Dense model eval: DPO_train saves to
+  #   ${TRAIN_OUT_BASE}/${RUN_ID}/checkpoints/<model_dataset_dpo_dense>/checkpoint-<step>
+  # We select the latest checkpoint directory.
+  dense_model_path=""
+  latest_ckpt_rel=$(ls -1dt "${TRAIN_OUT_BASE}/${RUN_ID}"/checkpoints/*/checkpoint-* 2>/dev/null | head -n 1 || true)
+  if [ -n "${latest_ckpt_rel}" ] && [ -d "${latest_ckpt_rel}" ]; then
+    dense_model_path="${latest_ckpt_rel}"
   fi
 
-  # Sparse models eval – one job per sparse run directory containing "final_model"
+  if [ -n "${dense_model_path}" ]; then
+    sbatch_id_dense=$(submit_eval_job "$dense_model_path" "${EVAL_OUT_BASE}/${RUN_ID}/dense" "dense model")
+  else
+    echo "WARNING: Dense checkpoint not found under ${TRAIN_OUT_BASE}/${RUN_ID}/checkpoints; skipping dense eval."
+  fi
+
+  # Sparse models eval:
+  # sparse_dpo_efficiency uses:
+  #   run_dir = <output_base_dir>/<run_name>
+  #   final model at <run_dir>/final_model
+  # and this pipeline sets output_base_dir to:
+  #   ${SPARSE_OUT_BASE}/${RUN_ID}/${mask_name_without_ext}
+  # so final model lives at:
+  #   ${SPARSE_OUT_BASE}/${RUN_ID}/${mask_name_without_ext}/<run_name>/final_model
   local sparse_dir
-  for sparse_dir in "${SPARSE_OUT_BASE}/${RUN_ID}"/*; do
-    if [ -d "${sparse_dir}/final_model" ]; then
+  sparse_found=0
+  for sparse_dir in "${SPARSE_OUT_BASE}/${RUN_ID}"/*/*/final_model; do
+    if [ -d "${sparse_dir}" ]; then
+      sparse_found=1
       local tag
-      tag=$(basename "$sparse_dir")
-      echo "Submitting eval for sparse model: ${sparse_dir}/final_model"
-      sbatch_id_sparse=$(sbatch scripts/run_evals_slurm.sh \
-        --model_path "${sparse_dir}/final_model" \
-        --limit "$EVAL_LIMIT" \
-        --output_dir "${EVAL_OUT_BASE}/${RUN_ID}/sparse_${tag}" | awk '{print $4}')
+      tag=$(basename "$(dirname "$sparse_dir")")
+      sbatch_id_sparse=$(submit_eval_job "${sparse_dir}" "${EVAL_OUT_BASE}/${RUN_ID}/sparse_${tag}" "sparse model ${tag}")
     fi
   done
+  if [ "${sparse_found}" -eq 0 ]; then
+    echo "WARNING: No sparse final_model directories found under ${SPARSE_OUT_BASE}/${RUN_ID}; skipping sparse evals."
+  fi
 
   echo "Eval jobs submitted (if any). Check with: squeue -u \$USER"
 }

@@ -80,7 +80,9 @@ $PYTHON_BIN -c "import lm_eval; print(f'lm-eval: {lm_eval.__version__}')"
 # To use this, you must have installed it manually: pip install vllm
 echo "Checking for vLLM..."
 VLLM_ARG=""
-if $PYTHON_BIN -c "import vllm" 2>/dev/null; then
+if [ "${FORCE_HF_BACKEND:-0}" = "1" ]; then
+    echo "FORCE_HF_BACKEND=1 set: using Transformers backend (no vLLM)."
+elif $PYTHON_BIN -c "import vllm" 2>/dev/null; then
     echo "✓ Using vLLM backend"
     VLLM_ARG="--use_vllm"
 else
