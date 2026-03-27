@@ -88,6 +88,31 @@ check_budget() {
   fi
 }
 
+# Must match src/full_training/DPO_train.py (sanitize_model_name) + dataset_registry (sanitized_name).
+pipeline_dpo_path_components() {
+  PIPELINE_MODEL="$1" PIPELINE_DS_KEY="$2" PIPELINE_REPO="$REPO_ROOT" "$TRAIN_PY" -c "
+import os, sys
+sys.path.insert(0, os.environ['PIPELINE_REPO'])
+from src.utils.dataset_registry import get_dataset_config
+
+def sanitize_model_name(model_name: str) -> str:
+    sanitized = model_name.replace('/', '_').replace('-', '_').lower()
+    sanitized = ''.join(c if c.isalnum() or c == '_' else '_' for c in sanitized)
+    while '__' in sanitized:
+        sanitized = sanitized.replace('__', '_')
+    return sanitized.strip('_')
+
+m = os.environ['PIPELINE_MODEL']
+k = os.environ['PIPELINE_DS_KEY']
+cfg = get_dataset_config(k)
+ms = sanitize_model_name(m)
+ds = cfg['sanitized_name']
+print(ms)
+print(ds)
+print(f'{ms}_{ds}')
+"
+}
+
 ########################################
 # 1. Env setup
 ########################################
@@ -154,14 +179,13 @@ run_masks() {
   # For now, assume single dataset from DPO_DATASETS[0]
   local ds="${DPO_DATASETS[0]}"
 
-  # Reconstruct delta log dir pattern to match DPO_train path logic:
-  # DELTA_LOG_DIR = os.path.join(BASE_DIR, "deltas", f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}")
-  # Dataset sanitization is done in dataset_registry; we approximate by replacing '-' with '_'.
-
-  local model_sanitized ds_sanitized delta_dir mask_base mask_failures log_file
-  model_sanitized=$(echo "$MODEL" | tr '/-' '_' | tr '[:upper:]' '[:lower:]')
-  ds_sanitized=$(echo "$ds" | tr '-' '_')
-  delta_dir="${TRAIN_OUT_BASE}/${RUN_ID}/deltas/${model_sanitized}_${ds_sanitized}"
+  local model_sanitized ds_sanitized subdir delta_dir mask_base mask_failures log_file
+  _p=()
+  while IFS= read -r line; do _p+=("$line"); done < <(pipeline_dpo_path_components "$MODEL" "$ds")
+  model_sanitized="${_p[0]}"
+  ds_sanitized="${_p[1]}"
+  subdir="${_p[2]}"
+  delta_dir="${TRAIN_OUT_BASE}/${RUN_ID}/deltas/${subdir}"
   mask_base="${MASK_OUT_BASE}/${RUN_ID}"
   log_file="logs/full_pipeline_masks_${RUN_ID}.log"
   mask_failures=0
@@ -247,12 +271,7 @@ run_sparse_dpo() {
   check_budget
   echo "=== Sparse DPO training for each mask ==="
 
-  local ds="${DPO_DATASETS[0]}"
   local mask_dir="${MASK_OUT_BASE}/${RUN_ID}"
-  local model_sanitized ds_sanitized
-
-  model_sanitized=$(echo "$MODEL" | tr '/-' '_' | tr '[:upper:]' '[:lower:]')
-  ds_sanitized=$(echo "$ds" | tr '-' '_')
 
   shopt -s nullglob
   local mask
