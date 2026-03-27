@@ -467,8 +467,10 @@ cd /path/to/rl_casino
 sbatch scripts/run_full_pipeline.sh
 ```
 
+The script requests **`gpu:h200:1`** on the `gpu` partition (Explorer-style headers in `scripts/run_full_pipeline.sh`). Edit `#SBATCH` lines there if your queue uses different GPU types or limits.
+
 This will:
-- Run dense DPO training on `light-r1` for a small number of steps.
+- Run dense DPO training on `light-r1` for a small number of steps (default base model: `meta-llama/Llama-3.1-8B-Instruct`; set `HF_TOKEN` for gated downloads).
 - Build warm-start (magnitude, momentum, Fisher) and cold-start (Fisher, CAV) masks.
 - Run sparse DPO training for each mask.
 - Submit evaluation jobs (base, dense, sparse models) with `--limit` for faster turnaround.

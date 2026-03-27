@@ -9,18 +9,20 @@
 #   sbatch scripts/run_full_pipeline.sh
 #
 # Notes:
-# - Designed for a single A100/H100 with <= 8h walltime.
+# - Designed for a single H200 on Explorer (gpu partition); adjust --mem/--time if needed.
 # - Uses rl_casino (training) and rl_casino_eval (eval) Conda envs.
+# - Explorer docs often show --mem=4GB for tiny GPU smoke tests; this pipeline keeps a larger mem request.
 
-#SBATCH --job-name=full_pipeline
-#SBATCH --output=logs/full_pipeline_%j.out
-#SBATCH --error=logs/full_pipeline_%j.err
+# Explorer-style Slurm headers (see Northeastern Explorer HPC docs)
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:h200:1
+#SBATCH --time=06:00:00
+#SBATCH --job-name=full_pipeline
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --ntasks=1
+#SBATCH --output=logs/full_pipeline_%j.out
+#SBATCH --error=logs/full_pipeline_%j.err
 
 set -euo pipefail
 
@@ -57,8 +59,8 @@ EVAL_OUT_BASE="/scratch/biggs.s/rl_casino_eval_runs"
 
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
 
-# Model / dataset configuration
-MODEL="google/gemma-3-270m-it"
+# Model / dataset configuration (Llama 3.1 8B IT matches eval stack in eval_requirements.txt; export HF_TOKEN for gated access)
+MODEL="meta-llama/Llama-3.1-8B-Instruct"
 DPO_DATASETS=("light-r1")     # dataset keys used by dataset_registry
 NUM_STEPS_DPO=50              # keep small enough to fit in 8h budget
 SUBSET_DPO=256
@@ -156,69 +158,84 @@ run_masks() {
   # DELTA_LOG_DIR = os.path.join(BASE_DIR, "deltas", f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}")
   # Dataset sanitization is done in dataset_registry; we approximate by replacing '-' with '_'.
 
-  local model_sanitized ds_sanitized delta_root delta_dir
+  local model_sanitized ds_sanitized delta_dir mask_base mask_failures log_file
   model_sanitized=$(echo "$MODEL" | tr '/-' '_' | tr '[:upper:]' '[:lower:]')
   ds_sanitized=$(echo "$ds" | tr '-' '_')
-  delta_root="${TRAIN_OUT_BASE}/${RUN_ID}/deltas"
-  delta_dir="${delta_root}/${model_sanitized}_${ds_sanitized}"
+  delta_dir="${TRAIN_OUT_BASE}/${RUN_ID}/deltas/${model_sanitized}_${ds_sanitized}"
+  mask_base="${MASK_OUT_BASE}/${RUN_ID}"
+  log_file="logs/full_pipeline_masks_${RUN_ID}.log"
+  mask_failures=0
 
   echo "Using DPO delta dir: ${delta_dir}"
+  mkdir -p "$mask_base"
 
-  mkdir -p "${MASK_OUT_BASE}/${RUN_ID}"
-
-  (
+  # Run each mask step independently: OOM or other errors log a warning and continue.
+  # (Previously a single failure under set -e aborted the whole mask stage and the pipeline.)
+  run_one_mask_step() {
+    local desc="$1"
+    shift
+    {
+      echo ""
+      echo "---- ${desc} ----"
+    } | tee -a "$log_file"
+    set +e
+    timeout --signal=TERM --kill-after=60 "${MASK_TIMEOUT}" "$@"
+    local ec=$?
     set -e
-    cd "$REPO_ROOT"
+    if [ "$ec" -ne 0 ]; then
+      echo "WARNING: ${desc} failed (exit ${ec}). Continuing with remaining mask steps." | tee -a "$log_file" >&2
+      mask_failures=$((mask_failures + 1))
+    else
+      echo "OK: ${desc}" | tee -a "$log_file"
+    fi
+  }
 
-    timeout --signal=TERM --kill-after=60 "${MASK_TIMEOUT}" bash -c '
-      set -e
-      MASK_BASE="'"${MASK_OUT_BASE}/${RUN_ID}"'"
-      DELTA_DIR="'"${delta_dir}"'"
+  local method sparsity
 
-      echo "Warm-start masks from ${DELTA_DIR}"
-      for method in magnitude momentum fisher; do
-        for sparsity in '"${SPARSITY_LIST[@]}"'; do
-          echo "-> Warm mask: ${method}, sparsity=${sparsity}"
-          '"$TRAIN_PY"' src/warm_start/even_better_mask_finder.py \
-            --delta_log_dir "$DELTA_DIR" \
-            --method "$method" \
-            --sparsity_percent "$sparsity" \
-            --target_step '"${TARGET_STEP_DPO}"' \
-            --mlp_only \
-            --output_file "${MASK_BASE}/warm_${method}_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step'"${TARGET_STEP_DPO}"'.pt"
-        done
-      done
-
-      echo "Cold-start Fisher mask"
-      for sparsity in '"${SPARSITY_LIST[@]}"'; do
-        '"$TRAIN_PY"' src/cold_start/cold_mask_finder.py \
-          --model_name "'"${MODEL}"'" \
-          --dataset_name "qihoo360/Light-R1-DPOData" \
+  echo "Warm-start masks from ${delta_dir}"
+  for method in magnitude momentum fisher; do
+    for sparsity in "${SPARSITY_LIST[@]}"; do
+      run_one_mask_step "warm ${method} sparsity=${sparsity}" \
+        "$TRAIN_PY" src/warm_start/even_better_mask_finder.py \
+          --delta_log_dir "$delta_dir" \
+          --method "$method" \
           --sparsity_percent "$sparsity" \
-          --n_calibration_samples 256 \
+          --target_step "${TARGET_STEP_DPO}" \
           --mlp_only \
-          --output_file "${MASK_BASE}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n256.pt"
-      done
+          --output_file "${mask_base}/warm_${method}_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
+    done
+  done
 
-      echo "Cold-start CAV mask"
-      for sparsity in '"${SPARSITY_LIST[@]}"'; do
-        '"$TRAIN_PY"' src/cold_start/cav_cold_mask_finder.py \
-          --model_name "'"${MODEL}"'" \
-          --dataset_name "qihoo360/Light-R1-DPOData" \
-          --method cav \
-          --sparsity_percent "$sparsity" \
-          --subset_size 256 \
-          --num_batches 16 \
-          --mlp_only \
-          --output_file "${MASK_BASE}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
-      done
-    ' 2>&1 | tee "logs/full_pipeline_masks_${RUN_ID}.log"
-  )
+  echo "Cold-start Fisher masks"
+  for sparsity in "${SPARSITY_LIST[@]}"; do
+    run_one_mask_step "cold Fisher sparsity=${sparsity}" \
+      "$TRAIN_PY" src/cold_start/cold_mask_finder.py \
+        --model_name "$MODEL" \
+        --dataset_name "qihoo360/Light-R1-DPOData" \
+        --sparsity_percent "$sparsity" \
+        --n_calibration_samples 256 \
+        --mlp_only \
+        --output_file "${mask_base}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n256.pt"
+  done
 
-  local rc=$?
-  if (( rc != 0 )); then
-    echo "ERROR: Mask building failed (exit ${rc}). Aborting pipeline." >&2
-    exit 1
+  echo "Cold-start CAV masks"
+  for sparsity in "${SPARSITY_LIST[@]}"; do
+    run_one_mask_step "cold CAV sparsity=${sparsity}" \
+      "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
+        --model_name "$MODEL" \
+        --dataset_name "qihoo360/Light-R1-DPOData" \
+        --method cav \
+        --sparsity_percent "$sparsity" \
+        --subset_size 256 \
+        --num_batches 16 \
+        --mlp_only \
+        --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
+  done
+
+  if [ "${mask_failures}" -gt 0 ]; then
+    echo "WARNING: ${mask_failures} mask step(s) failed in total. Pipeline continues; sparse training uses any .pt files under ${mask_base}." | tee -a "$log_file" >&2
+  else
+    echo "All mask steps completed successfully." | tee -a "$log_file"
   fi
 }
 
