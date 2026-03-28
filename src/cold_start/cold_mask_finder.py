@@ -6,9 +6,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
 from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
-    save_masks
+    pooling_metadata,
+    save_masks,
 )
 
 # ============================================================
@@ -134,7 +136,7 @@ def compute_fisher_scores(
     model,
     calibration_data,
     device="cuda",
-    mlp_only=True,
+    mlp_only=False,
     mini_batch_size=4,
     normalize_per_layer=True,
 ):
@@ -297,6 +299,7 @@ def main(args):
         fisher_scores,
         args.sparsity_percent,
         device=device,
+        min_layer_keep_ratio=args.min_layer_keep_ratio,
         local_pool=args.local_pool,
     )
 
@@ -324,6 +327,10 @@ def main(args):
         "layer_normalization": not args.no_layer_norm,
         "mlp_only": args.mlp_only,
         "device": device,
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
     }
 
     if jaccard_results:
@@ -359,17 +366,30 @@ if __name__ == "__main__":
     parser.add_argument("--no_layer_norm", action="store_true",
                         help="Disable per-layer z-score normalization. "
                              "Without this, later layers dominate due to larger gradients.")
-    parser.add_argument("--mlp_only", action="store_true", default=True,
-                        help="Only score MLP parameters (recommended, consistent with sparse backprop target)")
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Only score MLP parameters (default: score all weights)",
+    )
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--reference_mask", type=str, default=None,
                         help="Optional reference mask to compute similarity metrics against.")
     parser.add_argument("--force_cpu", action="store_true")
     parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
+    )
+    parser.add_argument(
         "--local_pool", action="store_true",
         help=(
             "Use per-layer mask selection instead of global cross-layer ranking. "
-            "Default (off): one global threshold across all weights. "
+            "Default (off): global masking with a small per-tensor keep floor. "
             "With --local_pool: each weight matrix independently keeps its top keep_frac elements."
         ),
     )

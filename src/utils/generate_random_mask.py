@@ -5,8 +5,29 @@ import os
 import json
 from transformers import AutoModelForCausalLM
 
-def generate_random_mask(model_name, sparsity_percent, output_file, mlp_only=True, compare_mask=None):
+from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
+    create_mask_from_scores_gpu_efficient,
+    pooling_metadata,
+)
+
+
+def generate_random_mask(
+    model_name,
+    sparsity_percent,
+    output_file,
+    mlp_only=False,
+    compare_mask=None,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
     print(f"Generating random mask for {model_name} at {sparsity_percent}% sparsity...")
+    if min_layer_keep_ratio > 0:
+        print(
+            "Mask pooling: global with a small per-tensor keep floor "
+            f"(min_layer_keep_ratio={min_layer_keep_ratio})"
+        )
+    else:
+        print("Mask pooling: pure global (single threshold across all random scores)")
     
     # Load model to get parameter shapes
     model = AutoModelForCausalLM.from_pretrained(
@@ -16,9 +37,8 @@ def generate_random_mask(model_name, sparsity_percent, output_file, mlp_only=Tru
         low_cpu_mem_usage=True
     )
     
-    masks = {}
     total_params = 0
-    total_selected = 0
+    scores = {}
     
     # Identify target parameters
     target_params = []
@@ -29,30 +49,23 @@ def generate_random_mask(model_name, sparsity_percent, output_file, mlp_only=Tru
             continue
         if param.dim() != 2: # Only linear layers
             continue
-        target_params.append((name, param))
         total_params += param.numel()
+        scores[name] = torch.rand(param.shape, dtype=torch.float32)
     
-    print(f"Targeting {len(target_params)} layers ({total_params:,} total parameters)")
+    print(f"Targeting {len(scores)} layers ({total_params:,} total parameters)")
     
     # Random seeds for true independence
     import time
     torch.manual_seed(int(time.time()))
     
-    all_scores = []
-    for name, param in target_params:
-        all_scores.append(torch.rand(param.numel()))
-    
-    flat_scores = torch.cat(all_scores)
-    k = int((1.0 - sparsity_percent/100.0) * total_params)
-    if k <= 0: k = 1
-    
-    threshold = torch.topk(flat_scores, k).values[-1]
-    
-    # Apply threshold
-    for (name, param), scores in zip(target_params, all_scores):
-        mask = (scores >= threshold).view(param.shape).to(torch.float32)
-        masks[name] = mask
-        total_selected += mask.sum().item()
+    masks = create_mask_from_scores_gpu_efficient(
+        scores,
+        sparsity_percent,
+        device="cpu",
+        min_layer_keep_ratio=min_layer_keep_ratio,
+        local_pool=False,
+    )
+    total_selected = sum(mask.sum().item() for mask in masks.values())
     
     # Save
     metadata = {
@@ -62,6 +75,7 @@ def generate_random_mask(model_name, sparsity_percent, output_file, mlp_only=Tru
         "mlp_only": mlp_only,
         "total_params": total_params,
         "selected_params": total_selected,
+        **pooling_metadata(local_pool=False, min_layer_keep_ratio=min_layer_keep_ratio),
     }
     
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -97,6 +111,22 @@ if __name__ == "__main__":
     parser.add_argument("--output_file", type=str, required=True)
     parser.add_argument("--mlp_only", action="store_true", default=False)
     parser.add_argument("--compare_mask", type=str, default=None, help="Diagnostic: compare to this mask")
+    parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
+    )
     args = parser.parse_args()
     
-    generate_random_mask(args.model_name, args.sparsity_percent, args.output_file, args.mlp_only, args.compare_mask)
+    generate_random_mask(
+        args.model_name,
+        args.sparsity_percent,
+        args.output_file,
+        args.mlp_only,
+        args.compare_mask,
+        args.min_layer_keep_ratio,
+    )

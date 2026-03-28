@@ -118,7 +118,7 @@ def compute_snip_scores(
     dataloader,
     device: str,
     num_batches: int,
-    mlp_only: bool = True,
+    mlp_only: bool = False,
 ):
     """Compute SNIP scores for model weights from DPO-style preference gradients."""
     model.train()

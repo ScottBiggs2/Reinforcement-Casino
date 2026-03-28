@@ -197,7 +197,12 @@ if __name__ == "__main__":
     parser.add_argument("--subset_size", type=int, default=None)
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "sparse_adamw"], default="sparse_adamw")
     parser.add_argument("--block_size", type=int, default=32)
-    parser.add_argument("--mlp_only", action="store_true", default=True)
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
+    )
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--dataset", type=str, default="light-r1",

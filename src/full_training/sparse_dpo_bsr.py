@@ -253,7 +253,12 @@ if __name__ == "__main__":
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "sparse_adamw"], default="sparse_adamw")
     parser.add_argument("--block_size_bsr", type=int, default=16)
     parser.add_argument("--block_size_adam", type=int, default=128)
-    parser.add_argument("--mlp_only", action="store_true", default=True)
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
+    )
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")

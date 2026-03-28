@@ -7,9 +7,11 @@ import json
 import gc
 
 from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
-    save_masks
+    pooling_metadata,
+    save_masks,
 )
 
 def load_deltas_streaming(delta_log_dir, target_step=None):
@@ -46,7 +48,14 @@ def is_mlp_param(name):
                     "feed_forward", "ffn", "mlp.c_fc", "mlp.c_proj"]
     return any(kw in name.lower() for kw in MLP_KEYWORDS)
 
-def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', mlp_only=False):
+def compute_ground_truth_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    device="cuda",
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
     """
     Computes ground truth mask by loading only the final checkpoint.
     """
@@ -64,15 +73,29 @@ def compute_ground_truth_mask_streaming(steps_and_paths, sparsity_percent, devic
             continue
         scores[name] = delta.abs()
     
-    masks = create_mask_from_scores_gpu_efficient(scores, sparsity_percent, device)
-    
+    masks = create_mask_from_scores_gpu_efficient(
+        scores,
+        sparsity_percent,
+        device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
     del final_deltas
     torch.cuda.empty_cache()
     
     return masks
 
 
-def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', debug=False, mlp_only=False):
+def compute_absolute_magnitude_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    device="cuda",
+    debug=False,
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
     """
     Magnitude mask with streaming: accumulate on GPU, never load all checkpoints at once.
     """
@@ -109,15 +132,30 @@ def compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent,
             score = aggregated[name]
             print(f"  {name}: min={score.min().item():.10f}, max={score.max().item():.10f}, mean={score.mean().item():.10f}")
     
-    masks = create_mask_from_scores_gpu_efficient(aggregated, sparsity_percent, device)
-    
+    masks = create_mask_from_scores_gpu_efficient(
+        aggregated,
+        sparsity_percent,
+        device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
     del aggregated
     torch.cuda.empty_cache()
     
     return masks
 
 
-def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_size=5, device='cuda', debug=False, mlp_only=False):
+def compute_momentum_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    window_size=5,
+    device="cuda",
+    debug=False,
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
     """
     Momentum mask with streaming: only keep previous checkpoint in memory.
     """
@@ -125,7 +163,14 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
     
     if len(steps_and_paths) < 2:
         print("Warning: Need at least 2 steps for momentum. Falling back to magnitude.")
-        return compute_absolute_magnitude_mask_streaming(steps_and_paths, sparsity_percent, device, mlp_only=mlp_only)
+        return compute_absolute_magnitude_mask_streaming(
+            steps_and_paths,
+            sparsity_percent,
+            device,
+            mlp_only=mlp_only,
+            local_pool=local_pool,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+        )
     
     # Store recent velocities in a sliding window (on GPU)
     velocity_window = defaultdict(list)  # {param_name: [v_t-w, ..., v_t]}
@@ -200,15 +245,28 @@ def compute_momentum_mask_streaming(steps_and_paths, sparsity_percent, window_si
             score = momentum_scores[name]
             print(f"  {name}: min={score.min().item():.10f}, max={score.max().item():.10f}, mean={score.mean().item():.10f}")
     
-    masks = create_mask_from_scores_gpu_efficient(momentum_scores, sparsity_percent, device)
-    
+    masks = create_mask_from_scores_gpu_efficient(
+        momentum_scores,
+        sparsity_percent,
+        device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
     del momentum_scores
     torch.cuda.empty_cache()
     
     return masks
 
 
-def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cuda', mlp_only=False):
+def compute_fisher_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    device="cuda",
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
     """
     Fisher approximation with streaming: accumulate sum and sum-of-squares on GPU.
     Fisher ≈ Var[delta] + |E[delta]| = E[delta²] - E[delta]² + |E[delta]|
@@ -261,8 +319,14 @@ def compute_fisher_mask_streaming(steps_and_paths, sparsity_percent, device='cud
     del sum_delta, sum_delta_sq
     torch.cuda.empty_cache()
     
-    masks = create_mask_from_scores_gpu_efficient(fisher_scores, sparsity_percent, device)
-    
+    masks = create_mask_from_scores_gpu_efficient(
+        fisher_scores,
+        sparsity_percent,
+        device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
     del fisher_scores
     torch.cuda.empty_cache()
     
@@ -370,7 +434,14 @@ def main(args):
         print("Computing ground truth mask for Jaccard comparison...")
         print("="*60)
         all_steps = load_deltas_streaming(delta_log_dir, target_step=None)
-        ground_truth_masks = compute_ground_truth_mask_streaming(all_steps, args.sparsity_percent, device, mlp_only=args.mlp_only)
+        ground_truth_masks = compute_ground_truth_mask_streaming(
+            all_steps,
+            args.sparsity_percent,
+            device,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
     
     # Compute masks based on method
     print("\n" + "="*60)
@@ -378,15 +449,39 @@ def main(args):
     print("="*60)
     
     if args.method == "magnitude":
-        masks = compute_absolute_magnitude_mask_streaming(steps_and_paths, args.sparsity_percent, device, args.debug, mlp_only=args.mlp_only)
+        masks = compute_absolute_magnitude_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            device,
+            args.debug,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
         method_suffix = "magnitude"
     
     elif args.method == "momentum":
-        masks = compute_momentum_mask_streaming(steps_and_paths, args.sparsity_percent, args.momentum_window, device, args.debug, mlp_only=args.mlp_only)
+        masks = compute_momentum_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            args.momentum_window,
+            device,
+            args.debug,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
         method_suffix = f"momentum_w{args.momentum_window}"
     
     elif args.method == "fisher":
-        masks = compute_fisher_mask_streaming(steps_and_paths, args.sparsity_percent, device, mlp_only=args.mlp_only)
+        masks = compute_fisher_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            device,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
         method_suffix = "fisher"
     
     else:
@@ -420,6 +515,11 @@ def main(args):
         "steps": steps,
         "device": device,
         "gpu_name": torch.cuda.get_device_name(0),
+        "mlp_only": args.mlp_only,
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
     }
     
     if args.method == "momentum":
@@ -457,7 +557,28 @@ if __name__ == "__main__":
     parser.add_argument("--compute_jaccard", action="store_true")
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--mlp_only", action="store_true", help="Only score and compute masks for MLP parameters")
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        help="Only score and compute masks for MLP parameters (default: full model)",
+    )
+    parser.add_argument(
+        "--local_pool",
+        action="store_true",
+        help=(
+            "Per-weight-matrix top-k (uniform sparsity per matrix). "
+            "Default: global pooling with a small per-tensor floor."
+        ),
+    )
+    parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
+    )
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU execution (slow but works without GPU)")
     
     args = parser.parse_args()

@@ -14,6 +14,8 @@ from torch.nn.utils.stateless import functional_call
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
+    pooling_metadata,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
     save_masks
@@ -329,7 +331,7 @@ def _collect_pooled_downproj_activations(
     device: str,
     num_batches: int,
     which: str = "chosen",
-    mlp_only: bool = True,
+    mlp_only: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Collect pooled down_proj input activations directly from DPO batches."""
     assert which in {"chosen", "rejected"}
@@ -858,6 +860,10 @@ def main(args):
         "mlp_only": args.mlp_only,
         "device": device,
         "min_layer_keep_ratio": args.min_layer_keep_ratio,
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
     }
     if args.method == "cav":
         metadata["probe_epochs"] = args.probe_epochs
@@ -911,8 +917,12 @@ if __name__ == "__main__":
     parser.add_argument("--num_batches", type=int, default=32)
     parser.add_argument("--method", type=str, choices=["activation", "cav", "snip"], default="cav")
     parser.add_argument("--sparsity_percent", type=float, default=95.0)
-    parser.add_argument("--mlp_only", action="store_true", default=True,
-                        help="Only score MLP parameters (recommended, consistent with sparse backprop target)")
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Only score MLP parameters (default: score all weights)",
+    )
     parser.add_argument("--force_cpu", action="store_true")
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--reference_mask", type=str, default=None, help="Optional reference mask to compute Jaccard similarity against.")
@@ -934,14 +944,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--min_layer_keep_ratio",
         type=float,
-        default=0.0,
-        help="Optional per-layer keep floor ratio for hybrid masking (e.g., 0.05 keeps at least 5%% in each layer, then allocates remaining budget globally).",
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
     )
     parser.add_argument(
         "--local_pool", action="store_true",
         help=(
             "Use per-layer mask selection instead of global cross-layer ranking. "
-            "Default (off): one global threshold across all weights. "
+            "Default (off): global masking with a small per-tensor keep floor. "
             "With --local_pool: each weight matrix independently keeps its top keep_frac elements, "
             "giving uniform sparsity per layer."
         ),

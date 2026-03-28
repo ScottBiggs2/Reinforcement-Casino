@@ -3,9 +3,16 @@ import os
 import argparse
 import inspect
 import json
+import logging
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import multiprocessing
+
+# Saved checkpoints (e.g. sparse DPO) can leave dtype objects in the in-memory
+# PretrainedConfig; at INFO, transformers logs repr(config) which json.dumps
+# and crashes with "Object of type dtype is not JSON serializable". Suppress
+# transformers INFO in this process so that log line is skipped entirely.
+logging.getLogger("transformers").setLevel(logging.WARNING)
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -88,6 +95,9 @@ import json
 import os
 import traceback
 import inspect
+import logging
+
+logging.getLogger("transformers").setLevel(logging.WARNING)
 
 sys.path.append({repr(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))})
 

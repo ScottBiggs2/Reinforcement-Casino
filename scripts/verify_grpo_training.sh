@@ -51,6 +51,7 @@ NUM_STEPS=10
 SUBSET=64
 VERIFY_OUT_DIR="/scratch/biggs.s/rl_casino_verify_outputs"
 VERIFY_CACHE_DIR="/scratch/biggs.s/hf_cache_verify"
+MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
 # Default mask to verify the sparse script's parameter injection
 DEFAULT_MASK="masks/top_10.0pct_momentum_w25_step25.pt"
@@ -106,7 +107,7 @@ for DS in "${DATASETS[@]}"; do
         --method magnitude \
         --sparsity_percent 97.5 \
         --target_step "$NUM_STEPS" \
-        --mlp_only \
+        --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
         --output_file "$GENERATED_MASK"
 
 

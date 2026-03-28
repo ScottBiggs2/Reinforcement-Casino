@@ -183,7 +183,7 @@ Triton-accelerated sparse DPO with optimizer ablations (SGD, AdamW, Sparse AdamW
 | `--subset_size` | int | None | Dataset subset size (None = full) |
 | `--optimizer` | str | `sparse_adamw` | `sgd`, `adamw`, or `sparse_adamw` |
 | `--block_size` | int | 32 | Block size for sparse AdamW |
-| `--mlp_only` | flag | True | Restrict sparsity to MLP layers only |
+| `--mlp_only` | flag | False (omit) | Pass `--mlp_only` to restrict sparsity to MLP layers only |
 | `--use_wandb` | flag | False | Log to Wandb |
 | `--save_csv` | flag | False | Save per-step CSV logs |
 
@@ -216,7 +216,7 @@ BSR sparse MLP layers with custom sparse autograd. **BSR backprop is not yet tes
 | `--optimizer` | str | `sparse_adamw` | `sgd`, `adamw`, or `sparse_adamw` |
 | `--block_size_bsr` | int | 16 | BSR block size for sparse MLP |
 | `--block_size_adam` | int | 128 | Block size for sparse AdamW |
-| `--mlp_only` | flag | True | Restrict sparsity to MLP layers only |
+| `--mlp_only` | flag | False (omit) | Pass `--mlp_only` to restrict sparsity to MLP layers only |
 | `--use_wandb` | flag | False | Log to Wandb |
 | `--save_csv` | flag | False | Save per-step CSV logs |
 
@@ -312,6 +312,8 @@ python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --check
 - **`--delta_log_dir`** — Must match the delta log dir produced by `DPO_train.py` for the same model. Format: `./delta_logs_{sanitized}/` where `{sanitized}` is the model name with slashes/dashes lowercased and replaced by underscores (e.g. `./delta_logs_google_gemma_3_270m_it`).
 - **`--target_step`** — Step at which to compute the mask. Must be a step where DPO_train saved deltas (default schedule: 10, 20, 30, 40, 100, 150, 200). Omit to use all available steps up to the latest.
 
+**Mask pooling (defaults):** Warm/cold paths that call `create_mask_from_scores_gpu_efficient` now use **hybrid global pooling** by default — one global ranking over all scored weights plus a small per-tensor keep floor (`min_layer_keep_ratio=0.0025`, metadata `pooling_mode`: `"global_with_layer_floor"`). Pass **`--min_layer_keep_ratio 0.0`** for pure global masking (`"global"`). Use **`--local_pool`** for **per-weight-matrix** top-k (`"local_per_tensor"`); local pooling ignores the floor by construction. Both **`src/warm_start/random_mask_baseline.py`** and **`src/utils/generate_random_mask.py`** are aligned with the same hybrid-global semantics. For very large models, see `pooling_metadata()` and comments in `src/utils/mask_utils.py` (CPU top-k fallback; future chunked/threshold strategies).
+
 Script: `src/warm_start/even_better_mask_finder.py`.
 
 ### Warm-start: Magnitude-based
@@ -362,10 +364,9 @@ python src/cold_start/cold_mask_finder.py \
   --model_name "google/gemma-3-270m-it" \
   --dataset_name "qihoo360/Light-R1-DPOData" \
   --sparsity_percent 95.0 \
-  --n_calibration_samples 512 \
-  --mlp_only
+  --n_calibration_samples 512
 ```
-*Output:* `masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light_R1_DPOData_sparsity95.0pct_n512.pt`
+*Output:* `masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light_R1_DPOData_sparsity95.0pct_n512.pt` — *Optional:* add `--mlp_only` for MLP-only masks.
 
 ### Cold-start: CAV / Activation / SNIP
 
@@ -378,10 +379,33 @@ python src/cold_start/cav_cold_mask_finder.py \
   --method cav \
   --sparsity_percent 95.0 \
   --subset_size 256 \
-  --num_batches 32 \
-  --mlp_only
+  --num_batches 32
 ```
-*Output:* `masks/cold_cav_google_gemma_3_270m_it_sparsity95.0pct.pt`
+*Output:* `masks/cold_cav_google_gemma_3_270m_it_sparsity95.0pct.pt` — *Optional:* add `--mlp_only` for MLP-only masks.
+
+### Hybrid mask verification
+
+For a fast selector-level sanity check without model artifacts:
+
+```bash
+python src/analysis/verify_hybrid_mask_selector.py
+```
+
+For a lightweight end-to-end warm/cold smoke on the cluster, set a real delta directory and submit:
+
+```bash
+cd /path/to/rl_casino
+DELTA_LOG_DIR=/path/to/delta_logs_model sbatch scripts/run_mask_smoke.sh
+```
+
+That smoke script:
+
+- runs the selector sanity check
+- builds one warm magnitude mask with the default floor and one pure-global control
+- builds one cold Fisher mask with the default floor and one pure-global control
+- writes outputs to `masks/smoke/`
+
+The main runner scripts under `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly for reproducibility. Set that variable to `0.0` in a script if you want legacy pure-global behavior.
 
 ## Checkpoint reconstruction
 
@@ -474,6 +498,8 @@ This will:
 - Build warm-start (magnitude, momentum, Fisher) and cold-start (Fisher, CAV) masks.
 - Run sparse DPO training for each mask.
 - Submit evaluation jobs (base, dense, sparse models) with `--limit` for faster turnaround.
+
+The masking jobs in `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly. Change that to `0.0` inside a script if you need pure global pooling for a controlled comparison against older runs.
 
 ### Model Loading Examples
 

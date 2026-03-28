@@ -1,6 +1,70 @@
 import torch
 import os
 import json
+from typing import Any, Dict
+
+# Default masking mode:
+# - global ranking across all scored weights
+# - plus a small per-tensor keep floor to reduce collapse under high sparsity
+DEFAULT_MIN_LAYER_KEEP_RATIO = 0.0025
+
+# Global top-k over ~5B+ scores exceeds 2^32 elements; CUDA topk (gatherTopK) can assert
+# on such 1D tensors. Use CPU top-k above this threshold unless RL_CASINO_MASK_TOPK_ALLOW_GPU=1.
+_CUDA_TOPK_SAFE_NUMEL = 2_000_000_000
+
+
+def pooling_metadata(
+    *,
+    local_pool: bool,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+) -> Dict[str, Any]:
+    """
+    Fields to merge into saved mask metadata so runs are reproducible and comparable.
+
+    - pooling_mode ``global``: one ranking across all scored weight elements.
+    - pooling_mode ``global_with_layer_floor``: global top-k after reserving a per-layer
+      keep floor (the default when ``min_layer_keep_ratio`` is left unchanged).
+    - pooling_mode ``local_per_tensor``: each 2D weight matrix keeps keep_frac of its
+      own elements independently (``--local_pool``).
+
+    Random baselines: ``generate_random_mask.py`` uses a single global threshold on
+    concatenated scores; ``random_mask_baseline.py`` uses
+    ``create_mask_from_scores_gpu_efficient``.
+
+    For very large models, materializing ``torch.cat`` over all scores may be expensive;
+    future work: threshold search with per-chunk counts (exact global sparsity) or
+    oversampled per-block top-k then a final global top-k (approximate unless oversample
+    is large enough to include all true global top-k).
+    """
+    if local_pool:
+        return {"pooling_mode": "local_per_tensor", "local_pool": True}
+    if min_layer_keep_ratio > 0:
+        return {
+            "pooling_mode": "global_with_layer_floor",
+            "local_pool": False,
+            "min_layer_keep_ratio": float(min_layer_keep_ratio),
+        }
+    return {"pooling_mode": "global", "local_pool": False}
+
+
+def _topk_indices_safe(scores_1d: torch.Tensor, k: int, largest: bool = True) -> torch.Tensor:
+    """Top-k indices; CPU fallback for very large tensors to avoid CUDA gatherTopK failures."""
+    n = scores_1d.numel()
+    k = max(0, min(int(k), n))
+    if k == 0:
+        return scores_1d.new_empty((0,), dtype=torch.long)
+    allow_gpu = os.environ.get("RL_CASINO_MASK_TOPK_ALLOW_GPU", "").lower() in ("1", "true", "yes")
+    force_cpu = os.environ.get("RL_CASINO_MASK_TOPK_CPU", "").lower() in ("1", "true", "yes")
+    use_cpu = scores_1d.is_cuda and (force_cpu or (n > _CUDA_TOPK_SAFE_NUMEL and not allow_gpu))
+    if use_cpu:
+        print(
+            f"  Note: top-k on CPU ({n:,} scores, k={k:,}) — "
+            "CUDA top-k can fail when the score vector is extremely large."
+        )
+        idx = torch.topk(scores_1d.detach().cpu(), k=k, largest=largest, sorted=False).indices
+        return idx.to(scores_1d.device, non_blocking=False)
+    return torch.topk(scores_1d, k=k, largest=largest, sorted=False).indices
+
 
 def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale):
     """Per-layer top-k: each weight matrix independently keeps keep_frac of its elements."""
@@ -25,7 +89,7 @@ def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_nois
             scale = max(flat.abs().max().item() * tie_break_noise_scale, 1e-12)
             flat = flat + torch.randn_like(flat) * scale
 
-        idx = torch.topk(flat, k=n_keep, largest=True, sorted=False).indices
+        idx = _topk_indices_safe(flat, k=n_keep, largest=True)
         mask_flat = torch.zeros(n, device=device, dtype=torch.float32)
         mask_flat[idx] = 1.0
 
@@ -45,15 +109,15 @@ def create_mask_from_scores_gpu_efficient(
     device='cuda',
     add_tie_break_noise: bool = True,
     tie_break_noise_scale: float = 1e-10,
-    min_layer_keep_ratio: float = 0.0,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
     local_pool: bool = False,
 ):
     """
     Create sparse masks from score tensors.
 
-        Default (local_pool=False): *global* ranking — one threshold across all
-        parameter tensors, so high-scoring layers keep more and low-scoring
-        layers keep fewer weights.
+        Default (local_pool=False): *global* ranking with a small per-tensor keep floor,
+        so high-scoring layers still compete globally but each scored tensor keeps at least
+        a small fraction of weights unless the global budget is too small.
 
         local_pool=True: *per-layer* ranking — each weight matrix independently
         keeps its top keep_frac elements, giving uniform sparsity per layer.
@@ -62,9 +126,19 @@ def create_mask_from_scores_gpu_efficient(
             - If min_layer_keep_ratio > 0, each non-empty layer keeps at least
                 floor(min_layer_keep_ratio * layer_numel) parameters.
             - Remaining budget is allocated by global top-k over the full model.
+            - Pass min_layer_keep_ratio=0.0 for pure global selection with no floor.
     """
     if local_pool:
+        print("Mask pooling: local (each weight matrix ranked independently; use --local_pool)")
         return _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale)
+
+    if min_layer_keep_ratio > 0:
+        print(
+            "Mask pooling: global with per-layer keep floor "
+            f"(min_layer_keep_ratio={min_layer_keep_ratio}; remaining budget is global top-k)"
+        )
+    else:
+        print("Mask pooling: global (single ranking across all scored weights)")
 
     print(f"\n=== Creating Exact Global Masks (target sparsity: {sparsity_percent}%) ===")
 
@@ -111,6 +185,7 @@ def create_mask_from_scores_gpu_efficient(
         cursor += n
 
     all_scores = torch.cat(flat_chunks, dim=0)
+    all_scores = torch.nan_to_num(all_scores, nan=0.0, posinf=0.0, neginf=0.0)
 
     if add_tie_break_noise:
         # Very small jitter for deterministic tie-breaking when many scores are equal.
@@ -150,7 +225,7 @@ def create_mask_from_scores_gpu_efficient(
             if local_floor <= 0:
                 continue
             layer_scores = all_scores[start:end]
-            local_idx = torch.topk(layer_scores, k=local_floor, largest=True, sorted=False).indices
+            local_idx = _topk_indices_safe(layer_scores, k=local_floor, largest=True)
             global_mask_flat[start:end][local_idx] = 1.0
             floor_selected += int(local_floor)
 
@@ -162,7 +237,7 @@ def create_mask_from_scores_gpu_efficient(
         # Exclude already selected floor positions by setting scores to -inf.
         candidate_scores = all_scores.clone()
         candidate_scores[global_mask_flat > 0] = float("-inf")
-        keep_indices = torch.topk(candidate_scores, k=remaining, largest=True, sorted=False).indices
+        keep_indices = _topk_indices_safe(candidate_scores, k=remaining, largest=True)
         global_mask_flat[keep_indices] = 1.0
 
     masks = {}

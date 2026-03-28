@@ -33,6 +33,7 @@ SPARSITY=97.5
 TARGET_STEP=50 # Ensure this matches a saved step in DPO_train.py (e.g. 100, 150, 200, 250)
 DATASET="qihoo360/Light-R1-DPOData"
 LOG_DIR="delta_logs_google_gemma_3_270m_it"
+MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
 echo "=================================================="
 echo "1. Running Baseline DPO Training"
@@ -50,6 +51,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method magnitude \
   --sparsity_percent $SPARSITY \
   --target_step 250 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Magnitude Mask"
@@ -58,6 +60,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method magnitude \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Momentum Mask"
@@ -66,6 +69,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method momentum \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Fisher Mask (Warm)"
@@ -74,6 +78,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method fisher \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo ""
@@ -87,7 +92,7 @@ python src/cold_start/cold_mask_finder.py \
   --dataset_name "$DATASET" \
   --sparsity_percent $SPARSITY \
   --n_calibration_samples 256 \
-  --mlp_only
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO"
 
 echo "-> CAV Mask (Cold)"
 python src/cold_start/cav_cold_mask_finder.py \
@@ -97,7 +102,7 @@ python src/cold_start/cav_cold_mask_finder.py \
   --sparsity_percent $SPARSITY \
   --subset_size 256 \
   --num_batches 16 \
-  --mlp_only
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO"
 
 echo ""
 echo "=================================================="
@@ -111,6 +116,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference
 
 echo "-> vs. Magnitude Mask (Warm)"
@@ -119,6 +125,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference
 
 echo "-> vs. Momentum Mask (Warm)"
@@ -127,6 +134,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference
 
 echo "-> vs. Fisher Mask (Warm)"
@@ -135,6 +143,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference
 
 echo "-> vs. Fisher Mask (Cold)"
@@ -143,6 +152,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference
 
 echo "-> vs. CAV/SNIP Mask (Cold)"
@@ -151,6 +161,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference
 
 

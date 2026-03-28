@@ -26,6 +26,7 @@ GRAD_ACCUM=4
 LR=5e-5
 SPARSITY=97.5
 LOG_DIR="delta_logs_google_gemma_3_270m_it"
+MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
 echo "Starting Random & Ground Truth Mask Ablation..."
 
@@ -45,7 +46,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method magnitude \
   --sparsity_percent $SPARSITY \
   --target_step 500 \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 REF_MASK_GT="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct_step500.pt"
@@ -61,7 +62,7 @@ python3 src/utils/generate_random_mask.py \
     --model_name "$MODEL" \
     --sparsity_percent "$SPARSITY" \
     --output_file "$RANDOM_MASK" \
-    --mlp_only \
+    --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
     --compare_mask "$REF_MASK_GT"
 
 echo ""

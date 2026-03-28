@@ -67,6 +67,7 @@ SUBSET_DPO=256
 
 SPARSITY_LIST=("97.5")        # can extend later
 TARGET_STEP_DPO=50            # must match a checkpoint step from DPO
+MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking with no floor
 
 EVAL_LIMIT=100                # number of examples per benchmark for sanity checks
 
@@ -225,7 +226,7 @@ run_masks() {
           --method "$method" \
           --sparsity_percent "$sparsity" \
           --target_step "${TARGET_STEP_DPO}" \
-          --mlp_only \
+          --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
           --output_file "${mask_base}/warm_${method}_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
     done
   done
@@ -238,7 +239,7 @@ run_masks() {
         --dataset_name "qihoo360/Light-R1-DPOData" \
         --sparsity_percent "$sparsity" \
         --n_calibration_samples 256 \
-        --mlp_only \
+        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
         --output_file "${mask_base}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n256.pt"
   done
 
@@ -252,7 +253,7 @@ run_masks() {
         --sparsity_percent "$sparsity" \
         --subset_size 256 \
         --num_batches 16 \
-        --mlp_only \
+        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
         --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
   done
 
@@ -299,7 +300,6 @@ run_sparse_dpo() {
         --subset_size "$SUBSET_DPO" \
         --optimizer sparse_adamw \
         --block_size 32 \
-        --mlp_only \
         --use_wandb \
         --save_csv \
         --output_base_dir "$out_base" \

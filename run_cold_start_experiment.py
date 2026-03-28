@@ -245,7 +245,7 @@ def run_dpo(label, model, tokenizer, dpo_dataset, device,
             list(model.named_parameters()),
             mask_manager,
             lr=LR,
-            mlp_only=True,
+            mlp_only=False,
         )
         trainer.optimizer = optimizer
 
