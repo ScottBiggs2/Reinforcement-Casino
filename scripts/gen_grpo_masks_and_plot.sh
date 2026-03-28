@@ -10,89 +10,192 @@
 #SBATCH --output=logs/grpo_masks_plot_%j.out
 #SBATCH --error=logs/grpo_masks_plot_%j.err
 
+set -euo pipefail
+
 echo "========================================"
 echo "Job ID   : $SLURM_JOB_ID"
 echo "Node     : $SLURMD_NODENAME"
 echo "Started  : $(date)"
 echo "========================================"
 
-source /shared/EL9/explorer/miniconda3/24.11.1/miniconda3/etc/profile.d/conda.sh
-conda activate /scratch/xie.yiyi/conda_envs/rl_casino
+CONDA_SH="/shared/EL9/explorer/miniconda3/24.11.1/miniconda3/etc/profile.d/conda.sh"
+CONDA_ENV_PRIMARY="/scratch/xie.yiyi/conda_envs/rl_casino"
+CONDA_ENV_FALLBACK="/home/xie.yiyi/.conda/envs/rl_casino"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+FORCE_GPU="${FORCE_GPU:-1}"
+
+if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV:-}/bin/python" ]; then
+    PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+fi
+
+if [ -f "$CONDA_SH" ]; then
+    source "$CONDA_SH"
+    if [ -d "$CONDA_ENV_PRIMARY" ]; then
+        conda activate "$CONDA_ENV_PRIMARY"
+        PYTHON_BIN="python"
+        echo "[env] Activated conda env: $CONDA_ENV_PRIMARY"
+    elif [ -d "$CONDA_ENV_FALLBACK" ]; then
+        conda activate "$CONDA_ENV_FALLBACK"
+        PYTHON_BIN="python"
+        echo "[env] Activated conda env: $CONDA_ENV_FALLBACK"
+    else
+        echo "[warn] Conda env not found at either path; using $PYTHON_BIN"
+    fi
+else
+    echo "[warn] conda.sh not found at $CONDA_SH; using $PYTHON_BIN"
+fi
 
 cd /home/xie.yiyi/Reinforcement-Casino
 mkdir -p logs masks/grpo_verify
 
-MODEL="meta-llama/Llama-3.1-8B-Instruct"
-N_SAMPLES=64
-SPARSITY=90.0
-MASK_DIR="masks/grpo_verify"
+MODEL="${MODEL:-google/gemma-3-270m-it}"
+N_SAMPLES="${N_SAMPLES:-64}"
+SPARSITY="${SPARSITY:-90.0}"
+MASK_DIR="${MASK_DIR:-masks/grpo_verify}"
+SKIP_DPO="${SKIP_DPO:-0}"
+CPU_THREADS="${CPU_THREADS:-}"
+
+GRPO_SNIP_MASK="$MASK_DIR/snip_grpo.pt"
+GRPO_CAV_MASK="$MASK_DIR/cav_grpo.pt"
+GRPO_FISHER_MASK="$MASK_DIR/fisher_grpo.pt"
+
+DPO_SNIP_MASK="${DPO_SNIP_MASK:-$MASK_DIR/snip_dpo.pt}"
+DPO_CAV_MASK="${DPO_CAV_MASK:-$MASK_DIR/cav_dpo.pt}"
+DPO_FISHER_MASK="${DPO_FISHER_MASK:-$MASK_DIR/fisher_dpo.pt}"
+
+echo "[config] MODEL=$MODEL"
+echo "[config] N_SAMPLES=$N_SAMPLES"
+echo "[config] SPARSITY=$SPARSITY"
+echo "[config] MASK_DIR=$MASK_DIR"
+echo "[config] SKIP_DPO=$SKIP_DPO"
+if [ -n "$CPU_THREADS" ]; then
+    export OMP_NUM_THREADS="$CPU_THREADS"
+    export MKL_NUM_THREADS="$CPU_THREADS"
+    export OPENBLAS_NUM_THREADS="$CPU_THREADS"
+    export NUMEXPR_NUM_THREADS="$CPU_THREADS"
+    export VECLIB_MAXIMUM_THREADS="$CPU_THREADS"
+    export BLIS_NUM_THREADS="$CPU_THREADS"
+    echo "[config] CPU_THREADS=$CPU_THREADS (thread env vars exported)"
+else
+    echo "[config] CPU_THREADS=auto"
+fi
+if [ "$SKIP_DPO" = "1" ]; then
+    echo "[config] DPO_SNIP_MASK=$DPO_SNIP_MASK"
+    echo "[config] DPO_CAV_MASK=$DPO_CAV_MASK"
+    echo "[config] DPO_FISHER_MASK=$DPO_FISHER_MASK"
+fi
+
+# ============================================================
+# GPU preflight (force CUDA by default)
+# ============================================================
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    export CUDA_VISIBLE_DEVICES=0
+fi
+
+echo "[gpu] CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+if command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[gpu] nvidia-smi detected"
+    nvidia-smi -L || true
+else
+    echo "[gpu] nvidia-smi not found"
+fi
+
+if [ "$FORCE_GPU" = "1" ]; then
+    echo "[gpu] FORCE_GPU=1 (will fail if CUDA is unavailable)"
+    "$PYTHON_BIN" - <<'PY'
+import sys
+import torch
+
+ok = torch.cuda.is_available() and torch.cuda.device_count() > 0
+print(f"[gpu] torch.cuda.is_available={torch.cuda.is_available()} count={torch.cuda.device_count()}")
+if not ok:
+    print("[gpu] ERROR: CUDA is not available in this job. Re-submit on a GPU node or check container/runtime setup.")
+    sys.exit(1)
+print(f"[gpu] using CUDA device 0: {torch.cuda.get_device_name(0)}")
+PY
+else
+    echo "[gpu] FORCE_GPU=0 (CPU fallback allowed)"
+fi
 
 # ============================================================
 # Step 1: SNIP — GRPO + DPO
 # ============================================================
 echo ""
 echo "=== [1/6] SNIP GRPO mask ==="
-python src/cold_start/inference_mask_finder.py \
+"$PYTHON_BIN" src/cold_start/inference_mask_finder.py \
     --model_name $MODEL \
     --method snip \
     --mode grpo \
     --n_samples $N_SAMPLES \
     --sparsity $SPARSITY \
-    --output $MASK_DIR/snip_grpo.pt
+    --output $GRPO_SNIP_MASK
 
 echo ""
 echo "=== [2/6] SNIP DPO mask ==="
-python src/cold_start/inference_mask_finder.py \
-    --model_name $MODEL \
-    --method snip \
-    --mode dpo \
-    --n_samples $N_SAMPLES \
-    --sparsity $SPARSITY \
-    --output $MASK_DIR/snip_dpo.pt
+if [ "$SKIP_DPO" = "1" ]; then
+    echo "[skip] Using existing DPO SNIP mask: $DPO_SNIP_MASK"
+else
+    "$PYTHON_BIN" src/cold_start/inference_mask_finder.py \
+        --model_name $MODEL \
+        --method snip \
+        --mode dpo \
+        --n_samples $N_SAMPLES \
+        --sparsity $SPARSITY \
+        --output $DPO_SNIP_MASK
+fi
 
 # ============================================================
 # Step 2: CAV — GRPO + DPO
 # ============================================================
 echo ""
 echo "=== [3/6] CAV GRPO mask ==="
-python src/cold_start/inference_mask_finder.py \
+"$PYTHON_BIN" src/cold_start/inference_mask_finder.py \
     --model_name $MODEL \
     --method cav \
     --mode grpo \
     --n_samples $N_SAMPLES \
     --sparsity $SPARSITY \
-    --output $MASK_DIR/cav_grpo.pt
+    --output $GRPO_CAV_MASK
 
 echo ""
 echo "=== [4/6] CAV DPO mask ==="
-python src/cold_start/inference_mask_finder.py \
-    --model_name $MODEL \
-    --method cav \
-    --mode dpo \
-    --n_samples $N_SAMPLES \
-    --sparsity $SPARSITY \
-    --output $MASK_DIR/cav_dpo.pt
+if [ "$SKIP_DPO" = "1" ]; then
+    echo "[skip] Using existing DPO CAV mask: $DPO_CAV_MASK"
+else
+    "$PYTHON_BIN" src/cold_start/inference_mask_finder.py \
+        --model_name $MODEL \
+        --method cav \
+        --mode dpo \
+        --n_samples $N_SAMPLES \
+        --sparsity $SPARSITY \
+        --output $DPO_CAV_MASK
+fi
 
 # ============================================================
 # Step 3: Fisher — GRPO + DPO
 # ============================================================
 echo ""
 echo "=== [5/6] Fisher GRPO mask ==="
-python src/cold_start/cold_mask_finder.py \
+"$PYTHON_BIN" src/cold_start/cold_mask_finder.py \
     --model_name $MODEL \
     --mode grpo \
     --n_calibration_samples $N_SAMPLES \
     --sparsity_percent $SPARSITY \
-    --output_file $MASK_DIR/fisher_grpo.pt
+    --output_file $GRPO_FISHER_MASK
 
 echo ""
 echo "=== [6/6] Fisher DPO mask ==="
-python src/cold_start/cold_mask_finder.py \
-    --model_name $MODEL \
-    --mode dpo \
-    --n_calibration_samples $N_SAMPLES \
-    --sparsity_percent $SPARSITY \
-    --output_file $MASK_DIR/fisher_dpo.pt
+if [ "$SKIP_DPO" = "1" ]; then
+    echo "[skip] Using existing DPO Fisher mask: $DPO_FISHER_MASK"
+else
+    "$PYTHON_BIN" src/cold_start/cold_mask_finder.py \
+        --model_name $MODEL \
+        --mode dpo \
+        --n_calibration_samples $N_SAMPLES \
+        --sparsity_percent $SPARSITY \
+        --output_file $DPO_FISHER_MASK
+fi
 
 # ============================================================
 # Step 4: export per-layer metrics CSVs (GRPO vs DPO per method)
@@ -100,25 +203,37 @@ python src/cold_start/cold_mask_finder.py \
 echo ""
 echo "=== Exporting layer metrics CSVs ==="
 
-python src/cold_start/export_layer_metrics_csv.py \
-    $MASK_DIR/snip_grpo.pt $MASK_DIR/snip_dpo.pt \
-    --output $MASK_DIR/layer_metrics_snip_grpo_vs_dpo.csv
+if [ -f "$GRPO_SNIP_MASK" ] && [ -f "$DPO_SNIP_MASK" ]; then
+    "$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
+        $GRPO_SNIP_MASK $DPO_SNIP_MASK \
+        --output $MASK_DIR/layer_metrics_snip_grpo_vs_dpo.csv
+else
+    echo "[warn] Skipping SNIP GRPO-vs-DPO CSV (missing mask file)."
+fi
 
-python src/cold_start/export_layer_metrics_csv.py \
-    $MASK_DIR/cav_grpo.pt $MASK_DIR/cav_dpo.pt \
-    --output $MASK_DIR/layer_metrics_cav_grpo_vs_dpo.csv
+if [ -f "$GRPO_CAV_MASK" ] && [ -f "$DPO_CAV_MASK" ]; then
+    "$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
+        $GRPO_CAV_MASK $DPO_CAV_MASK \
+        --output $MASK_DIR/layer_metrics_cav_grpo_vs_dpo.csv
+else
+    echo "[warn] Skipping CAV GRPO-vs-DPO CSV (missing mask file)."
+fi
 
-python src/cold_start/export_layer_metrics_csv.py \
-    $MASK_DIR/fisher_grpo.pt $MASK_DIR/fisher_dpo.pt \
-    --output $MASK_DIR/layer_metrics_fisher_grpo_vs_dpo.csv
+if [ -f "$GRPO_FISHER_MASK" ] && [ -f "$DPO_FISHER_MASK" ]; then
+    "$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
+        $GRPO_FISHER_MASK $DPO_FISHER_MASK \
+        --output $MASK_DIR/layer_metrics_fisher_grpo_vs_dpo.csv
+else
+    echo "[warn] Skipping Fisher GRPO-vs-DPO CSV (missing mask file)."
+fi
 
 # Also compare across methods within GRPO (sanity: do the three methods agree?)
-python src/cold_start/export_layer_metrics_csv.py \
-    $MASK_DIR/snip_grpo.pt $MASK_DIR/cav_grpo.pt \
+"$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
+    $GRPO_SNIP_MASK $GRPO_CAV_MASK \
     --output $MASK_DIR/layer_metrics_grpo_snip_vs_cav.csv
 
-python src/cold_start/export_layer_metrics_csv.py \
-    $MASK_DIR/snip_grpo.pt $MASK_DIR/fisher_grpo.pt \
+"$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
+    $GRPO_SNIP_MASK $GRPO_FISHER_MASK \
     --output $MASK_DIR/layer_metrics_grpo_snip_vs_fisher.csv
 
 # ============================================================
@@ -126,7 +241,7 @@ python src/cold_start/export_layer_metrics_csv.py \
 # ============================================================
 echo ""
 echo "=== Generating individual plots ==="
-python src/cold_start/plot_layer_metrics_csv.py \
+"$PYTHON_BIN" src/cold_start/plot_layer_metrics_csv.py \
     --input-dir $MASK_DIR
 
 # ============================================================
@@ -134,34 +249,43 @@ python src/cold_start/plot_layer_metrics_csv.py \
 # ============================================================
 echo ""
 echo "=== Generating SNIP vs CAV compare plot ==="
-python src/cold_start/plot_layer_metrics_csv.py \
-    --compare \
-    --csv-a $MASK_DIR/layer_metrics_snip_grpo_vs_dpo.csv \
-    --csv-b $MASK_DIR/layer_metrics_cav_grpo_vs_dpo.csv \
-    --label-a "SNIP" \
-    --label-b "CAV" \
-    --output $MASK_DIR/compare_SNIP_vs_CAV_grpo_dpo.png
+if [ -f "$MASK_DIR/layer_metrics_snip_grpo_vs_dpo.csv" ] && [ -f "$MASK_DIR/layer_metrics_cav_grpo_vs_dpo.csv" ]; then
+    "$PYTHON_BIN" src/cold_start/plot_layer_metrics_csv.py \
+        --compare \
+        --csv-a $MASK_DIR/layer_metrics_snip_grpo_vs_dpo.csv \
+        --csv-b $MASK_DIR/layer_metrics_cav_grpo_vs_dpo.csv \
+        --label-a "SNIP" \
+        --label-b "CAV" \
+        --output $MASK_DIR/compare_SNIP_vs_CAV_grpo_dpo.png
+else
+    echo "[warn] Skipping SNIP-vs-CAV compare plot (missing CSVs)."
+fi
 
 # ============================================================
 # Step 6: quick summary — aggregate Jaccard for each pair
 # ============================================================
 echo ""
 echo "=== Aggregate Jaccard Summary ==="
-python - <<'EOF'
+MASK_DIR_BASENAME="$MASK_DIR"
+export MASK_DIR_BASENAME GRPO_SNIP_MASK GRPO_CAV_MASK GRPO_FISHER_MASK DPO_SNIP_MASK DPO_CAV_MASK DPO_FISHER_MASK
+"$PYTHON_BIN" - <<'EOF'
 import torch, os
 
-MASK_DIR = "masks/grpo_verify"
+MASK_DIR = os.environ.get("MASK_DIR_BASENAME", "masks/grpo_verify")
 
 def load(p):
     d = torch.load(p, map_location="cpu")
     return d["masks"] if "masks" in d else d
 
+def bname(env_key, default):
+    return os.path.basename(os.environ.get(env_key, default))
+
 pairs = [
-    ("SNIP  GRPO vs DPO  ", "snip_grpo.pt",   "snip_dpo.pt"),
-    ("CAV   GRPO vs DPO  ", "cav_grpo.pt",    "cav_dpo.pt"),
-    ("Fisher GRPO vs DPO ", "fisher_grpo.pt", "fisher_dpo.pt"),
-    ("GRPO  SNIP vs CAV  ", "snip_grpo.pt",   "cav_grpo.pt"),
-    ("GRPO  SNIP vs Fisher","snip_grpo.pt",   "fisher_grpo.pt"),
+    ("SNIP  GRPO vs DPO  ", bname("GRPO_SNIP_MASK", "snip_grpo.pt"), bname("DPO_SNIP_MASK", "snip_dpo.pt")),
+    ("CAV   GRPO vs DPO  ", bname("GRPO_CAV_MASK", "cav_grpo.pt"), bname("DPO_CAV_MASK", "cav_dpo.pt")),
+    ("Fisher GRPO vs DPO ", bname("GRPO_FISHER_MASK", "fisher_grpo.pt"), bname("DPO_FISHER_MASK", "fisher_dpo.pt")),
+    ("GRPO  SNIP vs CAV  ", bname("GRPO_SNIP_MASK", "snip_grpo.pt"), bname("GRPO_CAV_MASK", "cav_grpo.pt")),
+    ("GRPO  SNIP vs Fisher", bname("GRPO_SNIP_MASK", "snip_grpo.pt"), bname("GRPO_FISHER_MASK", "fisher_grpo.pt")),
 ]
 
 for label, fa, fb in pairs:

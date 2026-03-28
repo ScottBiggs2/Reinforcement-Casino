@@ -1,9 +1,12 @@
 import torch
 import os
 import json
+import sys
 import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_utils import (
     create_mask_from_scores_gpu_efficient,
