@@ -62,6 +62,8 @@ SPARSITY="${SPARSITY:-90.0}"
 MASK_DIR="${MASK_DIR:-masks/grpo_verify}"
 SKIP_DPO="${SKIP_DPO:-0}"
 CPU_THREADS="${CPU_THREADS:-}"
+BATCH_SIZE="${BATCH_SIZE:-1}"
+MAX_LENGTH="${MAX_LENGTH:-256}"
 
 GRPO_SNIP_MASK="$MASK_DIR/snip_grpo.pt"
 GRPO_CAV_MASK="$MASK_DIR/cav_grpo.pt"
@@ -137,6 +139,8 @@ echo "=== [1/6] SNIP GRPO mask ==="
     --mode grpo \
     --n_samples $N_SAMPLES \
     --sparsity $SPARSITY \
+    --batch_size $BATCH_SIZE \
+    --max_length $MAX_LENGTH \
     --output $GRPO_SNIP_MASK
 
 echo ""
@@ -150,6 +154,8 @@ else
         --mode dpo \
         --n_samples $N_SAMPLES \
         --sparsity $SPARSITY \
+        --batch_size $BATCH_SIZE \
+        --max_length $MAX_LENGTH \
         --output $DPO_SNIP_MASK
 fi
 
@@ -164,6 +170,8 @@ echo "=== [3/6] CAV GRPO mask ==="
     --mode grpo \
     --n_samples $N_SAMPLES \
     --sparsity $SPARSITY \
+    --batch_size $BATCH_SIZE \
+    --max_length $MAX_LENGTH \
     --output $GRPO_CAV_MASK
 
 echo ""
@@ -177,6 +185,8 @@ else
         --mode dpo \
         --n_samples $N_SAMPLES \
         --sparsity $SPARSITY \
+        --batch_size $BATCH_SIZE \
+        --max_length $MAX_LENGTH \
         --output $DPO_CAV_MASK
 fi
 
