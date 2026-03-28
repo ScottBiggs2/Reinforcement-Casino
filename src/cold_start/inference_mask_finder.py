@@ -94,11 +94,9 @@ def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
     """Load problem/solution pairs from a GRPO-format dataset.
 
     Returns (positive_texts, negative_texts) where:
-      - positive_texts: prompt_i + solution_i  (matched pair)
-      - negative_texts: prompt_i + solution_{i+1 mod N}  (mismatched pair)
+      - positive_texts: prompt + solution  (model should be most engaged here)
+      - negative_texts: prompt alone       (used as the 'negative' for CAV probes)
 
-    Both classes have equal-length, full texts so the CAV probe learns
-    reasoning-content differences rather than sequence-length differences.
     For SNIP/Fisher only positive_texts are used.
     """
     print(f"[GRPO mode] Loading {n_samples} calibration samples from {dataset_name}...")
@@ -119,11 +117,11 @@ def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
             f"Tried inputs={INPUT_CANDIDATES}, outputs={OUTPUT_CANDIDATES}."
         )
 
-    prompts   = []
-    solutions = []
+    positive_texts = []
+    negative_texts = []
 
     for rec in raw:
-        if len(prompts) >= n_samples:
+        if len(positive_texts) >= n_samples:
             break
 
         prompt   = str(rec.get(input_col,  "") or "").strip()
@@ -132,18 +130,11 @@ def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
         if not prompt or not solution:
             continue
 
-        prompts.append(prompt)
-        solutions.append(solution)
+        positive_texts.append(prompt + "\n" + solution)
+        negative_texts.append(prompt)  # prompt-only as the CAV negative class
 
-    n = len(prompts)
-    # Positive: prompt_i + matched solution_i
-    positive_texts = [prompts[i] + "\n" + solutions[i] for i in range(n)]
-    # Negative: prompt_i + mismatched solution_{i+1 mod n}
-    # Both are full-length texts; CAV learns reasoning content, not length.
-    negative_texts = [prompts[i] + "\n" + solutions[(i + 1) % n] for i in range(n)]
-
-    print(f"  Loaded {n} positive (prompt+matched solution) / "
-          f"{n} negative (prompt+mismatched solution) samples.")
+    print(f"  Loaded {len(positive_texts)} positive (prompt+solution) / "
+          f"{len(negative_texts)} negative (prompt-only) samples.")
     return positive_texts, negative_texts
 
 
