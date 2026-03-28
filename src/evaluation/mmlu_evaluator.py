@@ -17,6 +17,8 @@ except ImportError:
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from evaluation.model_args_utils import build_lm_eval_model_args_parts
+
 # Benchmark-specific imports are moved inside functions to prevent dependency issues 
 # from crashing the entire suite.
 
@@ -177,9 +179,12 @@ def evaluate_mmlu(
     if model_path.startswith("pretrained="):
         clean_model_path = model_path.replace("pretrained=", "", 1)
         
-    base_model_args_parts = [f"pretrained={clean_model_path}", f"dtype={dtype_str}"]
-    if trust_remote_code:
-        base_model_args_parts.append("trust_remote_code=True")
+    base_model_args_parts = build_lm_eval_model_args_parts(
+        model_path=clean_model_path,
+        dtype_str=dtype_str,
+        backend=model,
+        trust_remote_code=trust_remote_code,
+    )
     
     # vLLM robustness flags
     if model == "vllm":
