@@ -185,7 +185,7 @@ def create_mask_from_scores_gpu_efficient(
         cursor += n
 
     all_scores = torch.cat(flat_chunks, dim=0)
-    all_scores = torch.nan_to_num(all_scores, nan=0.0, posinf=0.0, neginf=0.0)
+    torch.nan_to_num_(all_scores, nan=0.0, posinf=0.0, neginf=0.0)
 
     if add_tie_break_noise:
         # Very small jitter for deterministic tie-breaking when many scores are equal.
@@ -193,7 +193,10 @@ def create_mask_from_scores_gpu_efficient(
         all_scores = all_scores + torch.randn_like(all_scores) * scale
         print(f"Applied tie-break noise (scale={scale:.3e})")
 
-    global_mask_flat = torch.zeros_like(all_scores, dtype=torch.float32)
+    # Use bool workspace for the global mask to avoid paying float32 memory costs
+    # for what is semantically binary state. Masks are converted back to float32
+    # when saved so downstream code keeps the same on-disk format.
+    global_mask_flat = torch.zeros_like(all_scores, dtype=torch.bool)
 
     # Optional per-layer minimum keep floor.
     floor_selected = 0
@@ -226,7 +229,7 @@ def create_mask_from_scores_gpu_efficient(
                 continue
             layer_scores = all_scores[start:end]
             local_idx = _topk_indices_safe(layer_scores, k=local_floor, largest=True)
-            global_mask_flat[start:end][local_idx] = 1.0
+            global_mask_flat[start:end][local_idx] = True
             floor_selected += int(local_floor)
 
         print(f"Per-layer floor selected: {floor_selected:,} parameters")
@@ -234,11 +237,10 @@ def create_mask_from_scores_gpu_efficient(
     # Fill remaining budget via exact global top-k among unselected positions.
     remaining = keep_count - floor_selected
     if remaining > 0:
-        # Exclude already selected floor positions by setting scores to -inf.
-        candidate_scores = all_scores.clone()
-        candidate_scores[global_mask_flat > 0] = float("-inf")
-        keep_indices = _topk_indices_safe(candidate_scores, k=remaining, largest=True)
-        global_mask_flat[keep_indices] = 1.0
+        # Exclude already selected floor positions in-place to avoid a full clone.
+        all_scores[global_mask_flat] = float("-inf")
+        keep_indices = _topk_indices_safe(all_scores, k=remaining, largest=True)
+        global_mask_flat[keep_indices] = True
 
     masks = {}
     total_kept = 0
@@ -248,7 +250,7 @@ def create_mask_from_scores_gpu_efficient(
             print(f"  Processing layer {idx+1}/{len(offsets)}")
         m = global_mask_flat[start:end].reshape(shape)
         total_kept += int(m.sum().item())
-        masks[name] = m.cpu()
+        masks[name] = m.to(dtype=torch.float32).cpu()
 
     # Pass through empty entries (if any) as all-zero masks to preserve keys.
     for name, score in scores_dict.items():
