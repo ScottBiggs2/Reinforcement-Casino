@@ -92,7 +92,61 @@ src/cold_start/
     └── snip_scorer.py         # Gradient scorer
 ```
 
+---
+
+## Extension: GRPO Mode for CAV and SNIP
+
+### Motivation
+
+The original CAV and SNIP formulations assume **contrastive pairs** (DPO: chosen vs. rejected). GRPO datasets (e.g., `open-r1/OpenR1-Math-220k`) contain only single-sequence (problem, solution) pairs with no explicit negative response. A naïve adaptation — using `prompt` alone as the negative — causes **rank collapse** in the resulting masks.
+
+### Why Prompt-Only Negatives Fail
+
+When positive = `prompt + solution` and negative = `prompt`:
+
+- The linear CAV classifier walks a trivial shortcut: predict positive iff sequence is long.
+- All gradients for SNIP point in the same direction (last-token prediction), so the Fisher-style score matrix is approximately rank-1: $\sum_i g_i g_i^\top \approx \lambda v v^\top$.
+- After global thresholding, the mask selects a single dominant row/column per layer → **effective rank ≈ 0** across all layers.
+
+This matches the empirical observation: `erank_a_norm` (GRPO) ≈ 0 vs. `erank_b_norm` (DPO) ≈ 0.7–0.8 in the per-layer plots.
+
+### Fix: Mismatched-Solution Negatives
+
+Construct negatives as **prompt_i + solution_{(i+1) mod N}** — a full-length text where the solution is from a *different* problem.
+
+| | Positive | Negative |
+|---|---|---|
+| DPO | prompt + chosen response | prompt + rejected response |
+| GRPO (naïve) | prompt + solution | prompt only |
+| GRPO (fixed) | prompt_i + solution_i | prompt_i + solution_{i+1 mod N} |
+
+**Effect**: Both classes are full-length sequences; the CAV probe must learn which weights encode *reasoning coherence* (solution semantically answers the prompt) rather than *sequence existence*. This breaks the rank-1 degeneracy and recovers multi-dimensional score structure.
+
+**Theoretical grounding**: This follows the hard-negative principle in contrastive representation learning — negatives should be semantically close (same format, similar length) but wrong in the dimension of interest (Chen et al., 2020; Kalantidis et al., 2020). Length-matched negatives prevent the probe from using surface statistics as a shortcut.
+
+### SNIP in GRPO Mode
+
+For SNIP, only `positive_texts` (prompt + solution) are used — the loss is a standard causal LM loss over the solution tokens. The key difference from DPO-SNIP:
+
+- **DPO-SNIP loss**: $\mathcal{L}_\text{DPO}(\text{chosen}, \text{rejected})$ — contrastive, score matrix is full-rank because gradients from two sequences cancel partially.
+- **GRPO-SNIP loss**: $\mathcal{L}_\text{CE}(\text{prompt} + \text{solution})$ — single-sequence cross-entropy; gradients are aligned across samples, increasing rank-collapse risk.
+
+Mitigation already in place: per-weight magnitude mixing (`score = snip_score * |weight|`) at [cav_cold_mask_finder.py:299–302](inference_mask_finder.py) prevents purely broadcast scores. The mismatched-negative fix is CAV-specific; SNIP in GRPO mode is less affected but may still benefit from a diverse calibration set.
+
+### Empirical Validation
+
+After applying the mismatched-negative fix, rerun the mask generation pipeline and check:
+1. `erank_a_norm` (GRPO CAV) should rise from ≈0 to >0.3.
+2. Per-layer Jaccard between GRPO and DPO CAV masks should remain in the 0.15–0.35 range (structurally similar but not identical — expected given different task distributions).
+
+---
+
 ## References
-- **CAV**: *Interpretability Beyond Feature Attribution* (Kim et al., 2018)
-- **SNIP**: *SNIP: Single-shot Network Pruning based on Connection Sensitivity* (Lee et al., 2018)
-- **ROME**: *Locating and Editing Factual Associations in GPT* (Meng et al., 2022)
+- **CAV**: *Interpretability Beyond Feature Attribution* — Kim et al., ICML 2018. [arXiv:1711.11279](https://arxiv.org/abs/1711.11279)
+- **SNIP**: *SNIP: Single-shot Network Pruning based on Connection Sensitivity* — Lee et al., ICLR 2019. [arXiv:1810.02340](https://arxiv.org/abs/1810.02340)
+- **ROME**: *Locating and Editing Factual Associations in GPT* — Meng et al., NeurIPS 2022. [arXiv:2202.05262](https://arxiv.org/abs/2202.05262)
+- **GRPO**: *DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models* — Shao et al., 2024. [arXiv:2402.03300](https://arxiv.org/abs/2402.03300)
+- **CAV for LLM Control**: *Controlling Large Language Models Through Concept Activation Vectors* — 2025. [arXiv:2501.05764](https://arxiv.org/abs/2501.05764)
+- **SNIP for RL**: *Single-Shot Pruning for Offline Reinforcement Learning* — Arnob, NeurIPS 2021 OfflineRL Workshop. [arXiv:2112.15579](https://arxiv.org/abs/2112.15579)
+- **Hard Negatives**: *Contrastive Learning with Hard Negative Samples* — Robinson et al., ICLR 2021. [arXiv:2010.04592](https://arxiv.org/abs/2010.04592)
+- **Sparse Subnetworks in RL Fine-tuning**: *Reinforcement Learning Finetunes Small Subnetworks in Large Language Models* — 2025. [arXiv:2505.11711](https://arxiv.org/abs/2505.11711)
