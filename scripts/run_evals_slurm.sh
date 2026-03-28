@@ -104,6 +104,7 @@ export HF_ALLOW_CODE_EVAL=1
 # This is critical to prevent "Cannot re-initialize CUDA in forked subprocess"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export CUDA_MODULE_LOADING=LAZY
+export TRANSFORMERS_VERBOSITY=error
 
 # We use the environment's python directly
 echo "DEBUG: Launching run_all_benchmarks.py via $PYTHON_BIN"

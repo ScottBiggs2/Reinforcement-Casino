@@ -8,11 +8,24 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 import multiprocessing
 
-# Saved checkpoints (e.g. sparse DPO) can leave dtype objects in the in-memory
-# PretrainedConfig; at INFO, transformers logs repr(config) which json.dumps
-# and crashes with "Object of type dtype is not JSON serializable". Suppress
-# transformers INFO in this process so that log line is skipped entirely.
-logging.getLogger("transformers").setLevel(logging.WARNING)
+def _suppress_transformers_config_logging() -> None:
+    # Saved checkpoints evaluated through lm-eval can end up calling
+    # AutoConfig.from_pretrained(..., torch_dtype=torch.float16). During config
+    # construction, transformers logs repr(config) at INFO, and repr() tries to
+    # JSON-serialize torch.dtype, which crashes. Use transformers' own verbosity
+    # controls rather than only the stdlib logger so child library loggers obey it.
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    try:
+        from transformers.utils import logging as transformers_logging
+
+        transformers_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+
+_suppress_transformers_config_logging()
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -97,7 +110,14 @@ import traceback
 import inspect
 import logging
 
-logging.getLogger("transformers").setLevel(logging.WARNING)
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("transformers.configuration_utils").setLevel(logging.ERROR)
+try:
+    from transformers.utils import logging as transformers_logging
+    transformers_logging.set_verbosity_error()
+except Exception:
+    pass
 
 sys.path.append({repr(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))})
 
@@ -408,6 +428,10 @@ def print_summary(results: Dict[str, Dict[str, Any]]):
                      print(f"{benchmark_name.upper()}: Could not extract accuracy (check verbose output)")
 
 
+def _has_benchmark_errors(results: Dict[str, Dict[str, Any]]) -> bool:
+    return any(isinstance(benchmark_results, dict) and "error" in benchmark_results for benchmark_results in results.values())
+
+
 if __name__ == "__main__":
     # This MUST be the first thing that happens in the main process
     # to fix the vLLM CUDA conflict when using isolated subprocesses.
@@ -540,3 +564,7 @@ Examples:
     
     # Print summary
     print_summary(results)
+
+    if _has_benchmark_errors(results):
+        print("\nOne or more benchmarks failed.", file=sys.stderr)
+        sys.exit(1)
