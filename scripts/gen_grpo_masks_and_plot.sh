@@ -18,6 +18,14 @@ echo "Node     : $SLURMD_NODENAME"
 echo "Started  : $(date)"
 echo "========================================"
 
+CUDA_LIB=$(dirname "$(find /usr /opt /lib64 /lib -name "libcuda.so.1" 2>/dev/null | head -n1)")
+if [ -n "$CUDA_LIB" ] && [ "$CUDA_LIB" != "." ]; then
+    export LD_LIBRARY_PATH="${CUDA_LIB}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    echo "[gpu] injected libcuda from: $CUDA_LIB"
+else
+    echo "[warn] libcuda.so.1 not found on this node"
+fi
+
 CONDA_SH="/shared/EL9/explorer/miniconda3/24.11.1/miniconda3/etc/profile.d/conda.sh"
 CONDA_ENV_PRIMARY="/scratch/xie.yiyi/conda_envs/rl_casino"
 CONDA_ENV_FALLBACK="/home/xie.yiyi/.conda/envs/rl_casino"
