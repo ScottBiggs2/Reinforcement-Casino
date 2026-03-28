@@ -20,6 +20,7 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `run_masks.sh` - warm/cold/random mask comparison workflow.
 - `run_dpo_and_masks.sh` - DPO + mask generation workflow.
 - `run_mask_diagnostics.sh` - attention masking diagnostic.
+- `submit_gen_grpo_masks_gpu.slurm` - GPU-safe Slurm launcher for GRPO mask generation + plots inside Apptainer/Singularity (`--nv` + CUDA preflight).
 - `install_lm_eval.sh` - installs lm-eval and related dependencies.
 - `run_ablation_*.sh` - targeted ablation workflows.
 
