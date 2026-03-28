@@ -16,7 +16,8 @@ from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_
 from src.cold_start.utils.cav_probes import CAVProbeScorer
 from src.cold_start.utils.snip_scorer import SNIPScorer
 
-DATASET_NAME = "qihoo360/Light-R1-DPOData"
+DPO_DATASET_NAME  = "qihoo360/Light-R1-DPOData"
+GRPO_DATASET_NAME = "open-r1/OpenR1-Math-220k"
 
 
 def set_seed(seed: int):
@@ -37,10 +38,13 @@ def _msg_to_text(x):
     return str(x)
 
 
-def load_calibration_samples(n_samples=64, seed=42):
-    """Load a small chosen/rejected calibration split from the DPO dataset."""
-    print(f"Loading {n_samples} calibration samples from {DATASET_NAME}...")
-    raw = load_dataset(DATASET_NAME, split="train")
+def load_calibration_samples_dpo(dataset_name, n_samples=64, seed=42):
+    """Load chosen/rejected pairs from a DPO-format dataset.
+
+    Returns (chosen_texts, rejected_texts) where each entry is prompt+response.
+    """
+    print(f"[DPO mode] Loading {n_samples} calibration samples from {dataset_name}...")
+    raw = load_dataset(dataset_name, split="train")
     raw = raw.shuffle(seed=seed)
 
     chosen_texts   = []
@@ -53,6 +57,17 @@ def load_calibration_samples(n_samples=64, seed=42):
         prompt_raw   = rec.get("prompt", "")
         chosen_raw   = rec.get("chosen", "")
         rejected_raw = rec.get("rejected", "")
+
+        # Handle nested conversation lists (e.g. Light-R1-DPOData uses 'conversations')
+        if not prompt_raw:
+            convs = rec.get("conversations", [])
+            if isinstance(convs, list):
+                human_parts = [
+                    m.get("value", "") for m in convs
+                    if isinstance(m, dict)
+                    and m.get("from", m.get("role", "")).lower() in ("human", "user", "system")
+                ]
+                prompt_raw = "\n".join(human_parts).strip()
 
         if isinstance(prompt_raw, list):
             prompt = "\n".join(
@@ -74,6 +89,66 @@ def load_calibration_samples(n_samples=64, seed=42):
     print(f"  Loaded {len(chosen_texts)} chosen / {len(rejected_texts)} rejected samples.")
     return chosen_texts, rejected_texts
 
+
+def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
+    """Load problem/solution pairs from a GRPO-format dataset.
+
+    Returns (positive_texts, negative_texts) where:
+      - positive_texts: prompt + solution  (model should be most engaged here)
+      - negative_texts: prompt alone       (used as the 'negative' for CAV probes)
+
+    For SNIP/Fisher only positive_texts are used.
+    """
+    print(f"[GRPO mode] Loading {n_samples} calibration samples from {dataset_name}...")
+    raw = load_dataset(dataset_name, split="train")
+    raw = raw.shuffle(seed=seed)
+
+    INPUT_CANDIDATES  = ["problem", "query", "prompt", "input", "text"]
+    OUTPUT_CANDIDATES = ["solution", "response", "completion", "answer", "output"]
+
+    cols = raw.column_names
+    input_col  = next((c for c in INPUT_CANDIDATES  if c in cols), None)
+    output_col = next((c for c in OUTPUT_CANDIDATES if c in cols), None)
+
+    if input_col is None or output_col is None:
+        raise KeyError(
+            f"Could not find input/output columns in GRPO dataset '{dataset_name}'. "
+            f"Available: {cols}. "
+            f"Tried inputs={INPUT_CANDIDATES}, outputs={OUTPUT_CANDIDATES}."
+        )
+
+    positive_texts = []
+    negative_texts = []
+
+    for rec in raw:
+        if len(positive_texts) >= n_samples:
+            break
+
+        prompt   = str(rec.get(input_col,  "") or "").strip()
+        solution = str(rec.get(output_col, "") or "").strip()
+
+        if not prompt or not solution:
+            continue
+
+        positive_texts.append(prompt + "\n" + solution)
+        negative_texts.append(prompt)  # prompt-only as the CAV negative class
+
+    print(f"  Loaded {len(positive_texts)} positive (prompt+solution) / "
+          f"{len(negative_texts)} negative (prompt-only) samples.")
+    return positive_texts, negative_texts
+
+
+def load_calibration_samples(n_samples=64, seed=42, mode="dpo", dataset_name=None):
+    """Dispatch to the appropriate loader based on training mode."""
+    if mode == "dpo":
+        ds = dataset_name or DPO_DATASET_NAME
+        return load_calibration_samples_dpo(ds, n_samples=n_samples, seed=seed)
+    elif mode == "grpo":
+        ds = dataset_name or GRPO_DATASET_NAME
+        return load_calibration_samples_grpo(ds, n_samples=n_samples, seed=seed)
+    else:
+        raise ValueError(f"Unknown mode '{mode}'. Choose 'dpo' or 'grpo'.")
+
 def save_masks(masks, output_path, metadata=None):
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     save_dict = {"masks": masks}
@@ -94,9 +169,10 @@ def main(args):
 
     compute_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*60}")
-    print(f"Cold-Start Mask Finder  [method={args.method}]")
+    print(f"Cold-Start Mask Finder  [method={args.method}  mode={args.mode}]")
     print(f"{'='*60}")
     print(f"  Model      : {args.model_name}")
+    print(f"  Mode       : {args.mode}")
     print(f"  N samples  : {args.n_samples}")
     print(f"  Sparsity   : {args.sparsity}%")
     print(f"  Output     : {args.output}")
@@ -123,7 +199,10 @@ def main(args):
     print(f"  Model on {next(model.parameters()).device}, dtype={model.dtype}")
     print(f"  Input device: {input_device}")
 
-    chosen_texts, rejected_texts = load_calibration_samples(args.n_samples, seed=args.seed)
+    chosen_texts, rejected_texts = load_calibration_samples(
+        args.n_samples, seed=args.seed, mode=args.mode, dataset_name=args.dataset_name,
+    )
+    effective_dataset = args.dataset_name or (DPO_DATASET_NAME if args.mode == "dpo" else GRPO_DATASET_NAME)
 
     if args.method == "cav":
         extractor = FeatureExtractor()
@@ -157,7 +236,7 @@ def main(args):
             "model_name": args.model_name,
             "n_samples": args.n_samples,
             "sparsity_percent": args.sparsity,
-            "dataset": DATASET_NAME,
+            "dataset": effective_dataset,
             "seed": args.seed,
             "mag_weight": args.mag_weight,
             "local_pool": args.local_pool,
@@ -177,7 +256,7 @@ def main(args):
             "model_name": args.model_name,
             "n_samples": args.n_samples,
             "sparsity_percent": args.sparsity,
-            "dataset": DATASET_NAME,
+            "dataset": effective_dataset,
             "seed": args.seed,
         }
 
@@ -198,8 +277,24 @@ if __name__ == "__main__":
         "--method", type=str, default="cav", choices=["cav", "snip"],
         help="Scoring method: cav (linear probes) or snip (gradient saliency)",
     )
+    parser.add_argument(
+        "--mode", type=str, default="dpo", choices=["dpo", "grpo"],
+        help=(
+            "Training mode: 'dpo' loads chosen/rejected pairs from a DPO dataset; "
+            "'grpo' loads prompt+solution pairs from a GRPO dataset (prompt-only used as "
+            "the CAV negative class)."
+        ),
+    )
+    parser.add_argument(
+        "--dataset_name", type=str, default=None,
+        help=(
+            "HuggingFace dataset to use for calibration. "
+            f"Defaults to '{DPO_DATASET_NAME}' in dpo mode and "
+            f"'{GRPO_DATASET_NAME}' in grpo mode."
+        ),
+    )
     parser.add_argument("--n_samples", type=int, default=64,
-                        help="Number of calibration DPO pairs")
+                        help="Number of calibration pairs")
     parser.add_argument("--sparsity", type=float, default=90.0,
                         help="Target sparsity %%: percentage of weights zeroed out")
     parser.add_argument("--output", type=str, default="masks/cold_start_cav_90pct.pt",

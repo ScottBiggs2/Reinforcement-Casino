@@ -48,63 +48,86 @@ def sanitize_model_name(model_name: str) -> str:
     return sanitized.strip("_")
 
 
-def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512, device="cuda"):
+DPO_DATASET_DEFAULT  = "qihoo360/Light-R1-DPOData"
+GRPO_DATASET_DEFAULT = "open-r1/OpenR1-Math-220k"
+
+_GRPO_INPUT_CANDIDATES  = ["problem", "query", "prompt", "input", "text"]
+_GRPO_OUTPUT_CANDIDATES = ["solution", "response", "completion", "answer", "output"]
+
+
+def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512,
+                          device="cuda", mode="dpo"):
     """
-    Load a small calibration set from the task DPO dataset.
+    Load a small calibration set for Fisher scoring.
     Returns a list of encoded dicts with input_ids, attention_mask, and labels
     (prompt tokens masked to -100, response tokens used for loss).
 
-    Dataset schema (qihoo360/Light-R1-DPOData):
-        'conversations': list of {"from": "human"|"gpt", "value": str}
-        'chosen':        dict  {"from": "gpt", "value": str}
-        'rejected':      dict  {"from": "gpt", "value": str}
-    The prompt is the human turn(s) from 'conversations'; chosen is the response.
+    mode='dpo': expects qihoo360/Light-R1-DPOData schema
+        conversations → prompt, chosen → response
+    mode='grpo': expects open-r1/OpenR1-Math-220k schema
+        problem/prompt → prompt, solution/response → response
     """
-    print(f"Loading calibration data from {dataset_name} ({n_samples} samples)...")
+    print(f"Loading calibration data from {dataset_name} ({n_samples} samples, mode={mode})...")
     ds = load_dataset(dataset_name, split="train")
-    ds = ds.select(range(min(n_samples, len(ds))))
+    ds = ds.shuffle(seed=42).select(range(min(n_samples, len(ds))))
 
-    def extract_prompt(rec):
-        """Extract the human/user prompt from the conversations field."""
-        convs = rec.get("conversations", None)
-        if convs and isinstance(convs, list):
-            human_parts = [
-                m["value"] for m in convs
-                if isinstance(m, dict)
-                and m.get("from", m.get("role", "")).lower() in ("human", "user", "system")
-                and "value" in m
-            ]
-            if human_parts:
-                return "\n".join(human_parts).strip()
-        # Fallback: try the 'prompt' column (other datasets)
-        prompt_raw = rec.get("prompt", "")
-        if isinstance(prompt_raw, str):
-            return prompt_raw.strip()
-        return ""
+    if mode == "dpo":
+        def extract_prompt(rec):
+            convs = rec.get("conversations", None)
+            if convs and isinstance(convs, list):
+                human_parts = [
+                    m["value"] for m in convs
+                    if isinstance(m, dict)
+                    and m.get("from", m.get("role", "")).lower() in ("human", "user", "system")
+                    and "value" in m
+                ]
+                if human_parts:
+                    return "\n".join(human_parts).strip()
+            prompt_raw = rec.get("prompt", "")
+            if isinstance(prompt_raw, str):
+                return prompt_raw.strip()
+            return ""
 
-    def extract_chosen(rec):
-        """Extract the preferred response text."""
-        chosen = rec.get("chosen", "")
-        if isinstance(chosen, dict):
-            return chosen.get("value", "").strip()
-        if isinstance(chosen, str):
-            return chosen.strip()
-        if isinstance(chosen, list):
-            # list of message dicts — take any gpt/assistant turn
-            parts = [m["value"] for m in chosen if isinstance(m, dict) and "value" in m]
-            return "\n".join(parts).strip()
-        return ""
+        def extract_response(rec):
+            chosen = rec.get("chosen", "")
+            if isinstance(chosen, dict):
+                return chosen.get("value", "").strip()
+            if isinstance(chosen, str):
+                return chosen.strip()
+            if isinstance(chosen, list):
+                parts = [m["value"] for m in chosen if isinstance(m, dict) and "value" in m]
+                return "\n".join(parts).strip()
+            return ""
+
+    elif mode == "grpo":
+        cols = ds.column_names
+        input_col  = next((c for c in _GRPO_INPUT_CANDIDATES  if c in cols), None)
+        output_col = next((c for c in _GRPO_OUTPUT_CANDIDATES if c in cols), None)
+        if input_col is None or output_col is None:
+            raise KeyError(
+                f"Could not find input/output columns in GRPO dataset '{dataset_name}'. "
+                f"Available: {cols}."
+            )
+
+        def extract_prompt(rec):
+            return str(rec.get(input_col, "") or "").strip()
+
+        def extract_response(rec):
+            return str(rec.get(output_col, "") or "").strip()
+
+    else:
+        raise ValueError(f"Unknown mode '{mode}'. Choose 'dpo' or 'grpo'.")
 
     pairs = []
     for rec in ds:
-        prompt_text = extract_prompt(rec)
-        chosen_text = extract_chosen(rec)
+        prompt_text   = extract_prompt(rec)
+        response_text = extract_response(rec)
 
-        if not prompt_text or not chosen_text:
+        if not prompt_text or not response_text:
             continue
 
         # Encode the full prompt+response sequence with response-only labels
-        full_text = prompt_text + " " + chosen_text
+        full_text = prompt_text + " " + response_text
         full_enc = tokenizer(
             full_text, return_tensors="pt", truncation=True, max_length=max_length,
         )
@@ -112,7 +135,7 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
             prompt_text, return_tensors="pt", truncation=True, max_length=max_length,
         )
 
-        # Mask prompt tokens so loss is computed only over the chosen response
+        # Mask prompt tokens so loss is computed only over the response
         prompt_len = prompt_enc["input_ids"].shape[1]
         labels = full_enc["input_ids"].clone()
         labels[0, :prompt_len] = -100
@@ -123,7 +146,7 @@ def load_calibration_data(dataset_name, tokenizer, n_samples=512, max_length=512
             "labels": labels.to(device),
         })
 
-    print(f"  Loaded {len(pairs)} calibration (prompt, chosen) pairs")
+    print(f"  Loaded {len(pairs)} calibration (prompt, response) pairs")
     return pairs
 
 
@@ -263,7 +286,11 @@ def main(args):
     device = "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     print(f"Using device: {device}")
 
-    print(f"\nLoading model: {args.model_name}")
+    # Resolve the effective dataset name from mode if not explicitly provided
+    if args.dataset_name is None:
+        args.dataset_name = DPO_DATASET_DEFAULT if args.mode == "dpo" else GRPO_DATASET_DEFAULT
+
+    print(f"\nLoading model: {args.model_name}  [mode={args.mode}, dataset={args.dataset_name}]")
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         torch_dtype=torch.bfloat16,
@@ -282,6 +309,7 @@ def main(args):
         n_samples=args.n_calibration_samples,
         max_length=args.max_length,
         device=device,
+        mode=args.mode,
     )
 
     fisher_scores = compute_fisher_scores(
@@ -316,6 +344,7 @@ def main(args):
 
     metadata = {
         "method": "fisher_cold_start_v2",
+        "mode": args.mode,
         "model_name": args.model_name,
         "dataset_name": args.dataset_name,
         "sparsity_percent": args.sparsity_percent,
@@ -348,7 +377,16 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Improved Fisher Information cold-start mask generation")
     parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
-    parser.add_argument("--dataset_name", type=str, default="qihoo360/Light-R1-DPOData")
+    parser.add_argument(
+        "--mode", type=str, default="dpo", choices=["dpo", "grpo"],
+        help=(
+            "Training mode: 'dpo' uses chosen responses from a DPO dataset; "
+            "'grpo' uses solutions from a GRPO dataset (e.g. OpenR1-Math-220k). "
+            f"Default dataset is '{DPO_DATASET_DEFAULT}' for dpo, '{GRPO_DATASET_DEFAULT}' for grpo."
+        ),
+    )
+    parser.add_argument("--dataset_name", type=str, default=None,
+                        help="Override the default dataset for the chosen mode.")
     parser.add_argument("--sparsity_percent", type=float, default=90.0)
     parser.add_argument("--n_calibration_samples", type=int, default=256,
                         help="Number of calibration examples. 128-512 is usually sufficient.")
