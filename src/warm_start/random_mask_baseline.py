@@ -2,6 +2,9 @@ import torch
 import os
 import argparse
 import json
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
@@ -69,7 +72,9 @@ def generate_random_mask(
         torch.manual_seed(seed)
         print(f"  Random seed: {seed}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Random masks do not benefit from GPU residency; keep generation on CPU so the
+    # exact selector path stays aligned with the other large-model mask builders.
+    device = "cpu"
 
     # Draw uniform random scores -- no task signal whatsoever
     scores = {name: torch.rand_like(mask.float()) for name, mask in reference_masks.items()}

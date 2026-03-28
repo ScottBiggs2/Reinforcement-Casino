@@ -29,8 +29,8 @@ This is a draft for internal research planning, not a polished paper section.
 The most important structural fact is this:
 
 - Most mask methods are only "streaming" in the **score accumulation** phase.
-- They are **not streaming in the global selection phase**.
-- The final global pooling step still materializes a flattened score vector over all scored weights in `create_mask_from_scores_gpu_efficient()`.
+- The repo now has an **exact chunked global selection phase** for large models, but some callers can still be limited by how scores are accumulated before selection.
+- The core methodological distinction remains: **exact global competition** versus **regional/blockwise approximations**.
 
 So the dominant bottleneck for scale is no longer "how do we compute scores?" but:
 
@@ -40,21 +40,21 @@ Where:
 
 - `P` = total number of scored weight elements across all selected matrices.
 
-Current global pooling is exact, but expensive:
+Current large-model global pooling is exact, but chunked:
 
-- It builds `all_scores = torch.cat(flat_chunks)`.
-- It allocates `global_mask_flat`.
-- It may allocate `candidate_scores = all_scores.clone()`.
-- It then runs `topk`.
+- It reserves any per-tensor floor locally.
+- It refines a global score interval with repeated histogram passes over score chunks.
+- It materializes only the narrowed boundary candidate set exactly.
+- It then writes per-layer masks directly.
 
-This means that even if score accumulation is streamed across checkpoints or minibatches, the final exact mask construction still needs several additional `O(P)` buffers.
+This means the selector no longer needs to materialize one monolithic flattened score vector for large `P`, even though it still does multiple full passes over the scores.
 
 The current code is therefore:
 
 - conceptually correct for global pooling,
-- operationally brittle at large scale,
+- operationally much safer at large scale,
 - especially vulnerable for warm momentum and any full-model setting,
-- and still inconsistent across some helper/random utilities.
+- and still inconsistent across some helper utilities.
 
 ---
 
@@ -107,7 +107,6 @@ Optional alternate behaviors:
 
 ### Methods not using the shared path
 
-- `src/cold_start/utils/snip_scorer.py::scores_to_masks()`
 - `src/cold_start/utils/cav_probes.py::scores_to_masks()`
 
 These helper paths still implement their own thresholding logic.
@@ -120,31 +119,31 @@ These helper paths still implement their own thresholding logic.
 
 In `create_mask_from_scores_gpu_efficient()`:
 
-1. Convert all score tensors to `float32` on the target device.
-2. Collect views of every tensor as 1D chunks.
-3. Concatenate into one giant `all_scores`.
-4. Optionally add tiny tie-break noise.
-5. Allocate `global_mask_flat`.
-6. Optionally reserve per-layer floor positions.
-7. Clone scores into `candidate_scores` and run global `topk`.
-8. Scatter selected indices into `global_mask_flat`.
-9. Slice masks back into per-layer tensors and move them to CPU.
+1. Convert score tensors to `float32`.
+2. For small `P`, use the original flat exact path.
+3. For large `P`, move scores to CPU and optionally add tiny tie-break noise.
+4. Reserve any per-layer floor positions tensor-by-tensor.
+5. Run an exact chunked threshold refinement pass over score chunks.
+6. Gather only the final boundary candidates exactly.
+7. Materialize per-layer masks directly and save them in the same float32 on-disk format.
 
 ### Time complexity
 
 - Score normalization / device transfer: `O(P)`
-- Flatten and concatenate: `O(P)`
-- Top-k selection: backend-dependent, but at least `Omega(P)` data movement
+- Flat path concatenate: `O(P)`
+- Chunked path histogram refinement: `O(RP)` where `R` is the number of refinement passes
+- Final exact boundary top-k: `O(C) + topk(C, K_b)` where `C` is the narrowed candidate set
 - Reconstruct per-layer masks: `O(P)`
 
 Overall:
 
-- **Time**: `O(P) + topk(P, K)`
-- In practice, the dominant work is memory traffic and the selection kernel.
+- Flat path: `O(P) + topk(P, K)`
+- Chunked exact path: `O(RP) + topk(C, K_b)`
+- In practice, the dominant work is still memory traffic, but the large-model path trades one huge allocation spike for several sequential scans.
 
 ### Peak memory complexity
 
-Ignoring Python container overhead, the global path can require:
+Ignoring Python container overhead, the flat path can require:
 
 - existing score storage: `O(P)`
 - `all_scores`: `O(P)`
@@ -157,15 +156,24 @@ So the global selection stage alone can transiently cost roughly:
 - **device**: about `3P` extra float32 elements beyond the stored score tensors
 - **host**: `O(P)` once masks are copied out
 
-This is the key systems bottleneck in the current design.
+This was the key systems bottleneck in the original design.
+
+For the chunked exact path:
+
+- score storage: `O(P)`
+- per-layer floor indices: `O(F)` where `F` is the total floor reservation
+- per-layer boolean masks on CPU: `O(P)`
+- narrowed boundary candidates: `O(C)`
+
+So the selector no longer needs extra `O(P)` flattened score buffers on top of the stored scores.
 
 ### Robustness status
 
-The code now includes `_topk_indices_safe()` with a CPU fallback for very large CUDA tensors. That is a good safety improvement, but it does **not** reduce algorithmic memory pressure. It only avoids one class of CUDA failure.
+The code now includes `_topk_indices_safe()` with a CPU fallback for very large CUDA tensors, and the large-model selector itself is CPU-first and chunked. That avoids both the old CUDA `topk` failure mode and the monolithic flat-vector allocation.
 
 ### Key limitation
 
-This function is "exact global" but not "streaming global."
+This function is now "exact global" and "chunked global," but it is still not single-pass streaming because exactness requires multiple scans over the score tensors.
 
 ---
 
@@ -179,7 +187,7 @@ All warm methods live in `src/warm_start/even_better_mask_finder.py`.
 
 For each delta checkpoint:
 
-- load deltas to device,
+- load deltas on the score-accumulation device,
 - accumulate `abs(delta)` into `aggregated[name]`,
 - discard checkpoint tensor,
 - after all checkpoints, run exact global pooling on `aggregated`.
@@ -205,15 +213,17 @@ Transient during each checkpoint:
 
 Transient during final global pooling:
 
-- roughly `+3P` float32 elements on device from the shared global path
+- flat path: roughly `+3P` float32 elements
+- chunked path: `O(C)` boundary candidates plus per-layer masks on CPU
 
 So peak memory is effectively:
 
-- **Device**: about `O(P)` during accumulation, then roughly `O(4P)` at final selection
+- **Score device**: `O(P)` during accumulation
+- **Selector**: no extra flattened `O(P)` score vector on the chunked path
 
 ### Assessment
 
-This is a reasonable score-computation design, but it is not truly streaming end-to-end because the global threshold stage still materializes the full model score vector.
+This is a reasonable score-computation design. It is still not fully streaming end-to-end, but the selector no longer needs a monolithic flattened score vector on large models.
 
 ---
 

@@ -312,7 +312,7 @@ python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --check
 - **`--delta_log_dir`** — Must match the delta log dir produced by `DPO_train.py` for the same model. Format: `./delta_logs_{sanitized}/` where `{sanitized}` is the model name with slashes/dashes lowercased and replaced by underscores (e.g. `./delta_logs_google_gemma_3_270m_it`).
 - **`--target_step`** — Step at which to compute the mask. Must be a step where DPO_train saved deltas (default schedule: 10, 20, 30, 40, 100, 150, 200). Omit to use all available steps up to the latest.
 
-**Mask pooling (defaults):** Warm/cold paths that call `create_mask_from_scores_gpu_efficient` now use **hybrid global pooling** by default — one global ranking over all scored weights plus a small per-tensor keep floor (`min_layer_keep_ratio=0.0025`, metadata `pooling_mode`: `"global_with_layer_floor"`). Pass **`--min_layer_keep_ratio 0.0`** for pure global masking (`"global"`). Use **`--local_pool`** for **per-weight-matrix** top-k (`"local_per_tensor"`); local pooling ignores the floor by construction. Both **`src/warm_start/random_mask_baseline.py`** and **`src/utils/generate_random_mask.py`** are aligned with the same hybrid-global semantics. For very large models, see `pooling_metadata()` and comments in `src/utils/mask_utils.py` (CPU top-k fallback; future chunked/threshold strategies).
+**Mask pooling (defaults):** Warm/cold paths that call `create_mask_from_scores_gpu_efficient` now use **hybrid global pooling** by default — one global ranking over all scored weights plus a small per-tensor keep floor (`min_layer_keep_ratio=0.0025`, metadata `pooling_mode`: `"global_with_layer_floor"`). Pass **`--min_layer_keep_ratio 0.0`** for pure global masking (`"global"`). Use **`--local_pool`** for **per-weight-matrix** top-k (`"local_per_tensor"`); local pooling ignores the floor by construction. Both **`src/warm_start/random_mask_baseline.py`** and **`src/utils/generate_random_mask.py`** are aligned with the same hybrid-global semantics. Large global/hybrid masks now use an **exact chunked CPU-first selector** instead of flattening the full model into one giant score vector, so they preserve global-competition semantics without the previous `torch.cat(...)->topk(...)` memory spike.
 
 Script: `src/warm_start/even_better_mask_finder.py`.
 
@@ -383,9 +383,9 @@ python src/cold_start/cav_cold_mask_finder.py \
 ```
 *Output:* `masks/cold_cav_google_gemma_3_270m_it_sparsity95.0pct.pt` — *Optional:* add `--mlp_only` for MLP-only masks.
 
-### Hybrid mask verification
+### Chunked mask verification
 
-For a fast selector-level sanity check without model artifacts:
+For a fast selector-level sanity check without model artifacts, including flat-vs-chunked agreement on small tensors:
 
 ```bash
 python src/analysis/verify_hybrid_mask_selector.py
@@ -400,10 +400,16 @@ DELTA_LOG_DIR=/path/to/delta_logs_model sbatch scripts/run_mask_smoke.sh
 
 That smoke script:
 
+- forces the exact chunked selector path, even on small smoke inputs
 - runs the selector sanity check
 - builds one warm magnitude mask with the default floor and one pure-global control
 - builds one cold Fisher mask with the default floor and one pure-global control
 - writes outputs to `masks/smoke/`
+
+Useful smoke env knobs:
+
+- `RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL=1` forces the chunked selector on every run.
+- `RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu` keeps warm-score accumulation off GPU.
 
 The main runner scripts under `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly for reproducibility. Set that variable to `0.0` in a script if you want legacy pure-global behavior.
 

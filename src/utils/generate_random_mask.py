@@ -3,7 +3,10 @@ import torch.nn as nn
 import argparse
 import os
 import json
+import sys
 from transformers import AutoModelForCausalLM
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,

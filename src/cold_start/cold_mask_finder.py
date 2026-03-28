@@ -2,8 +2,11 @@ import torch
 import os
 import json
 import argparse
+import sys
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
@@ -12,6 +15,47 @@ from src.utils.mask_utils import (
     pooling_metadata,
     save_masks,
 )
+
+
+def summarize_scores(scores):
+    total_numel = 0
+    total_sum = 0.0
+    total_sq = 0.0
+    global_min = None
+    global_max = None
+    nonzero = 0
+
+    for score in scores.values():
+        s = score.detach().float().reshape(-1).cpu()
+        if s.numel() == 0:
+            continue
+        total_numel += s.numel()
+        total_sum += float(s.sum().item())
+        total_sq += float((s * s).sum().item())
+        nonzero += int((s != 0).sum().item())
+        local_min = float(s.min().item())
+        local_max = float(s.max().item())
+        global_min = local_min if global_min is None else min(global_min, local_min)
+        global_max = local_max if global_max is None else max(global_max, local_max)
+
+    if total_numel == 0:
+        return {
+            "min": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+            "nonzero_fraction": 0.0,
+        }
+
+    mean = total_sum / total_numel
+    variance = max(total_sq / total_numel - mean * mean, 0.0)
+    return {
+        "min": global_min,
+        "max": global_max,
+        "mean": mean,
+        "std": variance ** 0.5,
+        "nonzero_fraction": nonzero / total_numel,
+    }
 
 # ============================================================
 # Fisher Information Cold-Start Mask Finder
@@ -250,13 +294,13 @@ def compute_fisher_scores(
                 fisher_scores[name] = torch.zeros_like(s)
 
     # Summary stats
-    all_scores = torch.cat([s.flatten() for s in fisher_scores.values()])
+    stats = summarize_scores(fisher_scores)
     print(f"  Fisher score stats (after normalization):")
-    print(f"    min:  {all_scores.min().item():.6e}")
-    print(f"    max:  {all_scores.max().item():.6e}")
-    print(f"    mean: {all_scores.mean().item():.6e}")
-    print(f"    std:  {all_scores.std().item():.6e}")
-    print(f"    nonzero fraction: {(all_scores != 0).float().mean().item():.4f}")
+    print(f"    min:  {stats['min']:.6e}")
+    print(f"    max:  {stats['max']:.6e}")
+    print(f"    mean: {stats['mean']:.6e}")
+    print(f"    std:  {stats['std']:.6e}")
+    print(f"    nonzero fraction: {stats['nonzero_fraction']:.4f}")
 
     return fisher_scores
 
