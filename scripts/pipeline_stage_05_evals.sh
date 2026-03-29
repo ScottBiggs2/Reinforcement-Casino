@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --time=01:00:00
 #SBATCH --job-name=pipe_p5_eval
-#SBATCH --mem=8G
+#SBATCH --mem=32G
 #SBATCH --ntasks=1
 #SBATCH --output=logs/pipeline_%j_p5_eval.out
 #SBATCH --error=logs/pipeline_%j_p5_eval.err
