@@ -14,6 +14,7 @@ import traceback
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from evaluation.chat_template_utils import auto_detect_apply_chat_template
 from evaluation.model_args_utils import build_lm_eval_model_args_parts
 
 try:
@@ -28,17 +29,6 @@ try:
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
-
-
-def _has_chat_template(model_path: str) -> bool:
-    """Check if a model has a chat template by inspecting its tokenizer config."""
-    if not TRANSFORMERS_AVAILABLE:
-        return False
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        return tokenizer.chat_template is not None
-    except Exception:
-        return False
 
 
 def markdown_code_filter(responses: List[str]) -> List[str]:
@@ -146,17 +136,11 @@ def evaluate_coding(
     else:
         dtype_str = str(dtype).replace("torch.", "")
     
-    # Auto-apply chat templates
-    if apply_chat_template is None:
-        lower_path = model_path.lower()
-        # Common keywords for instruct/chat models
-        instruct_keywords = ["instruct", "chat", "-it", "-int", "dpo", "rlhf"]
-        path_has_instruct = any(keyword in lower_path for keyword in instruct_keywords)
-        
-        if os.path.exists(model_path):
-            apply_chat_template = path_has_instruct or _has_chat_template(model_path)
-        else:
-            apply_chat_template = path_has_instruct
+    apply_chat_template = auto_detect_apply_chat_template(
+        model_path,
+        explicit_value=apply_chat_template,
+        verbose=verbose,
+    )
     
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)

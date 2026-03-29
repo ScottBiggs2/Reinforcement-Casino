@@ -11,6 +11,7 @@ import torch
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from evaluation.model_args_utils import build_lm_eval_model_args_parts
+from evaluation.chat_template_utils import auto_detect_apply_chat_template
 
 try:
     from lm_eval import simple_evaluate
@@ -24,17 +25,6 @@ try:
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
-
-
-def _has_chat_template(model_path: str) -> bool:
-    """Check if a model has a chat template by inspecting its tokenizer config."""
-    if not TRANSFORMERS_AVAILABLE:
-        return False
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        return tokenizer.chat_template is not None
-    except Exception:
-        return False
 
 
 def evaluate_gpqa_diamond(
@@ -113,42 +103,13 @@ def evaluate_gpqa_diamond(
     
     # Auto-apply chat templates for instruct/chat models if not explicitly set
     # NOTE: This codebase uses instruct models, so we should be confident about applying templates
-    if apply_chat_template is None:
-        lower_path = model_path.lower()
-        # First check path-based detection for HuggingFace models
-        path_has_instruct = any(keyword in lower_path for keyword in ["instruct", "chat", "-it", "-int"])
-        
-        # For local paths, check the model config to see if it has a chat template
-        # (local models saved from instruct training will have chat templates in config)
-        if os.path.exists(model_path):
-            if path_has_instruct:
-                # Path indicates instruct model, apply template
-                apply_chat_template = True
-                if verbose:
-                    print(f"✓ Detected instruct model from path, enabling chat template")
-            else:
-                # Check config to see if model has chat template (for local saved models)
-                if _has_chat_template(model_path):
-                    apply_chat_template = True
-                    if verbose:
-                        print(f"✓ Model has chat template in config (instruct model), enabling chat template")
-                else:
-                    apply_chat_template = False
-                    if verbose:
-                        print(f"⚠ Model does not have chat template in config, disabling chat template")
-        else:
-            # HuggingFace model - use path-based detection
-            apply_chat_template = path_has_instruct
-            if verbose:
-                if apply_chat_template:
-                    print(f"✓ Detected instruct model from HuggingFace path, enabling chat template")
-                else:
-                    print(f"⚠ HuggingFace model path doesn't indicate instruct model, disabling chat template")
-        
-        if verbose:
-            print(f"Final decision: apply_chat_template = {apply_chat_template}")
-    elif verbose:
-        print(f"Chat template explicitly set to: {apply_chat_template}")
+    apply_chat_template = auto_detect_apply_chat_template(
+        model_path,
+        explicit_value=apply_chat_template,
+        verbose=verbose,
+    )
+    if verbose:
+        print(f"Final decision: apply_chat_template = {apply_chat_template}")
 
     # Convert to absolute path if it's a local path (for lm-eval compatibility)
     if os.path.exists(model_path):
