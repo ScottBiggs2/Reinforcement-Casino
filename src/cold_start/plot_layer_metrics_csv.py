@@ -7,8 +7,10 @@ import math
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def to_float(x):
@@ -23,6 +25,19 @@ def to_float(x):
         return float("nan")
 
 
+def to_int_params(x):
+    """Parse n_params from CSV; None if missing."""
+    if x is None:
+        return None
+    s = str(x).strip()
+    if s == "" or s.lower() == "none":
+        return None
+    try:
+        return int(float(s))
+    except Exception:
+        return None
+
+
 def has_valid(vals):
     return any(not math.isnan(v) for v in vals)
 
@@ -33,17 +48,91 @@ def read_rows(path: Path):
 
 
 def expected_random_jaccard(density_a: float, density_b: float) -> float:
-    """Expected Jaccard between two independent random masks with given densities."""
+    """Closed-form expectation: Jaccard of two independent Bernoulli masks with given densities."""
     denom = density_a + density_b - density_a * density_b
     if denom <= 0:
         return 0.0
     return (density_a * density_b) / denom
 
 
-def plot_one(csv_path: Path, out_path: Path):
+def plot_mask_overlap_reference(
+    ax,
+    x,
+    expected_baseline,
+    mc_mean,
+    mc_lo,
+    mc_hi,
+    random_trials: int,
+) -> None:
+    """Draw closed-form E[Jaccard] + MC band for indep. Bernoulli masks (mask-overlap reference).
+
+    On the CKA axes this is the **same** overlap reference as the Jaccard panel (comparable
+    vertical scale), not the expectation of CKA under a random-activation null—that would
+    require model forward passes or a separate derivation.
+    """
+    if has_valid(expected_baseline):
+        ax.plot(
+            x,
+            expected_baseline,
+            linestyle=":",
+            linewidth=1.0,
+            color="gray",
+            alpha=0.85,
+            label="E[Jaccard] (indep. Bernoulli, closed form)",
+        )
+    if (
+        random_trials >= 2
+        and has_valid(mc_mean)
+        and has_valid(mc_lo)
+        and has_valid(mc_hi)
+    ):
+        ax.fill_between(
+            x,
+            mc_lo,
+            mc_hi,
+            alpha=0.25,
+            color="tab:orange",
+            label=f"random mask MC (n={random_trials} trials/layer)",
+        )
+        ax.plot(
+            x,
+            mc_mean,
+            linestyle="--",
+            linewidth=1.0,
+            color="tab:orange",
+            alpha=0.85,
+        )
+
+
+def monte_carlo_jaccard_row(
+    n_params: int,
+    density_a: float,
+    density_b: float,
+    n_trials: int,
+    rng: np.random.Generator,
+) -> tuple:
+    """Per layer: draw n_trials independent random mask pairs; return (mean, min, max) Jaccard."""
+    if n_params is None or n_params < 1:
+        return None, None, None
+    if not (0.0 <= density_a <= 1.0 and 0.0 <= density_b <= 1.0):
+        return None, None, None
+    n = int(n_params)
+    trials = np.empty(n_trials, dtype=np.float64)
+    for t in range(n_trials):
+        a = rng.random(n) < density_a
+        b = rng.random(n) < density_b
+        inter = np.logical_and(a, b).sum()
+        union = np.logical_or(a, b).sum()
+        trials[t] = float(inter) / float(union) if union > 0 else 0.0
+    return float(trials.mean()), float(trials.min()), float(trials.max())
+
+
+def plot_one(csv_path: Path, out_path: Path, random_trials: int, random_seed: int):
     rows = read_rows(csv_path)
     if not rows:
         return False
+
+    rng = np.random.default_rng(random_seed)
 
     x = list(range(len(rows)))
     layer_labels = [r.get("layer", str(i)) for i, r in enumerate(rows)]
@@ -54,55 +143,87 @@ def plot_one(csv_path: Path, out_path: Path):
     sparsity_b = [to_float(r.get("sparsity_b")) for r in rows]
     erank_a = [to_float(r.get("effective_rank_a_norm")) for r in rows]
     erank_b = [to_float(r.get("effective_rank_b_norm")) for r in rows]
+    n_params_col = [to_int_params(r.get("n_params")) for r in rows]
 
-    # Per-layer random baseline: E[Jaccard] = d_a*d_b / (d_a+d_b - d_a*d_b)
-    random_baseline = []
+    # Closed-form E[Jaccard] under independent random masks with matched marginals
+    expected_baseline = []
     for sa, sb in zip(sparsity_a, sparsity_b):
         if math.isnan(sa) or math.isnan(sb):
-            # Fall back to using whichever sparsity is available
             s = sa if not math.isnan(sa) else sb
             d = (1.0 - s) if not math.isnan(s) else float("nan")
             if math.isnan(d):
-                random_baseline.append(float("nan"))
+                expected_baseline.append(float("nan"))
             else:
-                random_baseline.append(expected_random_jaccard(d, d))
+                expected_baseline.append(expected_random_jaccard(d, d))
         else:
-            random_baseline.append(expected_random_jaccard(1.0 - sa, 1.0 - sb))
+            expected_baseline.append(expected_random_jaccard(1.0 - sa, 1.0 - sb))
+
+    # Monte Carlo: n_trials independent random mask pairs per layer (shows spread, not a single draw)
+    mc_mean = []
+    mc_lo = []
+    mc_hi = []
+    for i, row in enumerate(rows):
+        n_p = n_params_col[i]
+        sa, sb = sparsity_a[i], sparsity_b[i]
+        if math.isnan(sa) or math.isnan(sb):
+            s = sa if not math.isnan(sa) else sb
+            da = (1.0 - s) if not math.isnan(s) else float("nan")
+            db = da
+        else:
+            da, db = 1.0 - sa, 1.0 - sb
+        if math.isnan(da) or math.isnan(db):
+            mc_mean.append(float("nan"))
+            mc_lo.append(float("nan"))
+            mc_hi.append(float("nan"))
+            continue
+        m, lo, hi = monte_carlo_jaccard_row(n_p, da, db, random_trials, rng)
+        mc_mean.append(m if m is not None else float("nan"))
+        mc_lo.append(lo if lo is not None else float("nan"))
+        mc_hi.append(hi if hi is not None else float("nan"))
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle(csv_path.name, fontsize=12)
 
-    # Jaccard
+    # Jaccard + random reference (closed-form + MC band)
     ax = axes[0, 0]
     if has_valid(jaccard):
-        ax.plot(x, jaccard, marker="o", linewidth=1.3, markersize=3, label="Jaccard")
-        if has_valid(random_baseline):
-            ax.plot(
-                x, random_baseline,
-                linestyle="--", linewidth=1.1, color="gray", alpha=0.7,
-                label="random baseline",
-            )
-        ax.set_ylim(0, max(1, max((v for v in jaccard if not math.isnan(v)), default=1) * 1.05))
-        ax.legend(fontsize=8)
-        ax.set_title("Per-layer Jaccard")
+        ax.plot(x, jaccard, marker="o", linewidth=1.3, markersize=3, label="observed Jaccard", color="tab:blue")
+        plot_mask_overlap_reference(
+            ax, x, expected_baseline, mc_mean, mc_lo, mc_hi, random_trials
+        )
+        ax.set_ylim(
+            0,
+            max(
+                1.0,
+                max((v for v in jaccard if not math.isnan(v)), default=1.0) * 1.05,
+            ),
+        )
+        ax.legend(fontsize=7, loc="best")
+        ax.set_title("Per-layer Jaccard vs random baseline")
     else:
         ax.text(0.5, 0.5, "No Jaccard data", ha="center", va="center")
         ax.set_title("Per-layer Jaccard")
     ax.grid(alpha=0.3)
 
-    # CKA
+    # CKA + same mask-overlap reference (E[J] + MC band) for side-by-side context
     ax = axes[0, 1]
     if has_valid(cka):
         ax.plot(x, cka, marker="o", linewidth=1.3, markersize=3, color="tab:purple", label="CKA")
-        if has_valid(random_baseline):
-            ax.plot(
-                x, random_baseline,
-                linestyle="--", linewidth=1.1, color="gray", alpha=0.7,
-                label="random baseline",
+        show_overlap_ref = has_valid(expected_baseline) or (
+            random_trials >= 2
+            and has_valid(mc_mean)
+            and has_valid(mc_lo)
+            and has_valid(mc_hi)
+        )
+        if show_overlap_ref:
+            plot_mask_overlap_reference(
+                ax, x, expected_baseline, mc_mean, mc_lo, mc_hi, random_trials
             )
         ax.set_ylim(0, 1)
-        ax.legend(fontsize=8)
-        ax.set_title("Per-layer CKA")
+        ax.legend(fontsize=6, loc="best")
+        ax.set_title(
+            "Per-layer CKA\n(gray/orange = indep. random mask overlap ref; not E[CKA] null)"
+        )
     else:
         ax.text(0.5, 0.5, "No CKA data", ha="center", va="center")
         ax.set_title("Per-layer CKA")
@@ -126,7 +247,7 @@ def plot_one(csv_path: Path, out_path: Path):
         ax.set_title("Per-layer Sparsity")
     ax.grid(alpha=0.3)
 
-    # Effective rank normalized A/B
+    # Effective rank normalized A/B (no Jaccard random line)
     ax = axes[1, 1]
     drawn = False
     if has_valid(erank_a):
@@ -134,13 +255,6 @@ def plot_one(csv_path: Path, out_path: Path):
         drawn = True
     if has_valid(erank_b):
         ax.plot(x, erank_b, marker="o", linewidth=1.3, markersize=3, label="erank_b_norm")
-        drawn = True
-    if has_valid(random_baseline):
-        ax.plot(
-            x, random_baseline,
-            linestyle="--", linewidth=1.1, color="gray", alpha=0.7,
-            label="random baseline",
-        )
         drawn = True
     if drawn:
         ax.set_ylim(0, 1)
@@ -170,6 +284,13 @@ def main():
     parser.add_argument("--input-dir", type=str, default="masks")
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--pattern", type=str, default="*.csv")
+    parser.add_argument(
+        "--random-trials",
+        type=int,
+        default=3,
+        help="Monte Carlo trials per layer for random-mask Jaccard band (min–max shading).",
+    )
+    parser.add_argument("--random-seed", type=int, default=42, help="RNG seed for Monte Carlo baselines.")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir).resolve()
@@ -182,7 +303,7 @@ def main():
     made = 0
     for p in csv_files:
         out = p.with_name(f"{p.stem}_plots.png")
-        if plot_one(p, out):
+        if plot_one(p, out, args.random_trials, args.random_seed):
             made += 1
             print(f"✓ {out}")
 

@@ -16,8 +16,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_input_device
 
-
-DATASET_NAME = "qihoo360/Light-R1-DPOData"
+DEFAULT_CALIBRATION_DATASET = "qihoo360/Light-R1-DPOData"
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -37,10 +36,14 @@ def _msg_to_text(x):
     return str(x)
 
 
-def load_calibration_samples(n_samples=64, seed=42):
+def load_calibration_samples(
+    n_samples=64,
+    seed=42,
+    dataset_name: str = DEFAULT_CALIBRATION_DATASET,
+):
     """Return (chosen_texts, rejected_texts) lists of length n_samples."""
-    print(f"Loading {n_samples} calibration samples from {DATASET_NAME}...")
-    raw = load_dataset(DATASET_NAME, split="train").shuffle(seed=seed)
+    print(f"Loading {n_samples} calibration samples from {dataset_name}...")
+    raw = load_dataset(dataset_name, split="train").shuffle(seed=seed)
 
     chosen_texts, rejected_texts = [], []
     for rec in raw:
@@ -216,7 +219,21 @@ def main():
     )
     parser.add_argument("mask_a", type=str, help="First mask file (.pt)")
     parser.add_argument("mask_b", type=str, help="Second mask file (.pt)")
-    parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="google/gemma-3-270m-it",
+        help=(
+            "HF model id used for activations. Must match the architecture the masks were "
+            "built for (same layer/param names as in the .pt files)."
+        ),
+    )
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default=DEFAULT_CALIBRATION_DATASET,
+        help="HF dataset id for calibration prompts (chosen/rejected).",
+    )
     parser.add_argument(
         "--compare", type=str, default="mask_vs_mask",
         choices=["mask_vs_mask", "original_vs_a", "original_vs_b", "chosen_vs_rejected"],
@@ -279,7 +296,11 @@ def main():
     input_device = infer_model_input_device(model)
 
     # ---- Load calibration data --------------------------------------------
-    chosen_texts, rejected_texts = load_calibration_samples(args.n_samples, seed=args.seed)
+    chosen_texts, rejected_texts = load_calibration_samples(
+        args.n_samples,
+        seed=args.seed,
+        dataset_name=args.dataset_name,
+    )
 
     # ---- Collect activations for both conditions --------------------------
     extractor = FeatureExtractor()
@@ -353,6 +374,7 @@ def main():
         "mask_a": os.path.abspath(args.mask_a),
         "mask_b": os.path.abspath(args.mask_b),
         "model_name": args.model_name,
+        "dataset_name": args.dataset_name,
         "compare": compare,
         "label_a": label_a,
         "label_b": label_b,

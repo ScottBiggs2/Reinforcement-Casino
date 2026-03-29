@@ -90,7 +90,7 @@ def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
     sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
     while "__" in sanitized:
-        sanitized = sanitized.replace("__", "__")
+        sanitized = sanitized.replace("__", "_")
     return sanitized.strip("_")
 
 

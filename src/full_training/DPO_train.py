@@ -56,6 +56,19 @@ parser.add_argument("--num_steps", type=int, default=500, help="Number of traini
 parser.add_argument("--subset_size", type=int, default=None, help="Limit dataset size (default: None = full)")
 parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs", help="Base directory for all outputs (checkpoints, deltas)")
 parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets", help="Cache directory for HuggingFace datasets")
+parser.add_argument(
+    "--delta_log_interval",
+    type=int,
+    default=50,
+    help="Save full weight deltas (vs init) every N steps for warm-start masks (default: 50).",
+)
+parser.add_argument(
+    "--delta_log_end_step",
+    type=int,
+    default=None,
+    help="Last training step (inclusive) to save deltas. Default: min(num_steps, max(interval, num_steps//10)) "
+    "e.g. 10%% of run with interval 50 → steps 50..200 for 2k steps.",
+)
 args = parser.parse_args()
 
 # Set dataset cache directory
@@ -79,22 +92,20 @@ SUB_DIR = f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}"
 OUTPUT_DIR = os.path.join(BASE_DIR, "checkpoints", SUB_DIR)
 DELTA_LOG_DIR = os.path.join(BASE_DIR, "deltas", SUB_DIR)
 
-# Flexible checkpoint schedule
-# Save every 5 steps for first 25 steps, then every 25 steps after
-# CHECKPOINT_SCHEDULE = (
-#     list(range(5, 25, 5)) +  # [5, 10, 15, 20, 25]
-#     list(range(50, 101, 25))  # [50, 75, 100]
-# )
-
-CHECKPOINT_SCHEDULE = (
-    list(range(10, 51, 10)) +  # [10, 20, 30, 40, 50]
-    list(range(100, 501, 100))  # [100, 200, 300, 400, 500]
-)
-
-
 THRESHOLD = 1e-5 # appendix A in Mukherjee et al 2025
 NUM_STEPS = args.num_steps
 SUBSET_SIZE = args.subset_size
+
+# Delta checkpoints for warm-start masks: e.g. every 50 steps up to ~10%% of the run (200 for 2k steps).
+_interval = args.delta_log_interval
+_end = args.delta_log_end_step
+if _end is None:
+    _end = min(NUM_STEPS, max(_interval, NUM_STEPS // 10))
+else:
+    _end = min(NUM_STEPS, _end)
+CHECKPOINT_SCHEDULE = list(range(_interval, _end + 1, _interval))
+if not CHECKPOINT_SCHEDULE and NUM_STEPS > 0:
+    CHECKPOINT_SCHEDULE = [NUM_STEPS]
 
 WANDB_PROJECT = "huggingface"
 os.environ["WANDB_PROJECT"] = WANDB_PROJECT
@@ -238,8 +249,8 @@ torch.save(base_state, os.path.join(DELTA_LOG_DIR, "base_state.pt"))
 class FlexibleCheckpointCallback(TrainerCallback):
     """
     Callback that saves deltas on a flexible schedule and tracks statistics.
-    
-    Schedule: Every 5 steps for first 25 steps, then every 25 steps after.
+
+    Schedule: controlled by CHECKPOINT_SCHEDULE (see --delta_log_interval / --delta_log_end_step).
     """
     
     def __init__(self, base_state, delta_log_dir, checkpoint_schedule, threshold):

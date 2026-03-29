@@ -575,16 +575,16 @@ This script is now aligned with the shared selector semantics, but it still pays
 
 `compute_fisher_mask_streaming()` says it uses Welford's algorithm, but it currently uses raw `sum` and `sum_sq`. That should be corrected in comments or refactored into a true running-mean/running-M2 implementation.
 
-## 2. `sanitize_model_name()` bug in cold Fisher
+## 2. `sanitize_model_name()` in cold Fisher (fixed in-tree)
 
-In `src/cold_start/cold_mask_finder.py`, the loop:
+Previously in `src/cold_start/cold_mask_finder.py`, the loop was:
 
 ```python
 while "__" in sanitized:
-    sanitized = sanitized.replace("__", "__")
+    sanitized = sanitized.replace("__", "_")
 ```
 
-does not collapse repeated underscores and appears to be a typo. It is harmless for some common model names, but it is a latent bug.
+This typo is fixed in-tree; the snippet above reflects the correct collapse behavior.
 
 ## 3. "Streaming" is overstated in several places
 
