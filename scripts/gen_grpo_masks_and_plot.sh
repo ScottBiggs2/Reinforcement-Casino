@@ -195,24 +195,26 @@ fi
 # ============================================================
 echo ""
 echo "=== [5/6] Fisher GRPO mask ==="
-"$PYTHON_BIN" src/cold_start/cold_mask_finder.py \
+"$PYTHON_BIN" src/cold_start/inference_mask_finder.py \
     --model_name $MODEL \
+    --method fisher \
     --mode grpo \
-    --n_calibration_samples $N_SAMPLES \
-    --sparsity_percent $SPARSITY \
-    --output_file $GRPO_FISHER_MASK
+    --n_samples $N_SAMPLES \
+    --sparsity $SPARSITY \
+    --output $GRPO_FISHER_MASK
 
 echo ""
 echo "=== [6/6] Fisher DPO mask ==="
 if [ "$SKIP_DPO" = "1" ]; then
     echo "[skip] Using existing DPO Fisher mask: $DPO_FISHER_MASK"
 else
-    "$PYTHON_BIN" src/cold_start/cold_mask_finder.py \
+    "$PYTHON_BIN" src/cold_start/inference_mask_finder.py \
         --model_name $MODEL \
+        --method fisher \
         --mode dpo \
-        --n_calibration_samples $N_SAMPLES \
-        --sparsity_percent $SPARSITY \
-        --output_file $DPO_FISHER_MASK
+        --n_samples $N_SAMPLES \
+        --sparsity $SPARSITY \
+        --output $DPO_FISHER_MASK
 fi
 
 # ============================================================

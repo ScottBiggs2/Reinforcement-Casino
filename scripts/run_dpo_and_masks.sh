@@ -82,22 +82,20 @@ echo "3. Generating Cold-Start Masks"
 echo "=================================================="
 
 echo "-> Fisher Mask (Cold)"
-python src/cold_start/cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
-  --sparsity_percent $SPARSITY \
-  --n_calibration_samples 256 \
-  --mlp_only
+  --method fisher \
+  --sparsity $SPARSITY \
+  --n_samples 256
 
 echo "-> CAV Mask (Cold)"
-python src/cold_start/cav_cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
   --method cav \
-  --sparsity_percent $SPARSITY \
-  --subset_size 256 \
-  --num_batches 16 \
-  --mlp_only
+  --sparsity $SPARSITY \
+  --n_samples 256
 
 echo ""
 echo "=================================================="

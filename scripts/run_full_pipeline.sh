@@ -233,27 +233,25 @@ run_masks() {
   echo "Cold-start Fisher masks"
   for sparsity in "${SPARSITY_LIST[@]}"; do
     run_one_mask_step "cold Fisher sparsity=${sparsity}" \
-      "$TRAIN_PY" src/cold_start/cold_mask_finder.py \
+      "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
         --model_name "$MODEL" \
         --dataset_name "qihoo360/Light-R1-DPOData" \
-        --sparsity_percent "$sparsity" \
-        --n_calibration_samples 256 \
-        --mlp_only \
-        --output_file "${mask_base}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n256.pt"
+        --method fisher \
+        --sparsity "$sparsity" \
+        --n_samples 256 \
+        --output "${mask_base}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n256.pt"
   done
 
   echo "Cold-start CAV masks"
   for sparsity in "${SPARSITY_LIST[@]}"; do
     run_one_mask_step "cold CAV sparsity=${sparsity}" \
-      "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
+      "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
         --model_name "$MODEL" \
         --dataset_name "qihoo360/Light-R1-DPOData" \
         --method cav \
-        --sparsity_percent "$sparsity" \
-        --subset_size 256 \
-        --num_batches 16 \
-        --mlp_only \
-        --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
+        --sparsity "$sparsity" \
+        --n_samples 256 \
+        --output "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
   done
 
   if [ "${mask_failures}" -gt 0 ]; then

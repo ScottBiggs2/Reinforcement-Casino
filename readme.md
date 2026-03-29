@@ -353,35 +353,38 @@ python src/warm_start/even_better_mask_finder.py \
 ```
 *Output:* `masks/warm_fisher_meta_llama_llama_3_2_3b_instruct_sparsity97.5pct_step100.pt`
 
-### Cold-start: Fisher-based
+### Cold-start mask finder
 
-Computes task-specific importance using the diagonal Fisher Information over a target dataset's prompts. Requires no initial DPO training.
+All cold-start methods use a single unified script (`src/cold_start/inference_mask_finder.py`). Select the scoring method with `--method`:
 
+**Fisher** — diagonal Fisher Information:
 ```bash
-python src/cold_start/cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "google/gemma-3-270m-it" \
-  --dataset_name "qihoo360/Light-R1-DPOData" \
-  --sparsity_percent 95.0 \
-  --n_calibration_samples 512 \
-  --mlp_only
+  --method fisher \
+  --sparsity 95.0 \
+  --n_samples 512
 ```
-*Output:* `masks/cold_fisher_google_gemma_3_270m_it_qihoo360_Light_R1_DPOData_sparsity95.0pct_n512.pt`
 
-### Cold-start: CAV / Activation / SNIP
-
-Uses activation statistics or linear probes (CAVs) to determine parameter importance based on preference data. Requires no initial DPO training.
-
+**CAV** — linear-probe discriminative scores:
 ```bash
-python src/cold_start/cav_cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "google/gemma-3-270m-it" \
-  --dataset_name "qihoo360/Light-R1-DPOData" \
   --method cav \
-  --sparsity_percent 95.0 \
-  --subset_size 256 \
-  --num_batches 32 \
-  --mlp_only
+  --sparsity 95.0 \
+  --n_samples 256
 ```
-*Output:* `masks/cold_cav_google_gemma_3_270m_it_sparsity95.0pct.pt`
+
+**SNIP** — gradient saliency:
+```bash
+python src/cold_start/inference_mask_finder.py \
+  --model_name "google/gemma-3-270m-it" \
+  --method snip \
+  --sparsity 95.0 \
+  --n_samples 256
+```
+
+Add `--mode grpo` to use GRPO-format datasets instead of DPO. Add `--verbose` for per-layer diagnostics.
 
 ## Checkpoint reconstruction
 

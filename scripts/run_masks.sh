@@ -83,25 +83,23 @@ echo "2. Generating Cold-Start Masks"
 echo "=================================================="
 
 echo "-> Fisher Mask (Cold, Improved)"
-python src/cold_start/cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
-  --sparsity_percent $SPARSITY \
-  --n_calibration_samples 256 \
+  --method fisher \
+  --sparsity $SPARSITY \
+  --n_samples 256 \
   --mini_batch_size 4 \
-  --reference_mask "$REF_MASK_GT" \
-  --mlp_only
+  --reference_mask "$REF_MASK_GT"
 
 echo "-> CAV Mask (Cold)"
-python src/cold_start/cav_cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
   --method cav \
-  --sparsity_percent $SPARSITY \
-  --subset_size 256 \
-  --num_batches 16 \
-  --reference_mask "$REF_MASK_GT" \
-  --mlp_only
+  --sparsity $SPARSITY \
+  --n_samples 256 \
+  --reference_mask "$REF_MASK_GT"
 
 echo ""
 echo "=================================================="
