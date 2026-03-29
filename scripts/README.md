@@ -22,9 +22,9 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `run_mask_diagnostics.sh` - attention masking diagnostic.
 - `install_lm_eval.sh` - installs lm-eval and related dependencies.
 - `run_ablation_*.sh` - targeted ablation workflows.
-- `run_full_pipeline.sh` - **one long Slurm job** for the entire train → masks → comparisons → sparse → eval flow (needs a matching wall-time cap).
+- `run_full_pipeline.sh` - **one Slurm job** for the entire train → masks → comparisons → sparse → eval flow (default **8h** wall; use the chain for longer work).
 - `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) for sites with a short per-job wall limit (e.g. 8h). Shared logic lives in `pipeline_common.sh`.
-- `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default 24h per mask for 2k-step runs).
+- `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **8h** per mask).
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
 
@@ -33,7 +33,7 @@ End-to-end flow: **dense DPO → warm/cold masks → mask comparisons → parall
 | Mode | When to use | Command |
 |------|-------------|---------|
 | **Chained jobs** | Per-job **wall limit** (e.g. 8h). Stages chain with `afterok`; sparse runs **in parallel** on separate GPUs. | **Login-node sample** below. |
-| **Single job** | One long allocation (e.g. 48h in `run_full_pipeline.sh`). | `sbatch scripts/run_full_pipeline.sh` |
+| **Single job** | One allocation **≤8h** (fits typical cluster max; tight for full pipeline). | `sbatch scripts/run_full_pipeline.sh` |
 
 Defaults and scratch paths are in [`pipeline_common.sh`](pipeline_common.sh). Override with **environment variables** before launching (same names as in that file: `MODEL`, `DPO_DATASETS`, `NUM_STEPS_DPO`, `TARGET_STEP_DPO`, eval knobs, etc.).
 
@@ -53,7 +53,7 @@ export HF_TOKEN="hf_xxxxxxxx"   # required if the hub gates the model
 
 # --- 3) Optional overrides (uncomment as needed) ---
 # export PIPELINE_SPARSE_EVAL_DEPENDENCY=afterany   # eval stage runs after all sparse jobs *finish* (even if some failed)
-# export SPARSE_SLURM_TIME=24:00:00                 # wall time per parallel sparse job (default 24h)
+# export SPARSE_SLURM_TIME=08:00:00                 # wall time per parallel sparse job (default 8h; cluster max)
 # export RUN_MASK_CKA=1                             # enable mask CKA in comparisons (GPU-heavy)
 # export EVAL_LIMIT=100                             # cap benchmark size; omit or empty for full runs
 

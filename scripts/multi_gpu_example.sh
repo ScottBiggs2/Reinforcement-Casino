@@ -4,7 +4,7 @@
 #SBATCH --partition=reservation
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
-#SBATCH --time=18:00:00
+#SBATCH --time=08:00:00
 #SBATCH --exclusive
 #SBATCH --output=logs/scaling-%j.out
 #SBATCH --err=logs/scaling-%j.err

@@ -7,7 +7,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:1
-#SBATCH --time=48:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=full_pipeline
 #SBATCH --mem=128G
 #SBATCH --ntasks=1
@@ -25,11 +25,8 @@ else
 fi
 cd "$REPO_ROOT"
 
-# Monolithic defaults (override 8h-oriented defaults in pipeline_common.sh unless env already set)
-export TRAIN_TIMEOUT_PER_DATASET="${TRAIN_TIMEOUT_PER_DATASET:-$((16 * 60 * 60))}"
-export MASK_TIMEOUT="${MASK_TIMEOUT:-$((4 * 60 * 60))}"
-export SPARSE_TIMEOUT_PER_MASK="${SPARSE_TIMEOUT_PER_MASK:-$((4 * 60 * 60))}"
-export GLOBAL_MAX_SECONDS="${GLOBAL_MAX_SECONDS:-$((47 * 60 * 60))}"
+# Per-stage budgets come from pipeline_common.sh (~7h30 per stage, ~7h45 global) so one allocation
+# stays under a typical 8h Slurm cap. For longer dense/mask/sparse runs, use scripts/submit_pipeline_chain.sh.
 
 # shellcheck source=/dev/null
 source "${REPO_ROOT}/scripts/pipeline_common.sh"

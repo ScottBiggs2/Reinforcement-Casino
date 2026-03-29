@@ -7,7 +7,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:1
-#SBATCH --time=24:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=sparse_one
 #SBATCH --mem=128G
 #SBATCH --ntasks=1
@@ -24,9 +24,7 @@ cd "$REPO_ROOT"
 # shellcheck source=/dev/null
 source "${REPO_ROOT}/scripts/pipeline_common.sh"
 
-# Per-job training timeout should match wall time (pipeline_common defaults are for 8h chain stages).
-export SPARSE_TIMEOUT_PER_MASK="${SPARSE_TIMEOUT_PER_MASK:-$((23 * 60 * 60))}"
-export GLOBAL_MAX_SECONDS="${GLOBAL_MAX_SECONDS:-$((23 * 60 * 60 + 30 * 60))}"
+# pipeline_common.sh sets SPARSE_TIMEOUT / GLOBAL_MAX_SECONDS for ~8h walls; do not raise them here.
 
 pipeline_setup
 

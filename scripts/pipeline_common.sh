@@ -77,7 +77,7 @@ CKA_BATCH_SIZE="${CKA_BATCH_SIZE:-2}"
 PLOT_RANDOM_TRIALS="${PLOT_RANDOM_TRIALS:-3}"
 
 # Parallel sparse jobs (pipeline_stage_04): per-GPU-job wall time; eval dependency on all sparse jobs
-SPARSE_SLURM_TIME="${SPARSE_SLURM_TIME:-24:00:00}"
+SPARSE_SLURM_TIME="${SPARSE_SLURM_TIME:-08:00:00}"
 # afterok = run evals only if every sparse job succeeded; afterany = run evals when all have finished (any exit code)
 PIPELINE_SPARSE_EVAL_DEPENDENCY="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
 
@@ -502,11 +502,11 @@ run_sparse_dpo() {
 
 # Submit one Slurm GPU job per mask .pt (parallel sparse runs), then submit eval stage when all finish.
 # PIPELINE_SPARSE_EVAL_DEPENDENCY: afterok (default) or afterany — whether eval stage waits for all sparse successes only.
-# SPARSE_SLURM_TIME: per-job wall time (default 24:00:00).
+# SPARSE_SLURM_TIME: per-job wall time (default 08:00:00; cluster max is often 8h).
 launch_parallel_sparse_jobs_and_eval() {
   local mask_dir="${MASK_OUT_BASE}/${RUN_ID}"
   local dep_kind="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
-  local wall="${SPARSE_SLURM_TIME:-24:00:00}"
+  local wall="${SPARSE_SLURM_TIME:-08:00:00}"
   local jids=()
   local mask
 

@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --time=00:30:00
 #SBATCH --job-name=pipe_p4_launch
-#SBATCH --mem=8G
+#SBATCH --mem=32G
 #SBATCH --ntasks=1
 #SBATCH --output=logs/pipeline_%j_p4_sparse_launch.out
 #SBATCH --error=logs/pipeline_%j_p4_sparse_launch.err
@@ -27,6 +27,6 @@ source "${REPO_ROOT}/scripts/pipeline_common.sh"
 pipeline_setup
 
 echo "===== STAGE 4: parallel sparse DPO launch (${RUN_ID}) ====="
-echo "Per-mask wall time: ${SPARSE_SLURM_TIME:-24:00:00}  |  eval dependency: ${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
+echo "Per-mask wall time: ${SPARSE_SLURM_TIME:-08:00:00}  |  eval dependency: ${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
 launch_parallel_sparse_jobs_and_eval
 echo "===== Sparse launch + eval submit complete (${RUN_ID}) ====="
