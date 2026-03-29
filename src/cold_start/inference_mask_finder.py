@@ -193,7 +193,7 @@ def _encode_for_fisher(tokenizer, chosen_texts, max_length, device):
     return pairs
 
 
-def compute_fisher_scores(model, calibration_data, device="cuda", mlp_only=True,
+def compute_fisher_scores(model, calibration_data, device="cuda", mlp_only=False,
                           mini_batch_size=4, normalize_per_layer=True):
     """Compute diagonal Fisher Information scores.
 
@@ -495,7 +495,7 @@ def main(args):
         calibration_data = _encode_for_fisher(tokenizer, chosen_texts, args.max_length, input_device)
         score_dict = compute_fisher_scores(
             model, calibration_data, device=device,
-            mlp_only=True,
+            mlp_only=False,
             mini_batch_size=args.mini_batch_size,
             normalize_per_layer=not args.no_layer_norm,
         )
