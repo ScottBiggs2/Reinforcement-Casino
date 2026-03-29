@@ -11,12 +11,16 @@
 #SBATCH --error=logs/pipeline_%j_p1_dense.err
 
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  _SCRIPT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${_SCRIPT_HOME}/.." && pwd)"
+fi
 cd "$REPO_ROOT"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/pipeline_common.sh"
+source "${REPO_ROOT}/scripts/pipeline_common.sh"
 pipeline_setup
 
 echo "===== STAGE 1/5: dense DPO (${RUN_ID}) ====="

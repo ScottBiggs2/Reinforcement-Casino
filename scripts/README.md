@@ -80,6 +80,8 @@ tail -f logs/pipeline_JOBID_p1_dense.out
 
 **Requirements:** nested `sbatch` (submitting the next stage from inside a running job) must be allowed. Edit `#SBATCH` lines (`partition`, `gres`, `mem`, `time`) in `pipeline_stage_*.sh`, `pipeline_sparse_one_mask.sh`, and `run_full_pipeline.sh` to match your cluster.
 
+**Slurm submit directory:** Always run `sbatch` or `bash scripts/submit_pipeline_chain.sh` from the **repository root** (the directory you `cd` into before submitting). Slurm sets `SLURM_SUBMIT_DIR` to that path; the pipeline uses it to find `scripts/pipeline_common.sh`. If you submit from elsewhere, sourcing `pipeline_common.sh` fails with “No such file” under `/var/spool/slurmd/...`.
+
 ### Single long job (no parallel sparse workers)
 
 ```bash

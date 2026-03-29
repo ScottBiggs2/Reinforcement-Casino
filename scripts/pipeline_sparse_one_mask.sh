@@ -13,12 +13,16 @@
 #SBATCH --ntasks=1
 
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  _SCRIPT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${_SCRIPT_HOME}/.." && pwd)"
+fi
 cd "$REPO_ROOT"
 
 # shellcheck source=/dev/null
-source "${SCRIPT_DIR}/pipeline_common.sh"
+source "${REPO_ROOT}/scripts/pipeline_common.sh"
 
 # Per-job training timeout should match wall time (pipeline_common defaults are for 8h chain stages).
 export SPARSE_TIMEOUT_PER_MASK="${SPARSE_TIMEOUT_PER_MASK:-$((23 * 60 * 60))}"

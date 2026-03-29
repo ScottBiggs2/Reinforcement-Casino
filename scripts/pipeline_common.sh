@@ -46,12 +46,12 @@ mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" 
 # Model / dataset (export HF_TOKEN for gated Llama; Tulu3 = allenai/llama-3.1-tulu-3-8b-preference-mixture)
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
 DPO_DATASETS=("tulu3")       # dataset registry keys; drives cold masks + sparse DPO
-NUM_STEPS_DPO=2000
+NUM_STEPS_DPO=500
 # SUBSET_DPO unset or empty = full dataset (omit --subset_size). Example: SUBSET_DPO=4096 for a cap
 SUBSET_DPO="${SUBSET_DPO:-}"
 
 SPARSITY_LIST=("97.5")
-# Must match an existing deltas_step_<N>.pt (warm masks). Default: last delta in first 10% at interval 50 → 200 @ 2k steps
+# Must match an existing deltas_step_<N>.pt (warm masks). With 500 steps & defaults: deltas at 50..min(50,500/10)=50 → [50]; if DELTA_LOG_END_STEP=200, checkpoints include 200 while training runs 500 steps.
 TARGET_STEP_DPO="${TARGET_STEP_DPO:-200}"
 MIN_LAYER_KEEP_RATIO="0.0025"
 
