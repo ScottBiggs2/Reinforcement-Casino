@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=40G
 #SBATCH --gres=gpu:1
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/grpo_masks_plot_%j.out
 #SBATCH --error=logs/grpo_masks_plot_%j.err
 
@@ -218,14 +218,74 @@ else
 fi
 
 # ============================================================
-# Step 4: export per-layer metrics CSVs (GRPO vs DPO per method)
+# Step 4a: compute layer-wise CKA (GRPO vs DPO per method)
+# ============================================================
+echo ""
+echo "=== Computing layer-wise CKA ==="
+
+CKA_SNIP_JSON="$MASK_DIR/cka_snip_grpo_vs_dpo.json"
+CKA_CAV_JSON="$MASK_DIR/cka_cav_grpo_vs_dpo.json"
+CKA_FISHER_JSON="$MASK_DIR/cka_fisher_grpo_vs_dpo.json"
+
+if [ -f "$GRPO_SNIP_MASK" ] && [ -f "$DPO_SNIP_MASK" ]; then
+    echo "--- CKA: SNIP GRPO vs DPO ---"
+    "$PYTHON_BIN" src/cold_start/mask_to_cka.py \
+        $GRPO_SNIP_MASK $DPO_SNIP_MASK \
+        --model_name $MODEL \
+        --n_samples $N_SAMPLES \
+        --max_length $MAX_LENGTH \
+        --batch_size $BATCH_SIZE \
+        --device cuda \
+        --output $CKA_SNIP_JSON
+else
+    echo "[warn] Skipping SNIP CKA (missing mask file)."
+fi
+
+if [ -f "$GRPO_CAV_MASK" ] && [ -f "$DPO_CAV_MASK" ]; then
+    echo "--- CKA: CAV GRPO vs DPO ---"
+    "$PYTHON_BIN" src/cold_start/mask_to_cka.py \
+        $GRPO_CAV_MASK $DPO_CAV_MASK \
+        --model_name $MODEL \
+        --n_samples $N_SAMPLES \
+        --max_length $MAX_LENGTH \
+        --batch_size $BATCH_SIZE \
+        --device cuda \
+        --output $CKA_CAV_JSON
+else
+    echo "[warn] Skipping CAV CKA (missing mask file)."
+fi
+
+if [ -f "$GRPO_FISHER_MASK" ] && [ -f "$DPO_FISHER_MASK" ]; then
+    echo "--- CKA: Fisher GRPO vs DPO ---"
+    "$PYTHON_BIN" src/cold_start/mask_to_cka.py \
+        $GRPO_FISHER_MASK $DPO_FISHER_MASK \
+        --model_name $MODEL \
+        --n_samples $N_SAMPLES \
+        --max_length $MAX_LENGTH \
+        --batch_size $BATCH_SIZE \
+        --device cuda \
+        --output $CKA_FISHER_JSON
+else
+    echo "[warn] Skipping Fisher CKA (missing mask file)."
+fi
+
+# ============================================================
+# Step 4b: export per-layer metrics CSVs (GRPO vs DPO per method)
 # ============================================================
 echo ""
 echo "=== Exporting layer metrics CSVs ==="
 
+CKA_SNIP_FLAG=""
+CKA_CAV_FLAG=""
+CKA_FISHER_FLAG=""
+[ -f "$CKA_SNIP_JSON" ]   && CKA_SNIP_FLAG="--cka-json $CKA_SNIP_JSON"
+[ -f "$CKA_CAV_JSON" ]    && CKA_CAV_FLAG="--cka-json $CKA_CAV_JSON"
+[ -f "$CKA_FISHER_JSON" ] && CKA_FISHER_FLAG="--cka-json $CKA_FISHER_JSON"
+
 if [ -f "$GRPO_SNIP_MASK" ] && [ -f "$DPO_SNIP_MASK" ]; then
     "$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
         $GRPO_SNIP_MASK $DPO_SNIP_MASK \
+        $CKA_SNIP_FLAG \
         --output $MASK_DIR/layer_metrics_snip_grpo_vs_dpo.csv
 else
     echo "[warn] Skipping SNIP GRPO-vs-DPO CSV (missing mask file)."
@@ -234,6 +294,7 @@ fi
 if [ -f "$GRPO_CAV_MASK" ] && [ -f "$DPO_CAV_MASK" ]; then
     "$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
         $GRPO_CAV_MASK $DPO_CAV_MASK \
+        $CKA_CAV_FLAG \
         --output $MASK_DIR/layer_metrics_cav_grpo_vs_dpo.csv
 else
     echo "[warn] Skipping CAV GRPO-vs-DPO CSV (missing mask file)."
@@ -242,6 +303,7 @@ fi
 if [ -f "$GRPO_FISHER_MASK" ] && [ -f "$DPO_FISHER_MASK" ]; then
     "$PYTHON_BIN" src/cold_start/export_layer_metrics_csv.py \
         $GRPO_FISHER_MASK $DPO_FISHER_MASK \
+        $CKA_FISHER_FLAG \
         --output $MASK_DIR/layer_metrics_fisher_grpo_vs_dpo.csv
 else
     echo "[warn] Skipping Fisher GRPO-vs-DPO CSV (missing mask file)."
