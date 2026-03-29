@@ -1,6 +1,18 @@
 #!/bin/bash
-# Slurm job script to run the full evaluation suite
-# Usage: sbatch scripts/run_evals_slurm.sh --model_path <HUGGINGFACE_ID_OR_PATH>
+# Standalone Slurm job: full benchmark suite (same harness as pipeline stage 5).
+#
+# Code lives under src/evaluation/ (run_all_benchmarks.py + *evaluator.py). The
+# pipeline does not replace this — scripts/pipeline_stage_05_evals.sh only sbatch's
+# this script for baseline / dense / sparse checkpoints.
+#
+# Usage (from repo root; SLURM_SUBMIT_DIR must be the repo):
+#   export HF_TOKEN=...   # if the model is gated
+#   sbatch scripts/run_evals_slurm.sh --model_path meta-llama/Llama-3.1-8B-Instruct --trust_remote_code
+#
+# Optional env (same names as pipeline_common.sh):
+#   EVAL_LIMIT=100          # cap samples per task (omit for full runs)
+#   EVAL_ENV                # override conda env path (default: rl_casino_eval on /scratch)
+#   FORCE_HF_BACKEND=1      # no vLLM; use Transformers only
 
 #SBATCH --job-name=llm_eval_suite
 #SBATCH --output=logs/eval_%j.out
@@ -29,9 +41,8 @@ echo "Evaluation started at: $(date)"
 echo "Running on node: $(hostname)"
 echo "Job ID: $SLURM_JOB_ID"
 
-# Evaluation settings
-# Set LIMIT to a number (e.g. 100) for faster testing, or "" for full evaluation
-LIMIT="" 
+# Evaluation settings — EVAL_LIMIT matches pipeline (sbatch --export=ALL,EVAL_LIMIT=...)
+LIMIT="${EVAL_LIMIT:-}"
 # Set BATCH_SIZE to "auto" (recommended) or a specific integer
 BATCH_SIZE="auto"
 
@@ -51,8 +62,8 @@ fi
 
 # Activate environment using the full path to the environment's python
 # This is much more robust on Slurm than 'conda activate'
-# Dedicated env for eval harness (lm-eval + benchmark runners)
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino_eval"
+# Dedicated env for eval harness (lm-eval + benchmark runners); override with EVAL_ENV
+ENV_PATH="${EVAL_ENV:-/scratch/biggs.s/conda_envs/rl_casino_eval}"
 PYTHON_BIN="$ENV_PATH/bin/python"
 
 # Export PATH to ensure sub-scripts use the environment's binaries
