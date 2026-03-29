@@ -56,13 +56,13 @@ echo "3. Generating Random Mask"
 echo "=================================================="
 RANDOM_MASK="masks/random_sample_sparsity${SPARSITY}pct.pt"
 
-echo "Generating independent random mask (no reference)..."
-python3 src/utils/generate_random_mask.py \
-    --model_name "$MODEL" \
+echo "Generating random mask using reference mask for shape matching..."
+python3 src/warm_start/random_mask_baseline.py \
+    --reference_mask "$REF_MASK_GT" \
     --sparsity_percent "$SPARSITY" \
-    --output_file "$RANDOM_MASK" \
-    --mlp_only \
-    --compare_mask "$REF_MASK_GT"
+    --seed 42 \
+    --compare_to_reference \
+    --output_file "$RANDOM_MASK"
 
 echo ""
 echo "Comparing BSR-AdamW + Dense vs Sparse Backprop"
