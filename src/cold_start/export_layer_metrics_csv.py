@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -90,6 +91,16 @@ def effective_rank(mask_tensor: torch.Tensor, eps: float = 1e-12) -> Tuple[Optio
     return erank, erank / float(max_rank)
 
 
+def _both_effective_ranks(
+    pair: Tuple[str, torch.Tensor, torch.Tensor],
+) -> Tuple[str, Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """One layer: effective rank for mask A and mask B (for parallel map)."""
+    name, t_a, t_b = pair
+    er_a, er_a_norm = effective_rank(t_a)
+    er_b, er_b_norm = effective_rank(t_b)
+    return name, er_a, er_a_norm, er_b, er_b_norm
+
+
 def compute_per_layer_jaccard(masks_a: Dict[str, torch.Tensor], masks_b: Dict[str, torch.Tensor]) -> Dict[str, float]:
     """Compute per-layer Jaccard for shared layers."""
     out = {}
@@ -132,6 +143,19 @@ def main():
     parser.add_argument("--cka-json", type=str, default=None, help="Optional CKA JSON containing `per_layer_cka`.")
     parser.add_argument("--jaccard-json", type=str, default=None, help="Optional Jaccard JSON containing `per_layer_jaccard`.")
     parser.add_argument("--output", "-o", type=str, default=None, help="Output CSV path.")
+    parser.add_argument(
+        "--skip_effective_rank",
+        action="store_true",
+        help="Skip SVD-based effective rank (much faster; rank columns left empty). "
+        "Recommended for large models: per-layer svdvals dominates wall time.",
+    )
+    parser.add_argument(
+        "--effective_rank_workers",
+        type=int,
+        default=None,
+        help="Parallel threads for per-layer SVD (ignored with --skip_effective_rank). "
+        "Default: min(8, max(1, cpu_count//2)). Use 1 for fully serial.",
+    )
     args = parser.parse_args()
 
     for path in (args.mask_a, args.mask_b):
@@ -155,8 +179,25 @@ def main():
 
     per_layer_cka = load_per_layer_json(args.cka_json, "per_layer_cka")
 
+    if args.skip_effective_rank:
+        er_out = None
+    else:
+        if args.effective_rank_workers is not None:
+            workers = max(1, int(args.effective_rank_workers))
+        else:
+            workers = min(8, max(1, (os.cpu_count() or 4) // 2))
+        # Avoid BLAS oversubscription: many threads each calling svdvals
+        if workers > 1:
+            torch.set_num_threads(max(1, (os.cpu_count() or 4) // workers))
+        pairs = [(n, masks_a[n], masks_b[n]) for n in common]
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                er_out = list(ex.map(_both_effective_ranks, pairs))
+        else:
+            er_out = [_both_effective_ranks(p) for p in pairs]
+
     rows = []
-    for name in common:
+    for idx, name in enumerate(common):
         ca = canonical_name(name)
         t_a = masks_a[name]
         t_b = masks_b[name]
@@ -164,8 +205,11 @@ def main():
         s_a = compute_basic_stats(t_a)
         s_b = compute_basic_stats(t_b)
 
-        er_a, er_a_norm = effective_rank(t_a)
-        er_b, er_b_norm = effective_rank(t_b)
+        if args.skip_effective_rank:
+            er_a = er_a_norm = er_b = er_b_norm = None
+        else:
+            assert er_out is not None
+            _, er_a, er_a_norm, er_b, er_b_norm = er_out[idx]
 
         rows.append(
             {
@@ -225,6 +269,10 @@ def main():
         writer.writerows(rows)
 
     print(f"Wrote {len(rows)} layer rows to: {output_path}")
+    if args.skip_effective_rank:
+        print("(effective_rank columns skipped; omit --skip_effective_rank for full SVD — slow on large models)")
+    else:
+        print(f"(effective_rank: {workers} worker(s); set --effective_rank_workers 1 for serial)")
     if meta_a:
         print(f"metadata_a: {meta_a}")
     if meta_b:

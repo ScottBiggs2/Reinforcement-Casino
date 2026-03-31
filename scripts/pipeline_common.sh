@@ -70,6 +70,10 @@ COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-16}"
 
 # Mask comparison stage: set RUN_MASK_CKA=1 for GPU-heavy activation CKA (add time budget)
 RUN_MASK_CKA="${RUN_MASK_CKA:-0}"
+# export_layer_metrics_csv.py: per-layer svdvals for "effective rank" — skip entirely, or parallelize (see below).
+EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK="${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}"
+# When skip=0: thread pool size for per-layer SVD (does not fix unrelated Slurm cancellations).
+EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS="${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-4}"
 MASK_COMPARISON_TIMEOUT_JACCARD="${MASK_COMPARISON_TIMEOUT_JACCARD:-600}"
 MASK_COMPARISON_TIMEOUT_CKA="${MASK_COMPARISON_TIMEOUT_CKA:-$((2 * 60 * 60))}"
 CKA_N_SAMPLES="${CKA_N_SAMPLES:-64}"
@@ -415,6 +419,11 @@ run_mask_comparisons() {
         )
         if [ -f "${comp_dir}/cka_${tag}.json" ]; then
           export_cmd+=( --cka-json "${comp_dir}/cka_${tag}.json" )
+        fi
+        if [ "${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}" = "1" ]; then
+          export_cmd+=( --skip_effective_rank )
+        else
+          export_cmd+=( --effective_rank_workers "${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-4}" )
         fi
         run_one_cmp_step "layer_metrics CSV ${tag}" "${export_cmd[@]}" || cmp_failures=$((cmp_failures + 1))
       fi
