@@ -46,13 +46,41 @@ echo "Resuming pipeline at stage ${STAGE}: ${NEXT}"
 echo "  PIPELINE_RUN_ID=${RUN}"
 echo "  (paths use RUN_ID from this id — same as your original chain)"
 
-JID=$(sbatch --parsable \
-  --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
-  "${REPO_ROOT}/scripts/${NEXT}")
+if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
+  # Comparisons without CKA don't need a GPU; run on CPU partition to avoid GPU-idle cancellation policies.
+  JID=$(sbatch --parsable \
+    --partition="${CPU_PARTITION:-cpu}" \
+    --time=08:00:00 \
+    --mem=128G \
+    --ntasks=1 \
+    --output=logs/pipeline_%j_p3_cmp_cpu.out \
+    --error=logs/pipeline_%j_p3_cmp_cpu.err \
+    --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
+    "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
+else
+  if [ "${STAGE}" = "3" ]; then
+    # Even with CKA enabled, stage 3a should be CPU (it will chain 3b GPU CKA itself).
+    JID=$(sbatch --parsable \
+      --partition="${CPU_PARTITION:-cpu}" \
+      --time=08:00:00 \
+      --mem=128G \
+      --ntasks=1 \
+      --output=logs/pipeline_%j_p3_cmp_cpu.out \
+      --error=logs/pipeline_%j_p3_cmp_cpu.err \
+      --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
+      "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
+  else
+    JID=$(sbatch --parsable \
+      --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
+      "${REPO_ROOT}/scripts/${NEXT}")
+  fi
+fi
 
 echo "Submitted job ${JID}"
 case "$STAGE" in
-  3) _log="pipeline_${JID}_p3_cmp.out" ;;
+  3)
+    _log="pipeline_${JID}_p3_cmp_cpu.out"
+    ;;
   4) _log="pipeline_${JID}_p4_sparse_launch.out" ;;
   5) _log="pipeline_${JID}_p5_eval.out" ;;
 esac

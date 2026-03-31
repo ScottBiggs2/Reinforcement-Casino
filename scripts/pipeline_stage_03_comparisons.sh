@@ -1,5 +1,9 @@
 #!/bin/bash
-# Stage 3/5: mask comparisons (Jaccard / optional CKA / CSV / plots).
+# Stage 3/5 (legacy GPU): mask comparisons (Jaccard / optional CKA / CSV / plots).
+# Prefer the split stages:
+#   - pipeline_stage_03_comparisons_cpu.sh (stage 3a, CPU)
+#   - pipeline_stage_03b_cka_gpu.sh        (stage 3b, GPU-only when RUN_MASK_CKA=1)
+# This avoids clusters cancelling GPU jobs that do mostly CPU work.
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:1
