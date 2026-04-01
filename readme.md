@@ -536,3 +536,32 @@ python src/evaluation/DPO_evaluation.py \
   --checkpoint_path "./results/run_name/final_model"
 ```
 If you specifically want to verify the sparsity logic, you can still pass a `--mask_path` to dynamically reconstruct the masked model for diagnostic comparison.
+
+
+# Scratch
+
+```bash 
+sbatch scripts/run_evals_slurm.sh \
+  --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
+  --trust_remote_code \
+  --output_dir "/scratch/biggs.s/rl_casino_eval_runs/manual_$(date +%Y%m%d_%H%M%S)"
+
+  # Warm Fisher
+  --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_fisher_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_fisher_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
+
+  # Warm Magnitude
+  --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_magnitude_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_magnitude_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
+
+  # Warm Momentum
+  --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_momentum_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_momentum_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
+
+  # Dense Baseline
+  --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
+
+```
+
+Job States: 
+5530469: Warm Fisher
+5530482: Warm Magnitude
+5530495: Warm Momentum
+5530552: Dense Baseline
