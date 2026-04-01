@@ -608,7 +608,9 @@ def create_mask_from_scores_gpu_efficient(
     for name, score in scores_dict.items():
         if score is None or score.numel() == 0:
             continue
-        s = score.to(device=selector_device, dtype=torch.float32)
+        # Defensive: some score tensors can be views/expanded tensors; in-place nan_to_num_
+        # fails when underlying storage has overlapping indices.
+        s = score.to(device=selector_device, dtype=torch.float32).clone()
         torch.nan_to_num_(s, nan=0.0, posinf=0.0, neginf=0.0)
         valid_scores[name] = s
 
