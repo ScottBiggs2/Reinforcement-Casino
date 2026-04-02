@@ -337,7 +337,7 @@ if __name__ == "__main__":
     parser.add_argument("--subset_size", type=int, default=None)
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw"], default="adamw")
     parser.add_argument("--use_wandb", action="store_true")
-    parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
+    parser.add_argument("--output_base_dir", type=str, default="/scratch/xie.yiyi/rl_casino_outputs")
 
     args = parser.parse_args()
 

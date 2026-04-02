@@ -71,8 +71,8 @@ LR=5e-6
 MASK_PATH="masks/top_10.0pct_momentum_w25_step25.pt"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTPUT_DIR="/scratch/biggs.s/rl_casino_outputs/benchmark_${TIMESTAMP}"
-CACHE_DIR="/scratch/biggs.s/hf_cache/datasets"
+OUTPUT_DIR="/scratch/xie.yiyi/rl_casino_outputs/benchmark_${TIMESTAMP}"
+CACHE_DIR="/scratch/xie.yiyi/hf_cache/datasets"
 mkdir -p "$OUTPUT_DIR"
 
 PASS=0
