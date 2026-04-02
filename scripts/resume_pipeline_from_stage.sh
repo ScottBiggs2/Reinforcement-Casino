@@ -27,6 +27,11 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
 mkdir -p logs
 
+# Match pipeline_common.sh defaults for stage 3a (CPU comparisons)
+PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-06:00:00}"
+PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-64G}"
+PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-4}"
+
 case "$STAGE" in
   3) NEXT="pipeline_stage_03_comparisons.sh" ;;
   4) NEXT="pipeline_stage_04_sparse.sh" ;;
@@ -50,8 +55,9 @@ if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
   # Comparisons without CKA don't need a GPU; run on CPU partition to avoid GPU-idle cancellation policies.
   JID=$(sbatch --parsable \
     --partition="${CPU_PARTITION:-cpu}" \
-    --time=08:00:00 \
-    --mem=128G \
+    --time="${PIPELINE_CPU_COMPARISON_TIME}" \
+    --mem="${PIPELINE_CPU_COMPARISON_MEM}" \
+    --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS}" \
     --ntasks=1 \
     --output=logs/pipeline_%j_p3_cmp_cpu.out \
     --error=logs/pipeline_%j_p3_cmp_cpu.err \
@@ -62,8 +68,9 @@ else
     # Even with CKA enabled, stage 3a should be CPU (it will chain 3b GPU CKA itself).
     JID=$(sbatch --parsable \
       --partition="${CPU_PARTITION:-cpu}" \
-      --time=08:00:00 \
-      --mem=128G \
+      --time="${PIPELINE_CPU_COMPARISON_TIME}" \
+      --mem="${PIPELINE_CPU_COMPARISON_MEM}" \
+      --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS}" \
       --ntasks=1 \
       --output=logs/pipeline_%j_p3_cmp_cpu.out \
       --error=logs/pipeline_%j_p3_cmp_cpu.err \

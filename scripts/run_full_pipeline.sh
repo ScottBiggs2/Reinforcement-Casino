@@ -1,13 +1,14 @@
 #!/bin/bash
-# Single Slurm job: run the entire pipeline in one allocation (needs a long enough wall time).
-# For clusters with an ~8h cap, use: bash scripts/submit_pipeline_chain.sh
+# Single Slurm job: run the entire pipeline in one allocation (wall must cover all stages).
+# Typical clusters cap jobs at 8h — a full train→masks→sparse pipeline usually does not fit in one slot.
+# Prefer: bash scripts/submit_pipeline_chain.sh
 #
 # Usage (repo root): sbatch scripts/run_full_pipeline.sh
 #
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:1
-#SBATCH --time=08:00:00
+#SBATCH --time=07:45:00
 #SBATCH --job-name=full_pipeline
 #SBATCH --mem=128G
 #SBATCH --ntasks=1

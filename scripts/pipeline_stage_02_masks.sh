@@ -2,8 +2,8 @@
 # Stage 2/5: warm + cold masks.
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:1
-#SBATCH --time=08:00:00
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=04:00:00
 #SBATCH --job-name=pipe_p2_masks
 #SBATCH --mem=128G
 #SBATCH --ntasks=1
@@ -33,8 +33,9 @@ fi
 jid=$(sbatch --parsable \
   --dependency=afterok:"${SLURM_JOB_ID}" \
   --partition="${CPU_PARTITION:-cpu}" \
-  --time=08:00:00 \
-  --mem=128G \
+  --time="${PIPELINE_CPU_COMPARISON_TIME:-06:00:00}" \
+  --mem="${PIPELINE_CPU_COMPARISON_MEM:-64G}" \
+  --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS:-4}" \
   --ntasks=1 \
   --output=logs/pipeline_%j_p3_cmp_cpu.out \
   --error=logs/pipeline_%j_p3_cmp_cpu.err \

@@ -22,7 +22,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
 #SBATCH --mem=128G
-#SBATCH --time=08:00:00
+#SBATCH --time=07:45:00
 
 # Exit on any error
 set -e

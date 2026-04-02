@@ -1,12 +1,13 @@
 #!/bin/bash
 # Stage 5/5: submit benchmark eval jobs (baseline / dense / sparse). Short wall — only sbatch fan-out.
-#SBATCH --partition=gpu
+# CPU-only: eval workers are separate GPU jobs from run_evals_slurm.sh.
+#SBATCH --partition=cpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:1
-#SBATCH --time=01:00:00
-#SBATCH --job-name=pipe_p5_eval
-#SBATCH --mem=32G
 #SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --time=00:30:00
+#SBATCH --job-name=pipe_p5_eval
+#SBATCH --mem=16G
 #SBATCH --output=logs/pipeline_%j_p5_eval.out
 #SBATCH --error=logs/pipeline_%j_p5_eval.err
 

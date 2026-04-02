@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Launch the full pipeline as a chain of Slurm jobs (each ≤8h by default) with afterok dependencies.
+# Launch the full pipeline as a chain of Slurm jobs (each respects typical 8h max wall; GPU stages use 7h45
+# + 7h30m soft timeouts) with afterok dependencies.
 # Run from the repo root on a login node:
 #   bash scripts/submit_pipeline_chain.sh
 #

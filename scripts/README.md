@@ -22,9 +22,9 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `run_mask_diagnostics.sh` - attention masking diagnostic.
 - `install_lm_eval.sh` - installs lm-eval and related dependencies.
 - `run_ablation_*.sh` - targeted ablation workflows.
-- `run_full_pipeline.sh` - **one Slurm job** for the entire train → masks → comparisons → sparse → eval flow (default **8h** wall; use the chain for longer work).
-- `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) for sites with a short per-job wall limit (e.g. 8h). Shared logic lives in `pipeline_common.sh`.
-- `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **8h** per mask).
+- `run_full_pipeline.sh` - **one Slurm job** for the entire train → masks → comparisons → sparse → eval flow (wall **≤8h**; full pipelines usually need the **chain** instead).
+- `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) so each stage respects a typical **8h max** wall. GPU-heavy stages default to **7h45** Slurm time with **7h30** soft `timeout`s; stage **4** (sparse launcher) and **5** (eval fan-out) use the **cpu** partition with small mem. Shared logic lives in `pipeline_common.sh`.
+- `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **7h45** per mask; override `SPARSE_SLURM_MEM` if needed).
 - `multigpu_pipeline/` - **parallel multi-GPU entrypoints** (keeps the single-GPU pipeline unchanged). Currently provides a multi-GPU dense DPO stage 1 launcher.
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
@@ -34,9 +34,54 @@ End-to-end flow: **dense DPO → warm/cold masks → mask comparisons → parall
 | Mode | When to use | Command |
 |------|-------------|---------|
 | **Chained jobs** | Per-job **wall limit** (e.g. 8h). Stages chain with `afterok`; sparse runs **in parallel** on separate GPUs. | **Login-node sample** below. |
-| **Single job** | One allocation **≤8h** (fits typical cluster max; tight for full pipeline). | `sbatch scripts/run_full_pipeline.sh` |
+| **Single job** | One allocation **≤8h** — rarely enough wall for a full multi-stage pipeline end-to-end. | `sbatch scripts/run_full_pipeline.sh` |
 
 Defaults and scratch paths are in [`pipeline_common.sh`](pipeline_common.sh). Override with **environment variables** before launching (same names as in that file: `MODEL`, `DPO_DATASETS`, `NUM_STEPS_DPO`, `TARGET_STEP_DPO`, eval knobs, etc.).
+
+**Slurm / resources:** GPU stages use `#SBATCH --time=07:45:00` (under a typical **8h** cap). `TRAIN_TIMEOUT_PER_DATASET`, `MASK_TIMEOUT`, and `SPARSE_TIMEOUT_PER_MASK` default to **7h30m** so processes get SIGTERM before Slurm. CPU-only stage **3a** (Jaccard / CSV) uses `PIPELINE_CPU_COMPARISON_TIME` (default **6h**), `PIPELINE_CPU_COMPARISON_MEM` (**64G**), `PIPELINE_CPU_COMPARISON_CPUS` (**4**). If your site has no `cpu` partition, edit `#SBATCH --partition` in `pipeline_stage_04_sparse.sh` and `pipeline_stage_05_evals.sh` (and the `sbatch` lines in `pipeline_stage_02_masks.sh` / `resume_pipeline_from_stage.sh` for stage 3a).
+
+### Single-GPU dense DPO — Tulu3 paper-style hyperparams (`SEQ` 1024)
+
+The paper’s global batch 128 used **8 GPUs** (per-device 1 × grad-accum 16 × 8). On **one GPU**, match global batch 128 with **per-device 1 × grad-accum 128** (or any product \(=128\)).
+
+Optional env vars are read by `run_dense_dpo()` in [`pipeline_common.sh`](pipeline_common.sh): `DPO_PER_DEVICE_TRAIN_BATCH_SIZE`, `DPO_GRADIENT_ACCUMULATION_STEPS`, `DPO_LEARNING_RATE`, `DPO_WARMUP_RATIO`, `DPO_WEIGHT_DECAY`, `DPO_MAX_LENGTH`, `DPO_MAX_PROMPT_LENGTH`, `DPO_BETA`. Gradient checkpointing defaults **on**; set `DPO_GRADIENT_CHECKPOINTING=0` to disable.
+
+**Chained full pipeline** (stage 1 uses these DPO settings):
+
+```bash
+cd /path/to/rl_casino
+export HF_TOKEN="hf_xxxxxxxx"
+
+export MODEL="meta-llama/Llama-3.1-8B-Instruct"
+export DPO_DATASETS="tulu3"
+export NUM_STEPS_DPO=2000
+
+# Paper-style (Tulu3 DPO); sequence length 1024 for faster steps than 2048
+export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=1
+export DPO_GRADIENT_ACCUMULATION_STEPS=128
+export DPO_LEARNING_RATE=5e-7
+export DPO_WARMUP_RATIO=0.1
+export DPO_WEIGHT_DECAY=0.0
+export DPO_MAX_LENGTH=1024
+export DPO_MAX_PROMPT_LENGTH=512
+
+export DELTA_LOG_INTERVAL=50
+export DELTA_LOG_END_STEP=200
+export TARGET_STEP_DPO=200
+
+# Dense DPO must finish within the Slurm wall (7h45 request, 7h30 soft timeout by default).
+# If you hit the limit, reduce steps / improve throughput — do not request >8h if the cluster forbids it.
+
+bash scripts/submit_pipeline_chain.sh
+```
+
+**Stage 1 only** (same env, then):
+
+```bash
+export PIPELINE_RUN_ID="singlegpu_tulu3_paper_$(date +%Y%m%d_%H%M%S)"
+export RUN_ID="$PIPELINE_RUN_ID"
+sbatch --export=ALL,PIPELINE_RUN_ID,RUN_ID scripts/pipeline_stage_01_dense.sh
+```
 
 ### Chained pipeline — copy/paste (login node)
 
@@ -54,7 +99,9 @@ export HF_TOKEN="hf_xxxxxxxx"   # required if the hub gates the model
 
 # --- 3) Optional overrides (uncomment as needed) ---
 # export PIPELINE_SPARSE_EVAL_DEPENDENCY=afterany   # eval stage runs after all sparse jobs *finish* (even if some failed)
-# export SPARSE_SLURM_TIME=08:00:00                 # wall time per parallel sparse job (default 8h; cluster max)
+# export SPARSE_SLURM_TIME=07:45:00                 # wall time per parallel sparse GPU job (default; ≤8h cluster max)
+# export SPARSE_SLURM_MEM=96G                       # optional: lower host RAM if your cluster charges by mem
+# export PIPELINE_CPU_COMPARISON_TIME=08:00:00      # optional: extend stage 3a wall if Jaccard/CSV needs it (default 6h)
 # export RUN_MASK_CKA=1                             # enable mask CKA in comparisons (GPU-heavy)
 # export EVAL_LIMIT=100                             # cap benchmark size; omit or empty for full runs
 

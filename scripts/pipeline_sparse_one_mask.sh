@@ -7,7 +7,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:1
-#SBATCH --time=08:00:00
+#SBATCH --time=07:45:00
 #SBATCH --job-name=sparse_one
 #SBATCH --mem=128G
 #SBATCH --ntasks=1

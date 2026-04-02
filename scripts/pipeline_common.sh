@@ -44,9 +44,9 @@ EVAL_OUT_BASE="/scratch/biggs.s/rl_casino_eval_runs"
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
 
 # Model / dataset (export HF_TOKEN for gated Llama; Tulu3 = allenai/llama-3.1-tulu-3-8b-preference-mixture)
-MODEL="meta-llama/Llama-3.1-8B-Instruct"
+MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 DPO_DATASETS=("tulu3")       # dataset registry keys; drives cold masks + sparse DPO
-NUM_STEPS_DPO=500
+NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
 # SUBSET_DPO unset or empty = full dataset (omit --subset_size). Example: SUBSET_DPO=4096 for a cap
 SUBSET_DPO="${SUBSET_DPO:-}"
 
@@ -80,18 +80,29 @@ CKA_N_SAMPLES="${CKA_N_SAMPLES:-64}"
 CKA_BATCH_SIZE="${CKA_BATCH_SIZE:-2}"
 PLOT_RANDOM_TRIALS="${PLOT_RANDOM_TRIALS:-3}"
 
-# Parallel sparse jobs (pipeline_stage_04): per-GPU-job wall time; eval dependency on all sparse jobs
-SPARSE_SLURM_TIME="${SPARSE_SLURM_TIME:-08:00:00}"
+# --- Slurm: respect cluster max wall (often 08:00:00) ---
+# Every pipeline stage’s #SBATCH --time must be ≤ that cap. GPU-heavy stages default to 07:45:00 so
+# soft timeouts (7h30m below) terminate work before Slurm kills the allocation.
+# Stages that only fan out sbatch (sparse launcher, eval launcher) use the cpu partition + small mem.
+
+# Parallel sparse jobs: per-GPU child job resources (see launch_parallel_sparse_jobs_and_eval)
+SPARSE_SLURM_TIME="${SPARSE_SLURM_TIME:-07:45:00}"
+SPARSE_SLURM_MEM="${SPARSE_SLURM_MEM:-128G}"
 # afterok = run evals only if every sparse job succeeded; afterany = run evals when all have finished (any exit code)
 PIPELINE_SPARSE_EVAL_DEPENDENCY="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
 
-# Timeouts (seconds) — default to ~8h wall per Slurm job (see submit_pipeline_chain.sh).
+# Stage 3a (CPU): Jaccard / CSV / plots — cheaper than GPU stages (overridden on sbatch CLI from stage 2 / resume)
+PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-06:00:00}"
+PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-64G}"
+PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-4}"
+
+# Timeouts (seconds) — stay below Slurm wall; default 7h30m so `timeout` sends SIGTERM before job limit.
 # Override when running a single long-horizon sbatch (e.g. TRAIN_TIMEOUT_PER_DATASET=$((16*60*60))).
 TRAIN_TIMEOUT_PER_DATASET="${TRAIN_TIMEOUT_PER_DATASET:-$((7 * 60 * 60 + 30 * 60))}"   # 7h30m
 MASK_TIMEOUT="${MASK_TIMEOUT:-$((7 * 60 * 60 + 30 * 60))}"
 SPARSE_TIMEOUT_PER_MASK="${SPARSE_TIMEOUT_PER_MASK:-$((7 * 60 * 60 + 30 * 60))}"
 
-# Per-job soft cap (stay under typical Slurm 8h wall)
+# Per-job soft cap (stay under 8h wall with margin)
 GLOBAL_MAX_SECONDS="${GLOBAL_MAX_SECONDS:-$((7 * 60 * 60 + 45 * 60))}"
 START_TS=$(date +%s)
 
@@ -210,6 +221,37 @@ run_dense_dpo() {
       delta_end_args+=(--delta_log_end_step "$DELTA_LOG_END_STEP")
     fi
 
+    # Optional DPO hyperparameters (paper / ablations). Omit env vars → DPO_train.py defaults.
+    local dpo_extra=()
+    if [ -n "${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-}" ]; then
+      dpo_extra+=(--per_device_train_batch_size "${DPO_PER_DEVICE_TRAIN_BATCH_SIZE}")
+    fi
+    if [ -n "${DPO_GRADIENT_ACCUMULATION_STEPS:-}" ]; then
+      dpo_extra+=(--gradient_accumulation_steps "${DPO_GRADIENT_ACCUMULATION_STEPS}")
+    fi
+    if [ -n "${DPO_LEARNING_RATE:-}" ]; then
+      dpo_extra+=(--learning_rate "${DPO_LEARNING_RATE}")
+    fi
+    if [ -n "${DPO_WARMUP_RATIO:-}" ]; then
+      dpo_extra+=(--warmup_ratio "${DPO_WARMUP_RATIO}")
+    fi
+    if [ -n "${DPO_WEIGHT_DECAY:-}" ]; then
+      dpo_extra+=(--weight_decay "${DPO_WEIGHT_DECAY}")
+    fi
+    if [ -n "${DPO_MAX_LENGTH:-}" ]; then
+      dpo_extra+=(--max_length "${DPO_MAX_LENGTH}")
+    fi
+    if [ -n "${DPO_MAX_PROMPT_LENGTH:-}" ]; then
+      dpo_extra+=(--max_prompt_length "${DPO_MAX_PROMPT_LENGTH}")
+    fi
+    if [ -n "${DPO_BETA:-}" ]; then
+      dpo_extra+=(--dpo_beta "${DPO_BETA}")
+    fi
+    # Gradient checkpointing: default on for dense DPO (8B); set DPO_GRADIENT_CHECKPOINTING=0 to disable.
+    if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" != "0" ]; then
+      dpo_extra+=(--gradient_checkpointing)
+    fi
+
     timeout --signal=TERM --kill-after=60 "${TRAIN_TIMEOUT_PER_DATASET}" \
       "$TRAIN_PY" src/full_training/DPO_train.py \
         --model_name "$MODEL" \
@@ -218,6 +260,7 @@ run_dense_dpo() {
         "${subset_args[@]}" \
         --delta_log_interval "${DELTA_LOG_INTERVAL}" \
         "${delta_end_args[@]}" \
+        "${dpo_extra[@]}" \
         --output_base_dir "$out_base" \
         --dataset_cache_dir "$cache_dir" \
         --use_wandb \
@@ -511,11 +554,11 @@ run_sparse_dpo() {
 
 # Submit one Slurm GPU job per mask .pt (parallel sparse runs), then submit eval stage when all finish.
 # PIPELINE_SPARSE_EVAL_DEPENDENCY: afterok (default) or afterany — whether eval stage waits for all sparse successes only.
-# SPARSE_SLURM_TIME: per-job wall time (default 08:00:00; cluster max is often 8h).
+# SPARSE_SLURM_TIME / SPARSE_SLURM_MEM: per sparse GPU child job (defaults in pipeline_common header; ≤8h wall).
 launch_parallel_sparse_jobs_and_eval() {
   local mask_dir="${MASK_OUT_BASE}/${RUN_ID}"
   local dep_kind="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
-  local wall="${SPARSE_SLURM_TIME:-08:00:00}"
+  local wall="${SPARSE_SLURM_TIME:-07:45:00}"
   local jids=()
   local mask
 
@@ -533,7 +576,7 @@ launch_parallel_sparse_jobs_and_eval() {
       --nodes=1 \
       --gres=gpu:h200:1 \
       --time="${wall}" \
-      --mem=128G \
+      --mem="${SPARSE_SLURM_MEM:-128G}" \
       --job-name="sp_${safe}" \
       --output="logs/sparse_${RUN_ID}_${safe}_%j.out" \
       --error="logs/sparse_${RUN_ID}_${safe}_%j.err" \
