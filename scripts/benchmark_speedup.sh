@@ -55,6 +55,7 @@ fi
 PYTHON="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 export PYTHONPATH=.
+export PYTHONPATH="/scratch/xie.yiyi/pip_packages:$PYTHONPATH"
 echo "Env:      $ENV_PATH"
 
 # ── Shared Config ───────────────────────────────────────────────────────────
