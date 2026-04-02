@@ -209,8 +209,8 @@ export HF_TOKEN="hf_xxxxxxxx"
 export MODEL="meta-llama/Llama-3.1-8B-Instruct"
 
 export MULTIGPU_NGPUS=4
-torchrun --standalone --nproc_per_node="$MULTIGPU_NGPUS" \
-  /scratch/biggs.s/conda_envs/rl_casino/bin/python src/full_training/DPO_train.py \
+/scratch/biggs.s/conda_envs/rl_casino/bin/torchrun --standalone --nproc_per_node="$MULTIGPU_NGPUS" \
+  src/full_training/DPO_train.py \
     --model_name "$MODEL" \
     --dataset "tulu3" \
     --num_steps 2000 \

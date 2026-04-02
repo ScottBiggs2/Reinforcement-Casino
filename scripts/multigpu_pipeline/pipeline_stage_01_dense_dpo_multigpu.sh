@@ -67,8 +67,8 @@ else
 fi
 
 timeout --signal=TERM --kill-after=60 "${TRAIN_TIMEOUT_PER_DATASET}" \
-  torchrun --standalone --nproc_per_node="${MULTIGPU_NGPUS}" \
-    "$TRAIN_PY" src/full_training/DPO_train.py \
+  "${TRAIN_ENV}/bin/torchrun" --standalone --nproc_per_node="${MULTIGPU_NGPUS}" \
+    src/full_training/DPO_train.py \
       --model_name "$MODEL" \
       --dataset "$ds" \
       "${train_len_args[@]}" \
