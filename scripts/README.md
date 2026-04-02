@@ -119,7 +119,9 @@ export MODEL="meta-llama/Llama-3.1-8B-Instruct"
 export DPO_DATASET_KEY="tulu3"
 
 # Multi-GPU controls (must match the script's #SBATCH --gres)
-export MULTIGPU_NGPUS=4
+# Use "auto" to match the number of visible GPUs (recommended).
+# Or set an integer that matches your Slurm --gres allocation.
+export MULTIGPU_NGPUS=auto
 
 # Paper-parity defaults (arXiv:2505.11711 Appendix B); override as needed.
 export SEQ_LEN=2048
@@ -160,7 +162,7 @@ export WARMUP_RATIO=0.1
 export WEIGHT_DECAY=0.0
 
 # Multi-GPU controls (must match the script's #SBATCH --gres)
-export MULTIGPU_NGPUS=4
+export MULTIGPU_NGPUS=auto
 
 # Keep warm-start artifact schedule compatible with the single-GPU pipeline defaults
 export DELTA_LOG_INTERVAL=50

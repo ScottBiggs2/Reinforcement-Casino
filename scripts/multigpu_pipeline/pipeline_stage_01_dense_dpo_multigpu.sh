@@ -8,7 +8,7 @@
 #
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
 #SBATCH --time=06:00:00
 #SBATCH --job-name=pipe_p1_dense_mgpu
 #SBATCH --mem=256G
@@ -51,6 +51,31 @@ delta_end_args=()
 if [ -n "${DELTA_LOG_END_STEP:-}" ]; then
   delta_end_args+=(--delta_log_end_step "$DELTA_LOG_END_STEP")
 fi
+
+# Resolve actual visible GPU count (prevents torchrun ranks > visible devices).
+visible_gpus_env="${CUDA_VISIBLE_DEVICES:-}"
+if [ -n "${visible_gpus_env}" ]; then
+  IFS=',' read -r -a _gpu_arr <<< "${visible_gpus_env}"
+  ngpus_visible="${#_gpu_arr[@]}"
+else
+  ngpus_visible="$("$TRAIN_PY" -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 0)"
+fi
+ngpus_visible="${ngpus_visible:-0}"
+
+if [ "${MULTIGPU_NGPUS}" = "auto" ]; then
+  MULTIGPU_NGPUS="${ngpus_visible}"
+elif [ "${ngpus_visible}" != "0" ] && [ "${MULTIGPU_NGPUS}" -gt "${ngpus_visible}" ]; then
+  echo "ERROR: MULTIGPU_NGPUS=${MULTIGPU_NGPUS} but only ${ngpus_visible} GPU(s) are visible (CUDA_VISIBLE_DEVICES='${CUDA_VISIBLE_DEVICES:-}')." >&2
+  echo "Fix: request more GPUs in sbatch (--gres) or lower MULTIGPU_NGPUS." >&2
+  exit 1
+fi
+
+if [ "${MULTIGPU_NGPUS}" -le 0 ]; then
+  echo "ERROR: No GPUs visible. torch.cuda.device_count()=${ngpus_visible} CUDA_VISIBLE_DEVICES='${CUDA_VISIBLE_DEVICES:-}'" >&2
+  exit 1
+fi
+
+echo "Visible GPUs: ${ngpus_visible} | Using MULTIGPU_NGPUS=${MULTIGPU_NGPUS}"
 
 # Effective batch math check (for logs + WandB config clarity)
 eff_batch=$(( PER_DEVICE_BS * GRAD_ACCUM * MULTIGPU_NGPUS ))

@@ -38,7 +38,8 @@ MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 DPO_DATASET_KEY="${DPO_DATASET_KEY:-tulu3}"
 
 # Multi-GPU settings
-MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-4}"
+# MULTIGPU_NGPUS can be an integer, or "auto" to use the number of visible GPUs.
+MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-auto}"
 MULTIGPU_GPU_TYPE="${MULTIGPU_GPU_TYPE:-h200}"
 MULTIGPU_RESERVATION="${MULTIGPU_RESERVATION:-}"  # optional
 
