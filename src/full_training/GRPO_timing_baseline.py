@@ -214,7 +214,7 @@ def train_baseline(
     
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         device_map="auto" if torch.cuda.is_available() else None,
     )
@@ -262,9 +262,7 @@ def train_baseline(
         model=model,
         args=grpo_config,
         train_dataset=dataset,
-        eval_dataset=None,
         reward_funcs=[reward_function],
-        data_collator=collator,
         processing_class=tokenizer,
         optimizers=(optimizer, None),
     )

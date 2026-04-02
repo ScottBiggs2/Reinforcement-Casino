@@ -112,7 +112,7 @@ def train(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
+        model_name, dtype=torch.bfloat16, low_cpu_mem_usage=True,
         device_map="auto"
     )
     model.config.use_cache = False
