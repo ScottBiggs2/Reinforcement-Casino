@@ -25,6 +25,7 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `run_full_pipeline.sh` - **one Slurm job** for the entire train → masks → comparisons → sparse → eval flow (default **8h** wall; use the chain for longer work).
 - `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) for sites with a short per-job wall limit (e.g. 8h). Shared logic lives in `pipeline_common.sh`.
 - `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **8h** per mask).
+- `multigpu_pipeline/` - **parallel multi-GPU entrypoints** (keeps the single-GPU pipeline unchanged). Currently provides a multi-GPU dense DPO stage 1 launcher.
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
 
@@ -98,3 +99,132 @@ Sparse DPO runs **sequentially** inside this job. Use the chained pipeline if yo
   - `TRAIN_ENV` / `EVAL_ENV` in [`pipeline_common.sh`](pipeline_common.sh)
   - `#SBATCH` resource directives in each `pipeline_stage_*.sh` and `run_full_pipeline.sh`
 - Keep logs under `logs/` and outputs under `results/` or scratch directories.
+
+## Multi-GPU dense DPO (canonical: `tulu3`, Llama 3.1 8B)
+
+If you have access to a multi-GPU reservation/partition, you can run **dense DPO stage 1** with multiple GPUs using the parallel scripts in `scripts/multigpu_pipeline/`.
+
+This is intentionally scoped to **dense DPO only** (mask/sparse/evals remain on the existing pipeline unless/until you add multi-GPU versions). This avoids overcomplicating requirements and lets you debug multi-process training in isolation.
+
+### Slurm batch (copy/paste)
+
+From the repo root on the login node:
+
+```bash
+cd /path/to/rl_casino
+export HF_TOKEN="hf_xxxxxxxx"   # required for gated Llama downloads
+
+# Canonical verification case
+export MODEL="meta-llama/Llama-3.1-8B-Instruct"
+export DPO_DATASET_KEY="tulu3"
+
+# Multi-GPU controls (must match the script's #SBATCH --gres)
+export MULTIGPU_NGPUS=4
+
+# Paper-parity defaults (arXiv:2505.11711 Appendix B); override as needed.
+export SEQ_LEN=2048
+export PER_DEVICE_BS=1
+export GRAD_ACCUM=16
+export LR_PEAK=5e-7
+export WARMUP_RATIO=0.1
+export WEIGHT_DECAY=0.0
+export NUM_EPOCHS=1
+
+# Optional: faster debug run
+# export SUBSET_DPO=256
+# export NUM_EPOCHS=0.05
+# export DELTA_LOG_END_STEP=50
+
+sbatch scripts/multigpu_pipeline/pipeline_stage_01_dense_dpo_multigpu.sh
+```
+
+### Full pipeline (multi-GPU stage 1 → existing stages 2–4)
+
+To relaunch the **full artifact pipeline** while using the new **multi-GPU-compatible dense DPO stage 1**, do:
+
+```bash
+cd /path/to/rl_casino
+export HF_TOKEN="hf_xxxxxxxx"
+
+# Canonical verification case
+export MODEL="meta-llama/Llama-3.1-8B-Instruct"
+export DPO_DATASET_KEY="tulu3"
+
+# 2000-step trial run (canonical hyperparams + warm-start artifacts)
+export NUM_STEPS_DPO=2000
+export SEQ_LEN=2048
+export PER_DEVICE_BS=1
+export GRAD_ACCUM=16
+export LR_PEAK=5e-7
+export WARMUP_RATIO=0.1
+export WEIGHT_DECAY=0.0
+
+# Multi-GPU controls (must match the script's #SBATCH --gres)
+export MULTIGPU_NGPUS=4
+
+# Keep warm-start artifact schedule compatible with the single-GPU pipeline defaults
+export DELTA_LOG_INTERVAL=50
+export DELTA_LOG_END_STEP=200
+export TARGET_STEP_DPO=200
+
+# Choose a run id so stage 2+ can find stage 1 outputs
+export PIPELINE_RUN_ID="mgpu_tulu3_2000steps_$(date +%Y%m%d_%H%M%S)"
+export RUN_ID="$PIPELINE_RUN_ID"
+
+# Submit stage 1 (multi-GPU dense DPO)
+J1=$(sbatch --parsable --export=ALL,PIPELINE_RUN_ID,RUN_ID scripts/multigpu_pipeline/pipeline_stage_01_dense_dpo_multigpu.sh)
+echo "Stage 1 (multigpu dense DPO) job id: $J1  RUN_ID=$RUN_ID"
+
+# Chain stage 2 (masks) after stage 1 completes.
+J2=$(sbatch --parsable --dependency=afterok:"$J1" --export=ALL,PIPELINE_RUN_ID="$RUN_ID",RUN_ID="$RUN_ID" scripts/pipeline_stage_02_masks.sh)
+echo "Stage 2 (masks) job id: $J2"
+
+# Stage 2 will chain stage 3 CPU comparisons → stage 4 sparse → stage 5 eval submissions via existing scripts.
+```
+
+Success/progress checks:
+
+```bash
+squeue -u "$USER"
+
+# Dense DPO logs (stage 1):
+tail -f logs/pipeline_${J1}_p1_dense_mgpu.out
+tail -f logs/full_pipeline_dpo_multigpu_tulu3_${RUN_ID}.log
+
+# After stage 1, verify warm-start artifacts exist:
+ls -lh /scratch/biggs.s/rl_casino_train/${RUN_ID}/deltas/*/base_state.pt
+ls -lh /scratch/biggs.s/rl_casino_train/${RUN_ID}/deltas/*/deltas_step_*.pt | head
+```
+
+### Interactive allocation (debug)
+
+If you prefer an interactive shell under a reservation, follow your site guidance. Explorer documents the reservation pattern here:
+- https://rc-docs.northeastern.edu/en/explorer-main/gpus/multigpu-partition-access.html
+
+Once you have an interactive shell with N GPUs, you can run the same command line as the sbatch script uses, e.g.:
+
+```bash
+cd /path/to/rl_casino
+export HF_TOKEN="hf_xxxxxxxx"
+export MODEL="meta-llama/Llama-3.1-8B-Instruct"
+
+export MULTIGPU_NGPUS=4
+torchrun --standalone --nproc_per_node="$MULTIGPU_NGPUS" \
+  /scratch/biggs.s/conda_envs/rl_casino/bin/python src/full_training/DPO_train.py \
+    --model_name "$MODEL" \
+    --dataset "tulu3" \
+    --num_steps 2000 \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 16 \
+    --learning_rate 5e-7 \
+    --warmup_ratio 0.1 \
+    --weight_decay 0.0 \
+    --max_length 2048 \
+    --max_prompt_length 2048 \
+    --delta_log_interval 50 \
+    --delta_log_end_step 200 \
+    --output_base_dir "/scratch/biggs.s/rl_casino_train/manual_${SLURM_JOB_ID:-local}" \
+    --dataset_cache_dir "/scratch/biggs.s/hf_cache/datasets" \
+    --use_wandb \
+    --run_name "manual_multigpu_dpo_${SLURM_JOB_ID:-local}"
+```

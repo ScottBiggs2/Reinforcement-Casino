@@ -3,13 +3,10 @@ import json
 import argparse
 import torch
 import wandb
-from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    TrainingArguments,
     TrainerCallback,
-    DataCollatorWithPadding,
 )
 from trl import DPOTrainer, DPOConfig
 from typing import List, Dict, Any
@@ -53,9 +50,21 @@ parser.add_argument(
 parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB")
 parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
 parser.add_argument("--num_steps", type=int, default=500, help="Number of training steps (default: 500)")
+parser.add_argument("--num_train_epochs", type=float, default=None, help="Train for N epochs (overrides --num_steps when set).")
 parser.add_argument("--subset_size", type=int, default=None, help="Limit dataset size (default: None = full)")
 parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs", help="Base directory for all outputs (checkpoints, deltas)")
 parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets", help="Cache directory for HuggingFace datasets")
+parser.add_argument("--per_device_train_batch_size", type=int, default=4, help="Per-device train batch size.")
+parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps.")
+parser.add_argument("--learning_rate", type=float, default=5e-6, help="Peak learning rate.")
+parser.add_argument("--warmup_ratio", type=float, default=0.0, help="Warmup ratio for LR schedule.")
+parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay.")
+parser.add_argument("--max_length", type=int, default=1024, help="Max total sequence length.")
+parser.add_argument("--max_prompt_length", type=int, default=512, help="Max prompt length.")
+parser.add_argument("--dpo_beta", type=float, default=0.1, help="DPO beta.")
+parser.add_argument("--optim", type=str, default="adamw_8bit", help="Optimizer name for Trainer (e.g. adamw_8bit).")
+parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing.")
+parser.add_argument("--no_gradient_checkpointing", action="store_true", help="Disable gradient checkpointing.")
 parser.add_argument(
     "--delta_log_interval",
     type=int,
@@ -95,6 +104,7 @@ DELTA_LOG_DIR = os.path.join(BASE_DIR, "deltas", SUB_DIR)
 THRESHOLD = 1e-5 # appendix A in Mukherjee et al 2025
 NUM_STEPS = args.num_steps
 SUBSET_SIZE = args.subset_size
+NUM_EPOCHS = args.num_train_epochs
 
 # Delta checkpoints for warm-start masks: e.g. every 50 steps up to ~10%% of the run (200 for 2k steps).
 _interval = args.delta_log_interval
@@ -118,7 +128,6 @@ print(f"Checkpoint schedule: {CHECKPOINT_SCHEDULE}")
 #######################################
 
 from src.utils.dataset_registry import load_dpo_dataset as registry_load_dpo
-from src.utils.data_utils import dpo_collator_fn
 
 raw_ds = registry_load_dpo(DATASET_KEY, subset_size=SUBSET_SIZE)
 train_dataset = raw_ds
@@ -191,7 +200,8 @@ def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
+    # device_map="auto" breaks multi-process DDP; only use it for single-process runs.
+    device_map=None,
 )
 model.config.use_cache = False  # Trainer compat
 
@@ -199,27 +209,33 @@ model.config.use_cache = False  # Trainer compat
 # 4. DPOConfig
 #######################################
 
+_grad_ckpt = args.gradient_checkpointing
+if args.no_gradient_checkpointing:
+    _grad_ckpt = False
+
 cfg = DPOConfig(
     output_dir=OUTPUT_DIR,
     run_name=WANDB_RUN_NAME,
     report_to=["wandb"] if args.use_wandb else [],
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=4,
-    learning_rate=5e-6,
-    max_steps=NUM_STEPS,
-    num_train_epochs=1,
+    per_device_train_batch_size=args.per_device_train_batch_size,
+    gradient_accumulation_steps=args.gradient_accumulation_steps,
+    learning_rate=args.learning_rate,
+    warmup_ratio=args.warmup_ratio,
+    weight_decay=args.weight_decay,
+    max_steps=-1 if NUM_EPOCHS is not None else NUM_STEPS,
+    num_train_epochs=NUM_EPOCHS if NUM_EPOCHS is not None else 1,
     bf16=True, 
     fp16=False,
-    optim="adamw_8bit",
-    gradient_checkpointing=True,
+    optim=args.optim,
+    gradient_checkpointing=_grad_ckpt,
     logging_steps=1,
     save_steps=999999,  # Disabled - we'll handle saving in callback
     save_total_limit=None,
     remove_unused_columns=False,
     # DPO knobs:
-    beta=0.1,
-    max_length=1024,
-    max_prompt_length=512,
+    beta=args.dpo_beta,
+    max_length=args.max_length,
+    max_prompt_length=args.max_prompt_length,
 )
 
 trainer = DPOTrainer(
@@ -235,12 +251,13 @@ trainer = DPOTrainer(
 #######################################
 
 base_state = {}
-with torch.no_grad():
-    for name, param in trainer.model.named_parameters():
-        base_state[name] = param.detach().float().cpu().clone()
+if trainer.is_world_process_zero():
+    with torch.no_grad():
+        for name, param in trainer.model.named_parameters():
+            base_state[name] = param.detach().float().cpu().clone()
 
-os.makedirs(DELTA_LOG_DIR, exist_ok=True)
-torch.save(base_state, os.path.join(DELTA_LOG_DIR, "base_state.pt"))
+    os.makedirs(DELTA_LOG_DIR, exist_ok=True)
+    torch.save(base_state, os.path.join(DELTA_LOG_DIR, "base_state.pt"))
 
 #######################################
 # 6. Flexible Checkpoint Callback
@@ -262,6 +279,8 @@ class FlexibleCheckpointCallback(TrainerCallback):
         self.wandb_initialized = False
 
     def on_train_begin(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return
         if not self.wandb_initialized and "wandb" in args.report_to:
             wandb.init(
                 project=WANDB_PROJECT,
@@ -279,6 +298,8 @@ class FlexibleCheckpointCallback(TrainerCallback):
             self.wandb_initialized = True
 
     def on_step_end(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return control
         model = kwargs["model"]
         step = state.global_step
 
@@ -340,7 +361,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
         return control
 
     def on_train_end(self, args, state, control, **kwargs):
-        if self.wandb_initialized:
+        if state.is_world_process_zero and self.wandb_initialized:
             wandb.finish()
 
 #######################################

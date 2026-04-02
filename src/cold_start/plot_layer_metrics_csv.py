@@ -285,6 +285,12 @@ def main():
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--pattern", type=str, default="*.csv")
     parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="/home/biggs.s/figs",
+        help="Directory to write plot PNGs (created if missing).",
+    )
+    parser.add_argument(
         "--random-trials",
         type=int,
         default=3,
@@ -294,6 +300,8 @@ def main():
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir).resolve()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     pattern = f"**/{args.pattern}" if args.recursive else args.pattern
     csv_files = sorted(input_dir.glob(pattern))
 
@@ -302,7 +310,7 @@ def main():
 
     made = 0
     for p in csv_files:
-        out = p.with_name(f"{p.stem}_plots.png")
+        out = output_dir / f"{p.stem}_plots.png"
         if plot_one(p, out, args.random_trials, args.random_seed):
             made += 1
             print(f"✓ {out}")
