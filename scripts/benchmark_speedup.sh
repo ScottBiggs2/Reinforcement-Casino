@@ -100,27 +100,35 @@ run_and_track() {
 run_and_track "Dense + AdamW" \
     "$PYTHON" src/full_training/GRPO_timing_baseline.py \
         --model_name "$MODEL" \
+        --dataset "$DATASET" \
         --n_steps "$N_STEPS" \
         --subset_size "$SUBSET" \
         --batch_size "$BATCH_SIZE" \
         --grad_accum "$GRAD_ACCUM" \
-        --learning_rate "$LR" \
+        --num_generations "$NUM_GENERATIONS" \
+        --generation_batch_size "$GEN_BATCH_SIZE" \
+        --lr "$LR" \
         --optimizer adamw \
         --use_wandb \
-        --output_base_dir "$OUTPUT_DIR"
+        --output_base_dir "$OUTPUT_DIR" \
+        --dataset_cache_dir "$CACHE_DIR"
 
 # ── 2. Dense + SGD ──────────────────────────────────────────────────────────
 run_and_track "Dense + SGD" \
     "$PYTHON" src/full_training/GRPO_timing_baseline.py \
         --model_name "$MODEL" \
+        --dataset "$DATASET" \
         --n_steps "$N_STEPS" \
         --subset_size "$SUBSET" \
         --batch_size "$BATCH_SIZE" \
         --grad_accum "$GRAD_ACCUM" \
-        --learning_rate "$LR" \
+        --num_generations "$NUM_GENERATIONS" \
+        --generation_batch_size "$GEN_BATCH_SIZE" \
+        --lr "$LR" \
         --optimizer sgd \
         --use_wandb \
-        --output_base_dir "$OUTPUT_DIR"
+        --output_base_dir "$OUTPUT_DIR" \
+        --dataset_cache_dir "$CACHE_DIR"
 
 # ── 3. LoRA + AdamW ─────────────────────────────────────────────────────────
 run_and_track "LoRA + AdamW (r=16)" \
