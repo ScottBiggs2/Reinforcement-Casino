@@ -13,9 +13,8 @@ import json
 import time
 import torch
 import argparse
-import wandb
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOTrainer, GRPOConfig
 from typing import List, Dict, Any
 
@@ -23,7 +22,7 @@ from typing import List, Dict, Any
 # CONFIGURATION
 # ============================================================================
 
-MODEL_NAME = "google/gemma-3-270m-it"
+DEFAULT_MODEL_NAME = "google/gemma-3-270m-it"
 DATASET_NAME = "open-r1/OpenR1-Math-220k"
 SUBSET_SIZE = 10
 
@@ -160,23 +159,42 @@ def train_baseline(
     batch_size=1,
     learning_rate=5e-5,
     subset_size=10,
+    optimizer_type="adamw",
+    model_name=None,
+    output_base_dir=None,
+    grad_accum=1,
+    use_wandb=False,
 ):
     """Baseline dense GRPO training with timing measurement."""
-    
-    model_path = checkpoint_path if checkpoint_path else MODEL_NAME
-    
+
+    if model_name is None:
+        model_name = DEFAULT_MODEL_NAME
+    model_path = checkpoint_path if checkpoint_path else model_name
+
+    if output_base_dir is None:
+        output_base_dir = "./benchmark_outputs"
+
+    run_name = f"dense_grpo_{optimizer_type}"
+    run_dir = os.path.join(output_base_dir, run_name)
+    os.makedirs(run_dir, exist_ok=True)
+
+    if use_wandb:
+        os.environ["WANDB_PROJECT"] = "huggingface"
+
     print(f"\n{'='*60}")
     print(f"BASELINE DENSE GRPO TRAINING")
     print(f"{'='*60}")
     print(f"Model: {model_path}")
+    print(f"Optimizer: {optimizer_type}")
     print(f"Steps: {n_steps}")
     print(f"Batch size: {batch_size}")
+    print(f"Grad accum: {grad_accum}")
     print(f"Learning rate: {learning_rate}")
     print(f"{'='*60}\n")
 
     # Load tokenizer
     print("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -207,105 +225,36 @@ def train_baseline(
     model.config.use_cache = False
     print(f"✓ Model loaded on {device} with dtype: {model.dtype}\n")
 
+    # Select optimizer
+    if optimizer_type == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
+    elif optimizer_type == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    else:
+        raise ValueError(f"Unknown optimizer: {optimizer_type}")
+
     # Configure GRPO
     grpo_config = GRPOConfig(
-        output_dir="./baseline_temp",
+        output_dir=os.path.join(run_dir, "checkpoints"),
+        run_name=run_name,
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
         max_steps=n_steps,
-        logging_steps=n_steps + 1,  # Disable logging
-        report_to=["wandb"],
+        logging_steps=1,
+        report_to=["wandb"] if use_wandb else "none",
         remove_unused_columns=False,
-        gradient_accumulation_steps=1,
-        beta=0.1,  # KL penalty coefficient
-        max_length=1024,
+        gradient_accumulation_steps=grad_accum,
+        beta=0.1,
+        max_completion_length=1024,
         max_prompt_length=512,
-        num_generations=8,  # Number of generations per prompt
-        generation_batch_size=8,  # Batch size for generation
+        num_generations=8,
+        generation_batch_size=8,
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         fp16=False,
         gradient_checkpointing=True,
         dataloader_pin_memory=False,
-        save_steps=n_steps + 1,  # Disable saving
+        save_steps=999999,
     )
-
-    # Snapshot initial params θ(0)
-    base_state = {}
-    with torch.no_grad():
-        for name, param in model.named_parameters():
-            base_state[name] = param.detach().float().cpu().clone()
-
-    # Subnet logging callback
-    class SubnetLoggingCallback(TrainerCallback):
-        """Callback that logs subnet statistics to wandb."""
-        
-        def __init__(self, base_state, threshold=1e-3):
-            self.base_state = base_state
-            self.threshold = threshold
-            self.wandb_initialized = False
-
-        def on_train_begin(self, args, state, control, **kwargs):
-            if not self.wandb_initialized:
-                wandb.init(
-                    project="grpo-timing-baseline",
-                    name=args.run_name if hasattr(args, 'run_name') else "grpo_timing",
-                    config={
-                        "model_name": MODEL_NAME,
-                        "dataset": DATASET_NAME,
-                        "subset_size": subset_size,
-                        "learning_rate": args.learning_rate,
-                        "batch_size_per_device": args.per_device_train_batch_size,
-                    },
-                )
-                self.wandb_initialized = True
-
-        def on_step_end(self, args, state, control, **kwargs):
-            model = kwargs["model"]
-            step = state.global_step
-
-            layer_stats = {}
-
-            with torch.no_grad():
-                for name, param in model.named_parameters():
-                    current = param.detach().float().cpu()
-                    diff = current - self.base_state[name]
-
-                    l2 = torch.norm(diff).item()
-                    frac_big = (diff.abs() > self.threshold).float().mean().item()
-
-                    layer_stats[name] = {
-                        "l2_from_init": l2,
-                        "frac_big_from_init": frac_big,
-                    }
-
-            # Aggregate summaries for wandb
-            all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
-            all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
-            mean_l2 = sum(all_l2) / len(all_l2)
-            mean_frac = sum(all_frac) / len(all_frac)
-
-            attn_l2 = []
-            mlp_l2 = []
-            for n, st in layer_stats.items():
-                low = n.lower()
-                if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
-                    attn_l2.append(st["l2_from_init"])
-                if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
-                    mlp_l2.append(st["l2_from_init"])
-
-            wandb.log({
-                "step": step,
-                "subnet/mean_l2_from_init": mean_l2,
-                "subnet/mean_frac_big_from_init": mean_frac,
-                "subnet/attn_mean_l2": (sum(attn_l2)/len(attn_l2)) if attn_l2 else 0.0,
-                "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
-            }, step=step)
-
-            return control
-
-        def on_train_end(self, args, state, control, **kwargs):
-            if self.wandb_initialized:
-                wandb.finish()
 
     # Initialize trainer
     print("Initializing GRPOTrainer...")
@@ -317,11 +266,9 @@ def train_baseline(
         reward_funcs=[reward_function],
         data_collator=collator,
         processing_class=tokenizer,
+        optimizers=(optimizer, None),
     )
-    
-    # Add subnet logging callback
-    trainer.add_callback(SubnetLoggingCallback(base_state=base_state, threshold=1e-3))
-    
+
     print("✓ Trainer ready\n")
 
     # Train with timing
@@ -357,42 +304,52 @@ def train_baseline(
     
     # Save timing results
     results = {
-        'wall_time': wall_time,
-        'time_per_step_wall': wall_time / n_steps,
+        'method': 'dense',
+        'optimizer': optimizer_type,
+        'model': model_name,
         'n_steps': n_steps,
         'batch_size': batch_size,
+        'grad_accum': grad_accum,
         'learning_rate': learning_rate,
+        'wall_time': wall_time,
+        'time_per_step_wall': wall_time / n_steps,
     }
-    
+
     if torch.cuda.is_available():
         results['gpu_time'] = gpu_time
         results['time_per_step_gpu'] = gpu_time / n_steps
-    
-    with open('baseline_grpo_timing.json', 'w') as f:
+
+    timing_path = os.path.join(run_dir, 'timing_results.json')
+    with open(timing_path, 'w') as f:
         json.dump(results, f, indent=2)
-    print("✓ Timing results saved to baseline_grpo_timing.json\n")
+    print(f"Timing saved to {timing_path}\n")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Baseline dense GRPO training for timing comparison")
     
-    parser.add_argument("--checkpoint", type=str, default=None,
-                       help="Path to checkpoint (default: None = use base model)")
-    parser.add_argument("--n_steps", type=int, default=10,
-                       help="Number of training steps (default: 10)")
-    parser.add_argument("--batch_size", type=int, default=1,
-                       help="Batch size (default: 1)")
-    parser.add_argument("--learning_rate", type=float, default=5e-5,
-                       help="Learning rate (default: 5e-5)")
-    parser.add_argument("--subset_size", type=int, default=10,
-                       help="Dataset subset size (default: 10)")
-    
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--model_name", type=str, default=None)
+    parser.add_argument("--n_steps", type=int, default=50)
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--grad_accum", type=int, default=8)
+    parser.add_argument("--learning_rate", type=float, default=5e-6)
+    parser.add_argument("--subset_size", type=int, default=None)
+    parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw"], default="adamw")
+    parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
+
     args = parser.parse_args()
-    
+
     train_baseline(
         checkpoint_path=args.checkpoint,
         n_steps=args.n_steps,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         subset_size=args.subset_size,
+        optimizer_type=args.optimizer,
+        model_name=args.model_name,
+        output_base_dir=args.output_base_dir,
+        grad_accum=args.grad_accum,
+        use_wandb=args.use_wandb,
     )
