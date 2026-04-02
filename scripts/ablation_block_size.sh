@@ -63,7 +63,7 @@ GEN_BATCH_SIZE=8
 LR=5e-6
 OPTIMIZER="sparse_adamw"
 
-MASK_PATH="masks/top_10.0pct_momentum_w25_step25.pt"
+MASK_PATH="masks/grpo_verify/fisher_grpo.pt"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 OUTPUT_DIR="/scratch/xie.yiyi/rl_casino_outputs/ablation_blocksize_${TIMESTAMP}"
