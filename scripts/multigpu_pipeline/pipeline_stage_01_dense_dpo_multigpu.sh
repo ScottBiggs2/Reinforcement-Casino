@@ -8,7 +8,7 @@
 #
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:2
 #SBATCH --time=06:00:00
 #SBATCH --job-name=pipe_p1_dense_mgpu
 #SBATCH --mem=256G
