@@ -117,7 +117,9 @@ run_sparse() {
 # ── Sweep 1: block_size_bsr with fixed block_size_adam=128 ───────────────────
 echo ""
 echo "=== Sweep: block_size_bsr in {8, 16, 32, 64}, block_size_adam=128 ==="
-for BSR in 8 16 32 64; do
+# bsr=16/adam=128 already covered by benchmark_speedup.sh
+# bsr=8 too small for Triton (requires >= 16)
+for BSR in 32 64; do
     run_sparse "$BSR" 128
 done
 
