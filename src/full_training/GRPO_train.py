@@ -18,6 +18,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"
 
 from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset
 from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
+from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
 
 def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
@@ -30,8 +31,18 @@ parser.add_argument("--run_name", type=str, default=None)
 parser.add_argument("--use_wandb", action="store_true")
 parser.add_argument("--num_steps", type=int, default=1000)
 parser.add_argument("--subset_size", type=int, default=None)
-parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
-parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets")
+parser.add_argument(
+    "--output_base_dir",
+    type=str,
+    default=default_rl_casino_outputs(),
+    help="Override RL_CASINO_SCRATCH_ROOT to relocate (default /scratch/$USER/rl_casino_outputs).",
+)
+parser.add_argument(
+    "--dataset_cache_dir",
+    type=str,
+    default=default_hf_datasets_cache(),
+    help="HF dataset cache (default under RL_CASINO_SCRATCH_ROOT).",
+)
 parser.add_argument("--num_generations", type=int, default=8)
 parser.add_argument("--generation_batch_size", type=int, default=8)
 args = parser.parse_args()

@@ -20,14 +20,17 @@ else
 fi
 export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$RUN_ID}"
 
-# Envs (reuse the same envs as the baseline pipeline)
-TRAIN_ENV="${TRAIN_ENV:-/scratch/biggs.s/conda_envs/rl_casino}"
+# Envs — same defaults as scripts/pipeline_common.sh (override SCRATCH_USER_ROOT per cluster)
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
+TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
 
-TRAIN_OUT_BASE="${TRAIN_OUT_BASE:-/scratch/biggs.s/rl_casino_train}"
-MASK_OUT_BASE="${MASK_OUT_BASE:-/scratch/biggs.s/rl_casino_masks}"
-SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-/scratch/biggs.s/rl_casino_sparse_train}"
-EVAL_OUT_BASE="${EVAL_OUT_BASE:-/scratch/biggs.s/rl_casino_eval_runs}"
+TRAIN_OUT_BASE="${TRAIN_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_train}"
+MASK_OUT_BASE="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}"
+SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train}"
+EVAL_OUT_BASE="${EVAL_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_eval_runs}"
+HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
 

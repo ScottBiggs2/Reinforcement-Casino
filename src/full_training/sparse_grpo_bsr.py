@@ -21,6 +21,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset
 from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
+from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
 from src.optimizers.sparse_adamw import SparseAdamW
 from src.mlps.bsr_sparse_mlp import replace_linear_modules, restore_linear_modules
 
@@ -266,8 +267,8 @@ if __name__ == "__main__":
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--dataset", type=str, default="math-220k")
-    parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
-    parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets")
+    parser.add_argument("--output_base_dir", type=str, default=default_rl_casino_outputs())
+    parser.add_argument("--dataset_cache_dir", type=str, default=default_hf_datasets_cache())
     
     def str2bool(v):
         if isinstance(v, bool): return v

@@ -38,7 +38,7 @@ echo "and set MULTIGPU_NGPUS to match --gres."
 
 ds="${DPO_DATASET_KEY}"
 out_base="${TRAIN_OUT_BASE}/${RUN_ID}"
-cache_dir="/scratch/biggs.s/hf_cache/datasets"
+cache_dir="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 run_name="fullpipe_dpo_multigpu_${ds}_${RUN_ID}"
 mkdir -p "$out_base"
 

@@ -28,20 +28,28 @@ export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$RUN_ID}"
 echo "Full pipeline RUN_ID=${RUN_ID}"
 echo "Repo root: ${REPO_ROOT}"
 
+# Scratch layout: default /scratch/$USER/... for portable HPC. Override for a fixed netid tree, e.g.:
+#   export SCRATCH_USER_ROOT=/scratch/biggs.s
+#   export TRAIN_ENV=/scratch/biggs.s/conda_envs/rl_casino   # optional full-path overrides
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
+
 # Training environment (must already exist and have requirements installed)
-TRAIN_ENV="/scratch/biggs.s/conda_envs/rl_casino"
+TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
 
 # Eval environment (for run_evals_slurm / verify_coding, separate env)
-EVAL_ENV="/scratch/biggs.s/conda_envs/rl_casino_eval"
+EVAL_ENV="${EVAL_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino_eval}"
 
 # Scratch / output roots
-TRAIN_OUT_BASE="/scratch/biggs.s/rl_casino_train"
-MASK_OUT_BASE="/scratch/biggs.s/rl_casino_masks"
-SPARSE_OUT_BASE="/scratch/biggs.s/rl_casino_sparse_train"
-EVAL_OUT_BASE="/scratch/biggs.s/rl_casino_eval_runs"
+TRAIN_OUT_BASE="${TRAIN_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_train}"
+MASK_OUT_BASE="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}"
+SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train}"
+EVAL_OUT_BASE="${EVAL_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_eval_runs}"
+HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
+echo "Scratch: SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}  TRAIN_OUT_BASE=${TRAIN_OUT_BASE}  HF_DATASETS_CACHE_ROOT=${HF_DATASETS_CACHE_ROOT}"
 
 # Model / dataset (export HF_TOKEN for gated Llama; Tulu3 = allenai/llama-3.1-tulu-3-8b-preference-mixture)
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
@@ -207,7 +215,7 @@ run_dense_dpo() {
 
     local out_base cache_dir run_name
     out_base="${TRAIN_OUT_BASE}/${RUN_ID}"
-    cache_dir="/scratch/biggs.s/hf_cache/datasets"
+    cache_dir="${HF_DATASETS_CACHE_ROOT}"
     run_name="fullpipe_dpo_${ds}_${RUN_ID}"
 
     mkdir -p "$out_base"
@@ -502,7 +510,7 @@ run_sparse_dpo_one_mask() {
 
   local out_base cache_dir run_name
   out_base="${SPARSE_OUT_BASE}/${RUN_ID}/${mask_name%.pt}"
-  cache_dir="/scratch/biggs.s/hf_cache/datasets"
+  cache_dir="${HF_DATASETS_CACHE_ROOT}"
   run_name="fullpipe_sparse_${mask_name%.*}_${RUN_ID}"
 
   mkdir -p "$out_base"

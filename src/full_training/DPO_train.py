@@ -11,6 +11,8 @@ from transformers import (
 from trl import DPOTrainer, DPOConfig
 from typing import List, Dict, Any
 
+from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
+
 
 #######################################
 # 0. Config
@@ -52,8 +54,8 @@ parser.add_argument("--use_wandb", action="store_true", help="Enable WandB loggi
 parser.add_argument("--num_steps", type=int, default=500, help="Number of training steps (default: 500)")
 parser.add_argument("--num_train_epochs", type=float, default=None, help="Train for N epochs (overrides --num_steps when set).")
 parser.add_argument("--subset_size", type=int, default=None, help="Limit dataset size (default: None = full)")
-parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs", help="Base directory for all outputs (checkpoints, deltas)")
-parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets", help="Cache directory for HuggingFace datasets")
+parser.add_argument("--output_base_dir", type=str, default=default_rl_casino_outputs(), help="Base directory for all outputs (checkpoints, deltas)")
+parser.add_argument("--dataset_cache_dir", type=str, default=default_hf_datasets_cache(), help="Cache directory for HuggingFace datasets")
 parser.add_argument("--per_device_train_batch_size", type=int, default=4, help="Per-device train batch size.")
 parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps.")
 parser.add_argument("--learning_rate", type=float, default=5e-6, help="Peak learning rate.")
