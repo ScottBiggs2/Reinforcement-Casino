@@ -11,7 +11,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:a100:1
 #SBATCH --mem=128G
-#SBATCH --time=03:00:00
+#SBATCH --time=04:00:00
 
 # ── Repo root ────────────────────────────────────────────────────────────────
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
