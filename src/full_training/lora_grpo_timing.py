@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
 """
-Baseline Dense GRPO Training - Timing Comparison Version
+LoRA GRPO Training - Timing Comparison Version
 
-Uses same dataset/reward setup as sparse_grpo_bsr.py for fair comparison.
-No sparse layers — pure dense training with timing measurement.
+Baseline LoRA training for speedup comparison against dense and sparse methods.
+Uses PEFT LoRA on the same model/dataset as other benchmarks.
 
-Run: python GRPO_timing_baseline.py --n_steps 50 --optimizer adamw
+Run: python lora_grpo_timing.py --n_steps 50 --lora_rank 16
 """
 
 import os
 import sys
-import json
+import argparse
 import re
+import json
 import time
 import torch
-import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOTrainer, GRPOConfig
+from peft import LoraConfig, get_peft_model
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
@@ -70,31 +71,37 @@ def format_reasoning_reward(completions, **kwargs) -> list[float]:
 # Main
 # =========================================================================
 
-def train_baseline(
+def sanitize_model_name(model_name: str) -> str:
+    sanitized = model_name.replace("/", "_").replace("-", "_").lower()
+    return "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized).strip("_")
+
+
+def train(
     model_name, n_steps, batch_size, learning_rate, subset_size,
-    optimizer_type, use_wandb, dataset_key, output_base_dir,
-    dataset_cache_dir, num_generations, generation_batch_size, grad_accum,
+    run_name, lora_rank, lora_alpha, lora_target_modules, lora_dropout,
+    use_wandb, grpo_beta, warmup_steps, dataset_key,
+    output_base_dir, dataset_cache_dir, num_generations,
+    generation_batch_size, grad_accum, optimizer_type,
 ):
     os.environ["HF_DATASETS_CACHE"] = dataset_cache_dir
     ds_config = get_dataset_config(dataset_key)
+    dataset_sanitized = ds_config["sanitized_name"]
 
-    run_name = f"dense_grpo_{optimizer_type}"
-    run_dir = os.path.join(output_base_dir, run_name)
-    os.makedirs(run_dir, exist_ok=True)
+    if run_name is None:
+        run_name = f"lora_grpo_r{lora_rank}_{optimizer_type}_{sanitize_model_name(model_name)}_{dataset_sanitized}"
 
     if use_wandb:
         os.environ["WANDB_PROJECT"] = "huggingface"
 
-    print(f"\n{'='*60}")
-    print(f"BASELINE DENSE GRPO TRAINING")
-    print(f"{'='*60}")
+    run_dir = os.path.join(output_base_dir, run_name)
+    os.makedirs(run_dir, exist_ok=True)
+
+    print(f"\n{'='*60}\nLoRA GRPO TRAINING (Timing Benchmark)\n{'='*60}")
     print(f"Model: {model_name}")
+    print(f"LoRA rank: {lora_rank}, alpha: {lora_alpha}")
+    print(f"Target modules: {lora_target_modules}")
     print(f"Optimizer: {optimizer_type}")
-    print(f"Steps: {n_steps}")
-    print(f"Batch size: {batch_size}")
-    print(f"Grad accum: {grad_accum}")
     print(f"Dataset: {dataset_key}")
-    print(f"{'='*60}\n")
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
@@ -105,10 +112,22 @@ def train_baseline(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
+        model_name, dtype=torch.bfloat16, low_cpu_mem_usage=True,
         device_map="auto"
     )
     model.config.use_cache = False
+
+    # Apply LoRA
+    lora_config = LoraConfig(
+        r=lora_rank,
+        lora_alpha=lora_alpha,
+        target_modules=lora_target_modules,
+        lora_dropout=lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
     if optimizer_type == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
@@ -134,7 +153,8 @@ def train_baseline(
         generation_batch_size=generation_batch_size,
         max_completion_length=1024,
         max_prompt_length=512,
-        beta=0.1,
+        beta=grpo_beta,
+        warmup_steps=warmup_steps,
     )
 
     trainer = GRPOTrainer(
@@ -163,9 +183,11 @@ def train_baseline(
         gpu_time = start_event.elapsed_time(end_event) / 1000.0
 
     timing_results = {
-        "method": "dense",
+        "method": "lora",
         "optimizer": optimizer_type,
         "model": model_name,
+        "lora_rank": lora_rank,
+        "lora_alpha": lora_alpha,
         "n_steps": n_steps,
         "batch_size": batch_size,
         "grad_accum": grad_accum,
@@ -199,25 +221,40 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=5e-6)
     parser.add_argument("--subset_size", type=int, default=None)
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw"], default="adamw")
+    parser.add_argument("--lora_rank", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--lora_target_modules", type=str, nargs="+",
+                        default=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"])
+    parser.add_argument("--lora_dropout", type=float, default=0.0)
     parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--dataset", type=str, default="math-220k")
     parser.add_argument("--output_base_dir", type=str, default="/scratch/xie.yiyi/rl_casino_outputs")
     parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/xie.yiyi/hf_cache/datasets")
+    parser.add_argument("--grpo_beta", type=float, default=0.1)
+    parser.add_argument("--warmup_steps", type=int, default=0)
 
     args = parser.parse_args()
 
-    train_baseline(
+    train(
         model_name=args.model_name,
         n_steps=args.n_steps,
         batch_size=args.batch_size,
         learning_rate=args.lr,
         subset_size=args.subset_size,
-        optimizer_type=args.optimizer,
+        run_name=args.run_name,
+        lora_rank=args.lora_rank,
+        lora_alpha=args.lora_alpha,
+        lora_target_modules=args.lora_target_modules,
+        lora_dropout=args.lora_dropout,
         use_wandb=args.use_wandb,
+        grpo_beta=args.grpo_beta,
+        warmup_steps=args.warmup_steps,
         dataset_key=args.dataset,
         output_base_dir=args.output_base_dir,
         dataset_cache_dir=args.dataset_cache_dir,
         num_generations=args.num_generations,
         generation_batch_size=args.generation_batch_size,
         grad_accum=args.grad_accum,
+        optimizer_type=args.optimizer,
     )

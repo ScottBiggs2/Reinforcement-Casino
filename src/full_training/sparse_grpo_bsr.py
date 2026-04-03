@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 import json
+import time
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
@@ -190,7 +191,47 @@ def train(
         callbacks=callbacks
     )
     
+    # Timing measurement
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+
+    wall_start = time.time()
     trainer.train()
+    wall_time = time.time() - wall_start
+
+    if torch.cuda.is_available():
+        end_event.record()
+        torch.cuda.synchronize()
+        gpu_time = start_event.elapsed_time(end_event) / 1000.0
+
+    timing_results = {
+        "method": "sparse_bsr",
+        "optimizer": optimizer_type,
+        "model": model_name,
+        "block_size_bsr": block_size_bsr,
+        "block_size_adam": block_size_adam,
+        "n_steps": n_steps,
+        "batch_size": batch_size,
+        "grad_accum": grad_accum,
+        "wall_time": wall_time,
+        "time_per_step_wall": wall_time / n_steps,
+    }
+    if torch.cuda.is_available():
+        timing_results["gpu_time"] = gpu_time
+        timing_results["time_per_step_gpu"] = gpu_time / n_steps
+
+    timing_path = os.path.join(run_dir, "timing_results.json")
+    with open(timing_path, "w") as f:
+        json.dump(timing_results, f, indent=2)
+    print(f"\n{'='*60}")
+    print(f"Wall time: {wall_time:.2f}s | Per step: {wall_time/n_steps:.2f}s")
+    if torch.cuda.is_available():
+        print(f"GPU time:  {gpu_time:.2f}s | Per step: {gpu_time/n_steps:.2f}s")
+    print(f"Timing saved to {timing_path}")
+    print(f"{'='*60}")
 
     if save_model:
         print(f"\nTraining complete. Saving final model to {run_dir}/final_model...")

@@ -87,7 +87,7 @@ cfg = GRPOConfig(
     max_steps=NUM_STEPS,
     num_train_epochs=1,
     bf16=True, fp16=False,
-    optim="adamw_8bit",
+    optim="adamw_torch",
     gradient_checkpointing=True,
     logging_steps=1,
     save_steps=999999,
