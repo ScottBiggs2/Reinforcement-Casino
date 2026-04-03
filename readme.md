@@ -2,60 +2,28 @@
 
 Reinforcement Learning training infrastructure with Triton-accelerated sparse optimization for DPO and GRPO.
 
+## Research angle
+
+We study **task-oriented subnetworks** inside large language models: binary masks over weights, built without iterative pruning at full scale. The empirical picture we care about is that these subnetworks can be **strong** (competitive at high sparsity), **transferable** across related tasks or stages, **interpretable** via mask overlap, scoring methods, and layer metrics, and **optimizable**—training and inference can target the active set while dense forward passes (or controlled sparse paths) keep the story grounded. This repo implements that loop: dense training → mask construction (warm/cold/random baselines) → sparse training and evaluation, plus tooling for comparisons and benchmarks.
+
+For a short collaborator-facing note (automation and where GRPO sits relative to the default Slurm pipeline), see [docs/COLLABORATOR_GRPO_AND_AUTOMATION.md](docs/COLLABORATOR_GRPO_AND_AUTOMATION.md).
+
 ## Implementation status
 
-- **GRPO rewards:** Not implemented. GRPO trainer and sparse GRPO scripts run, but reward computation is placeholder/stub.
-- **Cold start:** Partially implemented. Mask gathering scripts exist in `cold_start/` (Fisher, CAV, SNIP) which output standard mask formats for training.
-- **BSR backprop:** Not yet tested. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; correctness and performance are unvalidated.
+- **GRPO:** `GRPO_train.py` and `sparse_grpo_bsr.py` use **math-style rewards** (accuracy / format helpers) aligned with the OpenR1-style setup. **`GRPO_timing_baseline.py`** and **`src/magic/sparse_GRPO_v2.py`** use simpler **heuristic** rewards (e.g. length/markers)—fine for timing or legacy Triton paths, but not comparable to the main GRPO scripts without aligning rewards.
+- **Cold start:** Partially implemented. Mask gathering scripts exist in `cold_start/` (Fisher, CAV, SNIP) and emit standard mask formats for training.
+- **BSR backprop:** Not yet fully validated. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; treat correctness and performance as experimental.
 
-A note here: AdamW decays **all** weights (BSR AdamW does not), so using it with the mask decays frozen weights which is incorrect.
+**Optimizer caveat:** AdamW decays **all** weights; masked training with vanilla AdamW still decays frozen weights. BSR sparse AdamW avoids that on the active set—choose the optimizer to match the masking story.
 
-Bring-up notes (may be outdated).
+Quick sparse DPO smoke (see [Sparse DPO (BSR backprop)](#sparse-dpo-bsr-backprop) for flags and ablations):
+
 ```bash
 python src/full_training/sparse_dpo_bsr.py \
   --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
   --n_steps 50 \
   --optimizer sgd \
   --use_wandb
-```
-
-DPO Beta noise reduction test:
-
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer sparse_adamw \
-  --use_wandb \
-  --max_grad_norm 1.0 \
-  --dpo_beta 0.5
-```
-
-LR and Warmup Stabilisation test:
-
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer sparse_adamw \
-  --use_wandb \
-  --max_grad_norm 1.0 \
-  --lr 5e-6 \
-  --warmup_steps 10
-```
-
-LR and Warmup Stabilisation WITHOUT TF32 (Ablation):
-
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer sparse_adamw \
-  --use_wandb \
-  --max_grad_norm 1.0 \
-  --lr 5e-6 \
-  --warmup_steps 10 \
-  --disable_tf32
 ```
 
 ---
@@ -107,13 +75,14 @@ hf auth login [YOUR_KEY_HERE]
 
 ```
 src/
-├── cold_start/          # Cold start (not implemented)
+├── cold_start/          # Cold-start mask methods (Fisher, CAV, SNIP; partial)
 ├── full_training/       # Full training pipelines (DPO, GRPO) + sparse DPO
 ├── lora_training/       # LoRA training scripts
 ├── magic/               # Triton-accelerated sparse training (legacy scripts)
 ├── utils/               # Utilities (checkpoint reconstruction, etc.)
-└── warm_start/         # Mask finding and warm start utilities
-scripts/                # Slurm and orchestration scripts (training, masks, eval, full pipeline)
+└── warm_start/          # Mask finding and warm start utilities
+docs/                    # Onboarding notes (see COLLABORATOR_GRPO_AND_AUTOMATION.md)
+scripts/                 # Slurm and orchestration scripts (training, masks, eval, full pipeline)
 ```
 
 ## Full training (`src/full_training/`)
@@ -150,7 +119,7 @@ python src/full_training/DPO_train.py --model_name "meta-llama/Llama-3.1-8B-Inst
 
 ### GRPO training
 
-Train with Group Relative Policy Optimization on the OpenR1 dataset. **GRPO rewards are not implemented**; reward logic is placeholder.
+Train with Group Relative Policy Optimization (TRL `GRPOTrainer`). Default dataset registry key is **`math-220k`** (OpenR1 Math); rewards in `GRPO_train.py` are **math-oriented** (solution accuracy and format), not placeholders.
 
 **Script:** `GRPO_train.py`
 
@@ -163,7 +132,7 @@ python src/full_training/GRPO_train.py
 python src/full_training/GRPO_train.py --model_name "Qwen/Qwen2.5-0.5B-Instruct"
 ```
 
-**Outputs:** `./checkpoints_{sanitized}_grpo/`, `./delta_logs_{sanitized}_grpo/`, Wandb project `{sanitized}-grpo-subnetwork-emergence`.
+**Outputs:** Under `--output_base_dir` (default points at scratch in-script), checkpoints live in `checkpoints/{model_sanitized}_{dataset_sanitized}_grpo_dense/` and delta logs in `deltas/..._grpo_dense/`. Override `--output_base_dir` for local runs. Wandb run naming follows the script defaults.
 
 ### Sparse DPO (efficiency)
 
@@ -262,7 +231,7 @@ python src/full_training/DPO_timing_baseline.py \
   --save_model
 ```
 
-**GRPO baseline:** `GRPO_timing_baseline.py` — **GRPO rewards not implemented.**
+**GRPO baseline:** `GRPO_timing_baseline.py` — minimal timing run; uses **heuristic** rewards (not the same as `GRPO_train.py`).
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
@@ -296,7 +265,7 @@ python src/magic/sparse_DPO_v3.py --model_name "meta-llama/Llama-3.2-3B-Instruct
 
 ### Sparse GRPO (v2)
 
-**GRPO reward function is not implemented.**
+Legacy Triton path; **heuristic rewards** (not aligned with `GRPO_train.py`). Prefer `src/full_training/sparse_grpo_bsr.py` for experiments that should match the main GRPO training story.
 
 ```bash
 python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --checkpoint None \

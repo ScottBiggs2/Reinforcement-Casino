@@ -9,74 +9,32 @@ Run: python GRPO_timing_baseline.py --n_steps 10
 """
 
 import os
+import sys
 import json
 import time
 import torch
 import argparse
 import wandb
-from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import GRPOTrainer, GRPOConfig
 from typing import List, Dict, Any
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset
+from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 
 MODEL_NAME = "google/gemma-3-270m-it"
-DATASET_NAME = "open-r1/OpenR1-Math-220k"
+DATASET_KEY_DEFAULT = "math-220k"
 SUBSET_SIZE = 10
 
 
 # ============================================================================
-# DATASET LOADING
+# DATASET COLLATOR
 # ============================================================================
-
-def load_grpo_dataset(subset_size=None):
-    """Load and normalize OpenR1 dataset for GRPO."""
-    print(f"Loading dataset: {DATASET_NAME}")
-    raw_ds = load_dataset(DATASET_NAME, split="train")
-    
-    def normalize_record(rec):
-        """
-        Normalize OpenR1 dataset record to format expected by GRPO.
-        OpenR1 has 'prompt' and 'solution' fields.
-        """
-        prompt_raw = rec.get("prompt", "")
-        solution_raw = rec.get("solution", "")
-        
-        # Handle prompt - could be string or list
-        if isinstance(prompt_raw, list):
-            prompt_text = "\n".join(
-                m.get("value", "") if isinstance(m, dict) else str(m)
-                for m in prompt_raw
-            ).strip()
-        elif isinstance(prompt_raw, dict):
-            prompt_text = prompt_raw.get("value", str(prompt_raw))
-        else:
-            prompt_text = str(prompt_raw).strip()
-        
-        # Handle solution - could be string or list
-        if isinstance(solution_raw, list):
-            solution_text = "\n".join(
-                m.get("value", "") if isinstance(m, dict) else str(m)
-                for m in solution_raw
-            ).strip()
-        elif isinstance(solution_raw, dict):
-            solution_text = solution_raw.get("value", str(solution_raw))
-        else:
-            solution_text = str(solution_raw).strip()
-        
-        return {"prompt": prompt_text, "solution": solution_text}
-
-    norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
-    
-    if subset_size is not None:
-        norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
-    
-    print(f"✓ Loaded {len(norm_ds)} examples")
-    return norm_ds
-
 
 def grpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torch.Tensor]:
     """Data collator for GRPO training."""
@@ -112,43 +70,6 @@ def grpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, tor
     }
 
 
-# ============================================================================
-# REWARD FUNCTION
-# ============================================================================
-
-def reward_function(completions: List[str] | List[List[Dict[str, str]]], **kwargs) -> List[float]:
-    """
-    Reward function for GRPO training.
-    
-    Naive baseline reward function - same as GRPO_train.py.
-    """
-    rewards = []
-    for completion in completions:
-        # Handle conversational format (list of dicts)
-        if isinstance(completion, list):
-            # Extract text from conversational format
-            completion_text = " ".join(
-                msg.get("content", "") if isinstance(msg, dict) else str(msg)
-                for msg in completion
-            )
-        else:
-            completion_text = str(completion)
-        
-        # Simple reward: encourage longer completions with reasoning
-        base_reward = len(completion_text.split()) / 100.0  # Normalize by word count
-        
-        # Bonus for having solution markers (if dataset uses them)
-        if "<SOLUTION>" in completion_text or "</SOLUTION>" in completion_text:
-            base_reward += 0.5
-        
-        # Bonus for having reasoning markers
-        if "<think>" in completion_text.lower() or "<start_working_out>" in completion_text.lower():
-            base_reward += 0.3
-        
-        rewards.append(min(base_reward, 1.0))  # Cap at 1.0
-    
-    return rewards
-
 
 # ============================================================================
 # MAIN TRAINING FUNCTION
@@ -160,15 +81,23 @@ def train_baseline(
     batch_size=1,
     learning_rate=5e-5,
     subset_size=10,
+    dataset_key=DATASET_KEY_DEFAULT,
+    dataset_cache_dir=None,
 ):
     """Baseline dense GRPO training with timing measurement."""
     
+    if dataset_cache_dir:
+        os.environ["HF_DATASETS_CACHE"] = dataset_cache_dir
+    ds_config = get_dataset_config(dataset_key)
+    dataset_hf_id = ds_config["hf_id"]
+
     model_path = checkpoint_path if checkpoint_path else MODEL_NAME
     
     print(f"\n{'='*60}")
     print(f"BASELINE DENSE GRPO TRAINING")
     print(f"{'='*60}")
     print(f"Model: {model_path}")
+    print(f"Dataset: {dataset_key} ({dataset_hf_id})")
     print(f"Steps: {n_steps}")
     print(f"Batch size: {batch_size}")
     print(f"Learning rate: {learning_rate}")
@@ -184,7 +113,7 @@ def train_baseline(
 
     # Load dataset
     print("Loading dataset...")
-    dataset = load_grpo_dataset(subset_size=subset_size)
+    dataset = load_grpo_dataset(dataset_key, subset_size=subset_size)
     print("✓ Dataset loaded\n")
     
     def collator(examples):
@@ -218,7 +147,7 @@ def train_baseline(
         remove_unused_columns=False,
         gradient_accumulation_steps=1,
         beta=0.1,  # KL penalty coefficient
-        max_length=1024,
+        max_completion_length=1024,
         max_prompt_length=512,
         num_generations=8,  # Number of generations per prompt
         generation_batch_size=8,  # Batch size for generation
@@ -251,7 +180,8 @@ def train_baseline(
                     name=args.run_name if hasattr(args, 'run_name') else "grpo_timing",
                     config={
                         "model_name": MODEL_NAME,
-                        "dataset": DATASET_NAME,
+                        "dataset_key": dataset_key,
+                        "dataset": dataset_hf_id,
                         "subset_size": subset_size,
                         "learning_rate": args.learning_rate,
                         "batch_size_per_device": args.per_device_train_batch_size,
@@ -314,7 +244,7 @@ def train_baseline(
         args=grpo_config,
         train_dataset=dataset,
         eval_dataset=None,
-        reward_funcs=[reward_function],
+        reward_funcs=GRPO_REWARD_FUNCS,
         data_collator=collator,
         processing_class=tokenizer,
     )
@@ -386,6 +316,18 @@ if __name__ == "__main__":
                        help="Learning rate (default: 5e-5)")
     parser.add_argument("--subset_size", type=int, default=10,
                        help="Dataset subset size (default: 10)")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=DATASET_KEY_DEFAULT,
+        help=f"Dataset registry key (default: {DATASET_KEY_DEFAULT})",
+    )
+    parser.add_argument(
+        "--dataset_cache_dir",
+        type=str,
+        default=None,
+        help="If set, sets HF_DATASETS_CACHE before loading the dataset",
+    )
     
     args = parser.parse_args()
     
@@ -395,4 +337,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         subset_size=args.subset_size,
+        dataset_key=args.dataset,
+        dataset_cache_dir=args.dataset_cache_dir,
     )

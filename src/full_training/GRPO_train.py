@@ -8,7 +8,6 @@ Used to collect delta statistics for sparse mask generation.
 import os
 import json
 import argparse
-import re
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
@@ -18,6 +17,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset
+from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
 
 def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
@@ -66,42 +66,6 @@ os.environ["WANDB_PROJECT"] = WANDB_PROJECT
 WANDB_RUN_NAME = args.run_name if args.run_name else f"{MODEL_NAME_SANITIZED}_{DATASET_SANITIZED}_grpo_{NUM_STEPS}steps"
 
 # =========================================================================
-# Math Reward Functions
-# =========================================================================
-def parse_reasoning_response(text: str) -> dict:
-    pattern = r"<think>\s*(.*?)\s*</think>\s*(.*)"
-    match = re.search(pattern, text, re.DOTALL)
-    if not match: return {"thinking_content": "", "response": text}
-    return {"thinking_content": match.group(1).strip(), "response": match.group(2).strip()}
-
-def get_completion_content(completion) -> str:
-    if isinstance(completion, list): return " ".join(msg.get("content", "") if isinstance(msg, dict) else str(msg) for msg in completion)
-    return str(completion)
-
-def parse_responses(completions: list) -> list[dict]:
-    return [parse_reasoning_response(get_completion_content(c)) for c in completions]
-
-def accuracy_reward(completions, solution, **kwargs) -> list[float]:
-    parsed_responses = parse_responses(completions)
-    rewards = []
-    for r, ans in zip(parsed_responses, solution):
-        model_answer = r["response"].strip()
-        ans = str(ans) if ans is not None else ""
-        target_ans = ans.split("####")[1].strip() if "####" in ans else ans.strip()
-        numbers = re.findall(r'-?\d+\.?\d*', model_answer.replace(',', ''))
-        model_last_num = numbers[-1] if numbers else ""
-        target_numbers = re.findall(r'-?\d+\.?\d*', target_ans.replace(',', ''))
-        target_last_num = target_numbers[-1] if target_numbers else target_ans
-        rewards.append(1.0 if model_answer == target_ans or (model_last_num and target_last_num and model_last_num == target_last_num) else 0.0)
-    return rewards
-
-def format_number_reward(completions, **kwargs) -> list[float]:
-    return [0.5 if re.findall(r'-?\d+\.?\d*', r["response"].replace(',', '')) else 0.0 for r in parse_responses(completions)]
-
-def format_reasoning_reward(completions, **kwargs) -> list[float]:
-    return [0.5 if r["thinking_content"] and r["response"] else 0.0 for r in parse_responses(completions)]
-
-# =========================================================================
 # Initialization
 # =========================================================================
 train_dataset = load_grpo_dataset(DATASET_KEY, subset_size=SUBSET_SIZE)
@@ -139,7 +103,7 @@ trainer = GRPOTrainer(
     model=model,
     args=cfg,
     train_dataset=train_dataset,
-    reward_funcs=[accuracy_reward, format_number_reward, format_reasoning_reward],
+    reward_funcs=GRPO_REWARD_FUNCS,
     processing_class=tokenizer,
 )
 
