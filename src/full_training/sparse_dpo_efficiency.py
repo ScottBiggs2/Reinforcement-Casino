@@ -25,6 +25,7 @@ from trl import DPOTrainer, DPOConfig
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_manager import SparseMaskManager
+from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
 from src.utils.data_utils import dpo_collator_fn
 from src.utils.dataset_registry import get_dataset_config, load_dpo_dataset as registry_load_dpo
 from src.utils.logging_utils import FlexibleCheckpointCallback, CSVLoggerCallback
@@ -197,13 +198,18 @@ if __name__ == "__main__":
     parser.add_argument("--subset_size", type=int, default=None)
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "sparse_adamw"], default="sparse_adamw")
     parser.add_argument("--block_size", type=int, default=32)
-    parser.add_argument("--mlp_only", action="store_true", default=True)
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
+    )
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--dataset", type=str, default="light-r1",
                        help="Dataset key (light-r1, tulu3, math-step-dpo, codepref) or HuggingFace ID")
-    parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs", help="Base directory for outputs")
-    parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets", help="Cache directory for HuggingFace datasets")
+    parser.add_argument("--output_base_dir", type=str, default=default_rl_casino_outputs(), help="Base directory for outputs")
+    parser.add_argument("--dataset_cache_dir", type=str, default=default_hf_datasets_cache(), help="Cache directory for HuggingFace datasets")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
     
     def str2bool(v):

@@ -27,6 +27,7 @@ LR=5e-5
 TARGET_STEP=50
 SPARSITY=97.5
 LOG_DIR="delta_logs_google_gemma_3_270m_it"
+MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
 echo "Generating Warm-Start Masks..."
 
@@ -36,7 +37,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method magnitude \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Momentum Mask"
@@ -45,7 +46,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method momentum \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Fisher Mask (Warm)"
@@ -54,7 +55,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method fisher \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "Starting Warm-Start Mask Ablation..."

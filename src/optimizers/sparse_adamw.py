@@ -24,7 +24,7 @@ class SparseAdamW(torch.optim.Optimizer):
         eps=1e-8,
         weight_decay=0.01,
         block_size=128,
-        mlp_only=True,
+        mlp_only=False,
         max_grad_norm=1.0,
     ):
         self.param_to_name = {}

@@ -2,14 +2,60 @@ import torch
 import os
 import json
 import argparse
+import sys
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
 from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
-    save_masks
+    pooling_metadata,
+    save_masks,
 )
+
+
+def summarize_scores(scores):
+    total_numel = 0
+    total_sum = 0.0
+    total_sq = 0.0
+    global_min = None
+    global_max = None
+    nonzero = 0
+
+    for score in scores.values():
+        s = score.detach().float().reshape(-1).cpu()
+        if s.numel() == 0:
+            continue
+        total_numel += s.numel()
+        total_sum += float(s.sum().item())
+        total_sq += float((s * s).sum().item())
+        nonzero += int((s != 0).sum().item())
+        local_min = float(s.min().item())
+        local_max = float(s.max().item())
+        global_min = local_min if global_min is None else min(global_min, local_min)
+        global_max = local_max if global_max is None else max(global_max, local_max)
+
+    if total_numel == 0:
+        return {
+            "min": 0.0,
+            "max": 0.0,
+            "mean": 0.0,
+            "std": 0.0,
+            "nonzero_fraction": 0.0,
+        }
+
+    mean = total_sum / total_numel
+    variance = max(total_sq / total_numel - mean * mean, 0.0)
+    return {
+        "min": global_min,
+        "max": global_max,
+        "mean": mean,
+        "std": variance ** 0.5,
+        "nonzero_fraction": nonzero / total_numel,
+    }
 
 # ============================================================
 # Fisher Information Cold-Start Mask Finder
@@ -44,7 +90,7 @@ def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
     sanitized = "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized)
     while "__" in sanitized:
-        sanitized = sanitized.replace("__", "__")
+        sanitized = sanitized.replace("__", "_")
     return sanitized.strip("_")
 
 
@@ -134,7 +180,7 @@ def compute_fisher_scores(
     model,
     calibration_data,
     device="cuda",
-    mlp_only=True,
+    mlp_only=False,
     mini_batch_size=4,
     normalize_per_layer=True,
 ):
@@ -248,13 +294,13 @@ def compute_fisher_scores(
                 fisher_scores[name] = torch.zeros_like(s)
 
     # Summary stats
-    all_scores = torch.cat([s.flatten() for s in fisher_scores.values()])
+    stats = summarize_scores(fisher_scores)
     print(f"  Fisher score stats (after normalization):")
-    print(f"    min:  {all_scores.min().item():.6e}")
-    print(f"    max:  {all_scores.max().item():.6e}")
-    print(f"    mean: {all_scores.mean().item():.6e}")
-    print(f"    std:  {all_scores.std().item():.6e}")
-    print(f"    nonzero fraction: {(all_scores != 0).float().mean().item():.4f}")
+    print(f"    min:  {stats['min']:.6e}")
+    print(f"    max:  {stats['max']:.6e}")
+    print(f"    mean: {stats['mean']:.6e}")
+    print(f"    std:  {stats['std']:.6e}")
+    print(f"    nonzero fraction: {stats['nonzero_fraction']:.4f}")
 
     return fisher_scores
 
@@ -297,6 +343,7 @@ def main(args):
         fisher_scores,
         args.sparsity_percent,
         device=device,
+        min_layer_keep_ratio=args.min_layer_keep_ratio,
         local_pool=args.local_pool,
     )
 
@@ -324,6 +371,10 @@ def main(args):
         "layer_normalization": not args.no_layer_norm,
         "mlp_only": args.mlp_only,
         "device": device,
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
     }
 
     if jaccard_results:
@@ -359,17 +410,30 @@ if __name__ == "__main__":
     parser.add_argument("--no_layer_norm", action="store_true",
                         help="Disable per-layer z-score normalization. "
                              "Without this, later layers dominate due to larger gradients.")
-    parser.add_argument("--mlp_only", action="store_true", default=True,
-                        help="Only score MLP parameters (recommended, consistent with sparse backprop target)")
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Only score MLP parameters (default: score all weights)",
+    )
     parser.add_argument("--output_file", type=str, default=None)
     parser.add_argument("--reference_mask", type=str, default=None,
                         help="Optional reference mask to compute similarity metrics against.")
     parser.add_argument("--force_cpu", action="store_true")
     parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
+    )
+    parser.add_argument(
         "--local_pool", action="store_true",
         help=(
             "Use per-layer mask selection instead of global cross-layer ranking. "
-            "Default (off): one global threshold across all weights. "
+            "Default (off): global masking with a small per-tensor keep floor. "
             "With --local_pool: each weight matrix independently keeps its top keep_frac elements."
         ),
     )

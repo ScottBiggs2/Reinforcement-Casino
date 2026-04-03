@@ -288,7 +288,7 @@ class SparseAdamW(torch.optim.Optimizer):
         eps=1e-8,
         weight_decay=0.01,
         block_size=32,
-        mlp_only=True,
+        mlp_only=False,
     ):
         self.param_to_name = {}
         params = []
@@ -593,7 +593,7 @@ def train(
     learning_rate=5e-5,
     subset_size=10,
     run_name="triton_sparse_dpo",
-    mlp_only=True,
+    mlp_only=False,
     block_size=BLOCK_SIZE,
     model=None,  # NEW: Allow passing pre-loaded model
     dpo_dataset=None,  # NEW: Allow passing pre-loaded dataset
@@ -821,8 +821,12 @@ if __name__ == "__main__":
                        help="Dataset subset size (default: 10)")
     parser.add_argument("--run_name", type=str, default="triton_sparse_dpo", 
                        help="Run name for wandb (default: triton_sparse_dpo)")
-    parser.add_argument("--mlp_only", action="store_true", default=True, 
-                       help="Only apply sparse training to MLP layers (default: True)")
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Only apply sparse training to MLP layers (default: full model where masks exist)",
+    )
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
     

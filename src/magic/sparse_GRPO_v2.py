@@ -25,11 +25,16 @@ import triton
 import triton.language as tl
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import GRPOTrainer, GRPOConfig
-from datasets import load_dataset
 import wandb
 import argparse
 from typing import List, Dict, Any
 from datetime import datetime
+
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset as load_grpo_dataset_registry
+from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
 
 # ============================================================================
 # CONFIGURATION
@@ -55,7 +60,7 @@ def sanitize_model_name(model_name: str) -> str:
 
 WANDB_PROJECT = "rl-casino-triton"
 MODEL_NAME_DEFAULT = "google/gemma-3-270m-it"
-DATASET_NAME = "open-r1/OpenR1-Math-220k"
+DATASET_KEY_DEFAULT = "math-220k"
 SUBSET_SIZE = 10
 MASK_PATH = "masks/top_10.0pct_momentum_w25_step25.pt"
 BLOCK_SIZE = 16  # OPTIMIZATION: Reduced from 32 for better granularity
@@ -347,7 +352,7 @@ class SparseAdamW(torch.optim.Optimizer):
         eps=1e-8,
         weight_decay=0.01,
         block_size=16,
-        mlp_only=True,
+        mlp_only=False,
     ):
         self.param_to_name = {}
         params = []
@@ -549,54 +554,8 @@ class SparseAdamW(torch.optim.Optimizer):
 
 
 # ============================================================================
-# DATASET LOADING
+# DATASET / COLLATOR
 # ============================================================================
-
-def load_grpo_dataset(subset_size=None):
-    """Load and normalize OpenR1 dataset for GRPO."""
-    print(f"Loading dataset: {DATASET_NAME}")
-    raw_ds = load_dataset(DATASET_NAME, split="train")
-    
-    def normalize_record(rec):
-        """
-        Normalize OpenR1 dataset record to format expected by GRPO.
-        OpenR1 has 'prompt' and 'solution' fields.
-        """
-        prompt_raw = rec.get("prompt", "")
-        solution_raw = rec.get("solution", "")
-        
-        # Handle prompt - could be string or list
-        if isinstance(prompt_raw, list):
-            prompt_text = "\n".join(
-                m.get("value", "") if isinstance(m, dict) else str(m)
-                for m in prompt_raw
-            ).strip()
-        elif isinstance(prompt_raw, dict):
-            prompt_text = prompt_raw.get("value", str(prompt_raw))
-        else:
-            prompt_text = str(prompt_raw).strip()
-        
-        # Handle solution - could be string or list
-        if isinstance(solution_raw, list):
-            solution_text = "\n".join(
-                m.get("value", "") if isinstance(m, dict) else str(m)
-                for m in solution_raw
-            ).strip()
-        elif isinstance(solution_raw, dict):
-            solution_text = solution_raw.get("value", str(solution_raw))
-        else:
-            solution_text = str(solution_raw).strip()
-        
-        return {"prompt": prompt_text, "solution": solution_text}
-
-    norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
-    
-    if subset_size is not None:
-        norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
-    
-    print(f"✓ Loaded {len(norm_ds)} examples")
-    return norm_ds
-
 
 def grpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torch.Tensor]:
     """Data collator for GRPO training."""
@@ -632,43 +591,6 @@ def grpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, tor
     }
 
 
-# ============================================================================
-# REWARD FUNCTION
-# ============================================================================
-
-def reward_function(completions: List[str] | List[List[Dict[str, str]]], **kwargs) -> List[float]:
-    """
-    Reward function for GRPO training.
-    
-    Naive baseline reward function - same as GRPO_train.py.
-    """
-    rewards = []
-    for completion in completions:
-        # Handle conversational format (list of dicts)
-        if isinstance(completion, list):
-            # Extract text from conversational format
-            completion_text = " ".join(
-                msg.get("content", "") if isinstance(msg, dict) else str(msg)
-                for msg in completion
-            )
-        else:
-            completion_text = str(completion)
-        
-        # Simple reward: encourage longer completions with reasoning
-        base_reward = len(completion_text.split()) / 100.0  # Normalize by word count
-        
-        # Bonus for having solution markers (if dataset uses them)
-        if "<SOLUTION>" in completion_text or "</SOLUTION>" in completion_text:
-            base_reward += 0.5
-        
-        # Bonus for having reasoning markers
-        if "<think>" in completion_text.lower() or "<start_working_out>" in completion_text.lower():
-            base_reward += 0.3
-        
-        rewards.append(min(base_reward, 1.0))  # Cap at 1.0
-    
-    return rewards
-
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -697,14 +619,21 @@ def train(
     learning_rate=5e-5,
     subset_size=10,
     run_name=None,
-    mlp_only=True,
+    mlp_only=False,
     block_size=BLOCK_SIZE,
     model=None,
     grpo_dataset=None,
     tokenizer=None,
+    dataset_key=DATASET_KEY_DEFAULT,
+    dataset_cache_dir=None,
 ):
     """Train with optimized Triton-accelerated sparse GRPO training."""
     
+    if dataset_cache_dir:
+        os.environ["HF_DATASETS_CACHE"] = dataset_cache_dir
+    ds_config = get_dataset_config(dataset_key)
+    dataset_hf_id = ds_config["hf_id"]
+
     # Determine model source - handle "None" string from argparse
     if checkpoint_path is None or (isinstance(checkpoint_path, str) and checkpoint_path.lower() == "none"):
         checkpoint_path = model_name
@@ -723,6 +652,7 @@ def train(
     print(f"{'='*60}")
     print(f"Run directory: {run_dir}")
     print(f"Model source: {checkpoint_path}")
+    print(f"Dataset: {dataset_key} ({dataset_hf_id})")
     print(f"Mask path: {mask_path}")
     print(f"Steps: {n_steps}")
     print(f"Learning rate: {learning_rate}")
@@ -743,7 +673,7 @@ def train(
     # Load or reuse dataset
     if grpo_dataset is None:
         print("Loading dataset...")
-        grpo_dataset = load_grpo_dataset(subset_size=subset_size)
+        grpo_dataset = load_grpo_dataset_registry(dataset_key, subset_size=subset_size)
     else:
         print(f"✓ Using pre-loaded dataset ({len(grpo_dataset)} examples)")
     
@@ -817,7 +747,7 @@ def train(
         run_name=run_name,
         gradient_accumulation_steps=1,
         beta=0.1,  # KL penalty coefficient
-        max_length=1024,
+        max_completion_length=1024,
         max_prompt_length=512,
         num_generations=8,  # Number of generations per prompt
         generation_batch_size=8,  # Batch size for generation
@@ -835,7 +765,8 @@ def train(
             "model_name": model_name,
             "checkpoint": checkpoint_path,
             "mask_path": mask_path,
-            "dataset": DATASET_NAME,
+            "dataset_key": dataset_key,
+            "dataset": dataset_hf_id,
             "n_steps": n_steps,
             "batch_size": batch_size,
             "learning_rate": learning_rate,
@@ -926,7 +857,7 @@ def train(
         args=grpo_config,
         train_dataset=grpo_dataset,
         eval_dataset=None,
-        reward_funcs=[reward_function],  # GRPOTrainer expects a list
+        reward_funcs=GRPO_REWARD_FUNCS,
         data_collator=collator,
         processing_class=tokenizer,
     )
@@ -1019,10 +950,24 @@ if __name__ == "__main__":
                        help="Only apply sparse training to MLP layers (default: False - use all masked layers)")
     parser.add_argument("--block_size", type=int, default=BLOCK_SIZE, 
                        help=f"Triton kernel block size (default: {BLOCK_SIZE})")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=DATASET_KEY_DEFAULT,
+        help=f"Dataset registry key (default: {DATASET_KEY_DEFAULT}, OpenR1-Math)",
+    )
+    parser.add_argument(
+        "--dataset_cache_dir",
+        type=str,
+        default=None,
+        help="If set, sets HF_DATASETS_CACHE before loading the dataset",
+    )
     
     args = parser.parse_args()
     
     MODEL_NAME = args.model_name
+    if args.dataset_cache_dir:
+        os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir
     
     print(f"\n{'='*60}")
     print("INITIALIZING SHARED RESOURCES")
@@ -1037,7 +982,7 @@ if __name__ == "__main__":
     print("✓ Tokenizer loaded and ready\n")
     
     print("Step 2: Loading dataset...")
-    dataset = load_grpo_dataset(subset_size=args.subset_size)
+    dataset = load_grpo_dataset_registry(args.dataset, subset_size=args.subset_size)
     print("✓ Dataset loaded and ready\n")
     
     print("Step 3: Loading model...")
@@ -1082,4 +1027,6 @@ if __name__ == "__main__":
         model=model,
         grpo_dataset=dataset,
         tokenizer=tokenizer,
+        dataset_key=args.dataset,
+        dataset_cache_dir=args.dataset_cache_dir,
     )

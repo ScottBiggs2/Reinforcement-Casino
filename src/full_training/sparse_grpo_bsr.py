@@ -9,8 +9,8 @@ Focus: GRPO with BSR Sparse MLP and Math Rewards.
 import os
 import sys
 import argparse
-import re
 import json
+import time
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
@@ -20,62 +20,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"
 
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.dataset_registry import get_dataset_config, load_grpo_dataset
+from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
+from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
 from src.optimizers.sparse_adamw import SparseAdamW
 from src.mlps.bsr_sparse_mlp import replace_linear_modules, restore_linear_modules
-
-# =========================================================================
-# Math Reward Functions (Inspired by Unsloth/DeepSeek)
-# =========================================================================
-
-def parse_reasoning_response(text: str) -> dict:
-    pattern = r"<think>\s*(.*?)\s*</think>\s*(.*)"
-    match = re.search(pattern, text, re.DOTALL)
-    if not match:
-        return {"thinking_content": "", "response": text}
-    return {"thinking_content": match.group(1).strip(), "response": match.group(2).strip()}
-
-def get_completion_content(completion) -> str:
-    if isinstance(completion, list):
-        return " ".join(msg.get("content", "") if isinstance(msg, dict) else str(msg) for msg in completion)
-    return str(completion)
-
-def parse_responses(completions: list) -> list[dict]:
-    return [parse_reasoning_response(get_completion_content(c)) for c in completions]
-
-def accuracy_reward(completions, solution, **kwargs) -> list[float]:
-    parsed_responses = parse_responses(completions)
-    rewards = []
-    for r, ans in zip(parsed_responses, solution):
-        model_answer = r["response"].strip()
-        ans = str(ans) if ans is not None else ""
-        if "####" in ans:
-            target_ans = ans.split("####")[1].strip()
-        else:
-            target_ans = ans.strip()
-        
-        numbers = re.findall(r'-?\d+\.?\d*', model_answer.replace(',', ''))
-        model_last_num = numbers[-1] if numbers else ""
-        target_numbers = re.findall(r'-?\d+\.?\d*', target_ans.replace(',', ''))
-        target_last_num = target_numbers[-1] if target_numbers else target_ans
-
-        if model_answer == target_ans or (model_last_num and target_last_num and model_last_num == target_last_num):
-            rewards.append(1.0)
-        else:
-            rewards.append(0.0)
-    return rewards
-
-def format_number_reward(completions, **kwargs) -> list[float]:
-    parsed_responses = parse_responses(completions)
-    rewards = []
-    for r in parsed_responses:
-        numbers = re.findall(r'-?\d+\.?\d*', r["response"].replace(',', ''))
-        rewards.append(0.5 if numbers else 0.0)
-    return rewards
-
-def format_reasoning_reward(completions, **kwargs) -> list[float]:
-    parsed_responses = parse_responses(completions)
-    rewards = [0.5 if r["thinking_content"] and r["response"] else 0.0 for r in parsed_responses]
-    return rewards
 
 # =========================================================================
 # Callbacks
@@ -238,13 +186,53 @@ def train(
         model=model,
         args=cfg,
         train_dataset=train_dataset,
-        reward_funcs=[accuracy_reward, format_number_reward, format_reasoning_reward],
+        reward_funcs=GRPO_REWARD_FUNCS,
         processing_class=tokenizer,
         optimizers=(optimizer, None),
         callbacks=callbacks
     )
     
+    # Timing measurement
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+
+    wall_start = time.time()
     trainer.train()
+    wall_time = time.time() - wall_start
+
+    if torch.cuda.is_available():
+        end_event.record()
+        torch.cuda.synchronize()
+        gpu_time = start_event.elapsed_time(end_event) / 1000.0
+
+    timing_results = {
+        "method": "sparse_bsr",
+        "optimizer": optimizer_type,
+        "model": model_name,
+        "block_size_bsr": block_size_bsr,
+        "block_size_adam": block_size_adam,
+        "n_steps": n_steps,
+        "batch_size": batch_size,
+        "grad_accum": grad_accum,
+        "wall_time": wall_time,
+        "time_per_step_wall": wall_time / n_steps,
+    }
+    if torch.cuda.is_available():
+        timing_results["gpu_time"] = gpu_time
+        timing_results["time_per_step_gpu"] = gpu_time / n_steps
+
+    timing_path = os.path.join(run_dir, "timing_results.json")
+    with open(timing_path, "w") as f:
+        json.dump(timing_results, f, indent=2)
+    print(f"\n{'='*60}")
+    print(f"Wall time: {wall_time:.2f}s | Per step: {wall_time/n_steps:.2f}s")
+    if torch.cuda.is_available():
+        print(f"GPU time:  {gpu_time:.2f}s | Per step: {gpu_time/n_steps:.2f}s")
+    print(f"Timing saved to {timing_path}")
+    print(f"{'='*60}")
 
     if save_model:
         print(f"\nTraining complete. Saving final model to {run_dir}/final_model...")
@@ -270,12 +258,17 @@ if __name__ == "__main__":
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "sparse_adamw"], default="sparse_adamw")
     parser.add_argument("--block_size_bsr", type=int, default=16)
     parser.add_argument("--block_size_adam", type=int, default=128)
-    parser.add_argument("--mlp_only", action="store_true", default=True)
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        default=False,
+        help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
+    )
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--dataset", type=str, default="math-220k")
-    parser.add_argument("--output_base_dir", type=str, default="/scratch/biggs.s/rl_casino_outputs")
-    parser.add_argument("--dataset_cache_dir", type=str, default="/scratch/biggs.s/hf_cache/datasets")
+    parser.add_argument("--output_base_dir", type=str, default=default_rl_casino_outputs())
+    parser.add_argument("--dataset_cache_dir", type=str, default=default_hf_datasets_cache())
     
     def str2bool(v):
         if isinstance(v, bool): return v

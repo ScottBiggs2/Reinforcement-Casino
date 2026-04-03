@@ -85,7 +85,7 @@ Ensure output uses `torch.save({"masks": masks, "metadata": ...})` compatible wi
 src/cold_start/
 ├── __init__.py
 ├── research_plan.md
-├── inference_mask_finder.py    # Main script
+├── inference_mask_finder.py    # Unified entry: --method fisher/cav/snip/activation
 └── utils/
     ├── activation_hooks.py     # Hook logic
     ├── cav_probes.py          # Linear probe training

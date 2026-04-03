@@ -2,11 +2,16 @@ import torch
 import os
 import argparse
 import json
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
-    save_masks
+    pooling_metadata,
+    save_masks,
 )
 
 # ============================================================
@@ -43,7 +48,13 @@ def expected_random_jaccard(sparsity_percent: float) -> float:
     return density ** 2 / (2 * density - density ** 2)
 
 
-def generate_random_mask(reference_masks: dict, sparsity_percent: float, seed: int = None) -> dict:
+def generate_random_mask(
+    reference_masks: dict,
+    sparsity_percent: float,
+    seed: int = None,
+    local_pool: bool = False,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+) -> dict:
     """
     Generate a random binary mask with the same parameter shapes and
     target sparsity as a reference mask dict.
@@ -61,13 +72,21 @@ def generate_random_mask(reference_masks: dict, sparsity_percent: float, seed: i
         torch.manual_seed(seed)
         print(f"  Random seed: {seed}")
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Random masks do not benefit from GPU residency; keep generation on CPU so the
+    # exact selector path stays aligned with the other large-model mask builders.
+    device = "cpu"
 
     # Draw uniform random scores -- no task signal whatsoever
     scores = {name: torch.rand_like(mask.float()) for name, mask in reference_masks.items()}
 
     # Utilize mask_utils directly
-    masks = create_mask_from_scores_gpu_efficient(scores, sparsity_percent, device=device)
+    masks = create_mask_from_scores_gpu_efficient(
+        scores,
+        sparsity_percent,
+        device=device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
 
     return masks
 
@@ -97,7 +116,13 @@ def main(args):
     print(f"  Expected Jaccard vs another random mask at this sparsity: "
           f"{expected_random_jaccard(sparsity):.4f}")
 
-    random_masks = generate_random_mask(reference_masks, sparsity, seed=args.seed)
+    random_masks = generate_random_mask(
+        reference_masks,
+        sparsity,
+        seed=args.seed,
+        local_pool=args.local_pool,
+        min_layer_keep_ratio=args.min_layer_keep_ratio,
+    )
 
     # Optionally compute Jaccard against the reference mask.
     # This tells you how much structure the reference mask has relative to chance --
@@ -118,6 +143,10 @@ def main(args):
         "seed": args.seed,
         "reference_mask": args.reference_mask,
         "expected_jaccard_vs_random": expected_random_jaccard(sparsity),
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
     }
     save_masks(random_masks, output_file, metadata)
     
@@ -142,6 +171,20 @@ if __name__ == "__main__":
     parser.add_argument("--compare_to_reference", action="store_true",
                         help="Compute Jaccard between random mask and the reference mask.")
     parser.add_argument("--output_file", type=str, default=None)
+    parser.add_argument(
+        "--local_pool",
+        action="store_true",
+        help="Per-weight-matrix random mask (uniform sparsity per matrix). Default: global pooling.",
+    )
+    parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
+    )
     args = parser.parse_args()
     main(args)
 

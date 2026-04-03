@@ -3,11 +3,14 @@
 import torch
 import torch.nn.functional as F
 
+from src.utils.mask_utils import create_mask_from_scores_gpu_efficient
+
 
 class SNIPScorer:
     """Compute `|grad * weight|` for each MLP weight matrix."""
 
-    def score(self, model, tokenizer, chosen_texts, device, max_length=512, batch_size=8):
+    def score(self, model, tokenizer, chosen_texts, device, max_length=512, batch_size=8,
+              mlp_only=False):
         """Return per-parameter saliency scores without updating weights."""
         model.eval()
         model.zero_grad(set_to_none=True)
@@ -42,7 +45,9 @@ class SNIPScorer:
         scores = {}
         with torch.no_grad():
             for name, param in model.named_parameters():
-                if "mlp" not in name or len(param.shape) != 2:
+                if mlp_only and "mlp" not in name:
+                    continue
+                if len(param.shape) != 2:
                     continue
                 if param.grad is None:
                     continue
@@ -51,7 +56,7 @@ class SNIPScorer:
         model.zero_grad(set_to_none=True)
         model.eval()
 
-        print(f"[SNIPScorer] Scored {len(scores)} MLP weight matrices.")
+        print(f"[SNIPScorer] Scored {len(scores)} weight matrices.")
         return scores
 
     def scores_to_masks(self, scores, sparsity_percent=90.0, local_pool=False):
@@ -61,20 +66,13 @@ class SNIPScorer:
             local_pool: If False (default), one global threshold across all layers.
                         If True, each weight matrix independently keeps keep_frac elements.
         """
-        keep_frac = 1.0 - sparsity_percent / 100.0
-
-        if local_pool:
-            masks = {}
-            for name, score in scores.items():
-                flat = score.flatten()
-                n_keep = max(1, int(keep_frac * flat.numel()))
-                threshold = torch.topk(flat, n_keep).values.min().item()
-                masks[name] = (score >= threshold).float()
-        else:
-            all_scores = torch.cat([s.flatten() for s in scores.values()])
-            n_keep     = max(1, int(keep_frac * all_scores.numel()))
-            threshold  = torch.topk(all_scores, n_keep).values.min().item()
-            masks = {name: (score >= threshold).float() for name, score in scores.items()}
+        masks = create_mask_from_scores_gpu_efficient(
+            scores,
+            sparsity_percent=sparsity_percent,
+            device="cpu",
+            local_pool=local_pool,
+            min_layer_keep_ratio=0.0,
+        )
 
         total  = sum(m.numel() for m in masks.values())
         kept   = sum(m.sum().item() for m in masks.values())
@@ -118,7 +116,7 @@ def compute_snip_scores(
     dataloader,
     device: str,
     num_batches: int,
-    mlp_only: bool = True,
+    mlp_only: bool = False,
 ):
     """Compute SNIP scores for model weights from DPO-style preference gradients."""
     model.train()

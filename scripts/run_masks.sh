@@ -33,6 +33,7 @@ SPARSITY=97.5
 TARGET_STEP=50 # Ensure this matches a saved step in DPO_train.py (e.g. 100, 150, 200, 250)
 DATASET="qihoo360/Light-R1-DPOData"
 LOG_DIR="delta_logs_google_gemma_3_270m_it"
+MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
 
 echo ""
@@ -45,7 +46,7 @@ python src/warm_start/even_better_mask_finder.py \
   --delta_log_dir "$LOG_DIR" \
   --method magnitude \
   --sparsity_percent $SPARSITY \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 REF_MASK_GT="masks/warm_magnitude_google_gemma_3_270m_it_sparsity${SPARSITY}pct.pt"
@@ -56,7 +57,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method magnitude \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Momentum Mask"
@@ -65,7 +66,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method momentum \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo "-> Fisher Mask (Warm)"
@@ -74,7 +75,7 @@ python src/warm_start/even_better_mask_finder.py \
   --method fisher \
   --sparsity_percent $SPARSITY \
   --target_step $TARGET_STEP \
-  --mlp_only \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compute_jaccard 
 
 echo ""
@@ -83,25 +84,23 @@ echo "2. Generating Cold-Start Masks"
 echo "=================================================="
 
 echo "-> Fisher Mask (Cold, Improved)"
-python src/cold_start/cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
-  --sparsity_percent $SPARSITY \
-  --n_calibration_samples 256 \
+  --method fisher \
+  --sparsity $SPARSITY \
+  --n_samples 256 \
   --mini_batch_size 4 \
-  --reference_mask "$REF_MASK_GT" \
-  --mlp_only
+  --reference_mask "$REF_MASK_GT"
 
 echo "-> CAV Mask (Cold)"
-python src/cold_start/cav_cold_mask_finder.py \
+python src/cold_start/inference_mask_finder.py \
   --model_name "$MODEL" \
   --dataset_name "$DATASET" \
   --method cav \
-  --sparsity_percent $SPARSITY \
-  --subset_size 256 \
-  --num_batches 16 \
-  --reference_mask "$REF_MASK_GT" \
-  --mlp_only
+  --sparsity $SPARSITY \
+  --n_samples 256 \
+  --reference_mask "$REF_MASK_GT"
 
 echo ""
 echo "=================================================="
@@ -115,6 +114,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference \
   --output_file "masks/random_baseline_vs_ground_truth_sparsity${SPARSITY}pct.pt"
 
@@ -124,6 +124,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference \
   --output_file "masks/random_baseline_vs_magnitude_sparsity${SPARSITY}pct.pt"
 
@@ -133,6 +134,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference \
   --output_file "masks/random_baseline_vs_momentum_sparsity${SPARSITY}pct.pt"
 
@@ -142,6 +144,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference \
   --output_file "masks/random_baseline_vs_fisher_warm_sparsity${SPARSITY}pct.pt"
 
@@ -153,6 +156,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference \
   --output_file "masks/random_baseline_vs_fisher_cold_sparsity${SPARSITY}pct.pt"
 
@@ -162,6 +166,7 @@ python src/warm_start/random_mask_baseline.py \
   --reference_mask "$REF_MASK" \
   --sparsity_percent $SPARSITY \
   --seed 42 \
+  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
   --compare_to_reference \
   --output_file "masks/random_baseline_vs_cav_cold_sparsity${SPARSITY}pct.pt"
 
