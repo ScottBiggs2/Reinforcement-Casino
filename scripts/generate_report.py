@@ -12,6 +12,10 @@ import json
 import glob
 import os
 import sys
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def load_results(output_dir):
@@ -110,6 +114,107 @@ def print_ablation_report(results):
     print()
 
 
+def plot_speedup_chart(results, out_dir):
+    """Bar chart comparing GPU time/step across methods."""
+    labels = []
+    gpu_steps = []
+    colors = []
+    color_map = {
+        ("dense", "adamw"): "#4C72B0",
+        ("dense", "sgd"): "#55A868",
+        ("lora", "adamw"): "#C44E52",
+        ("sparse_bsr", "sparse_adamw"): "#8172B2",
+    }
+
+    for r in results:
+        method = r.get("method", "?")
+        opt = r.get("optimizer", "?")
+        gpu_step = r.get("time_per_step_gpu", r.get("time_per_step_wall", 0))
+
+        label = f"{method}\n{opt}"
+        if "lora_rank" in r:
+            label += f"\nr={r['lora_rank']}"
+        if "block_size_bsr" in r:
+            label += f"\nbsr={r['block_size_bsr']}"
+
+        labels.append(label)
+        gpu_steps.append(gpu_step)
+        colors.append(color_map.get((method, opt), "#CCCCCC"))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(len(labels))
+    bars = ax.bar(x, gpu_steps, color=colors, width=0.6, edgecolor="white", linewidth=1.2)
+
+    # Add value labels on bars
+    for bar, val in zip(bars, gpu_steps):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                f"{val:.2f}s", ha="center", va="bottom", fontsize=11, fontweight="bold")
+
+    # Baseline line
+    baseline_val = None
+    for r in results:
+        if r.get("method") == "dense" and r.get("optimizer") == "adamw":
+            baseline_val = r.get("time_per_step_gpu", r.get("time_per_step_wall", 0))
+            break
+    if baseline_val:
+        ax.axhline(y=baseline_val, color="#4C72B0", linestyle="--", alpha=0.5, label=f"Dense AdamW baseline ({baseline_val:.2f}s)")
+        ax.legend(fontsize=10)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=10)
+    ax.set_ylabel("GPU Time per Step (s)", fontsize=12)
+    ax.set_title("Training Method Speedup Comparison (Single H200)", fontsize=14, fontweight="bold")
+    ax.set_ylim(0, max(gpu_steps) * 1.2)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+
+    path = os.path.join(out_dir, "speedup_comparison.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Chart saved to {path}")
+
+
+def plot_ablation_chart(results, out_dir):
+    """Grouped bar chart for block size ablation."""
+    results.sort(key=lambda r: (r.get("block_size_bsr", 0), r.get("block_size_adam", 0)))
+
+    labels = []
+    gpu_steps = []
+    for r in results:
+        bsr = r.get("block_size_bsr", "?")
+        adam = r.get("block_size_adam", "?")
+        gpu_step = r.get("time_per_step_gpu", r.get("time_per_step_wall", 0))
+        labels.append(f"bsr={bsr}\nadam={adam}")
+        gpu_steps.append(gpu_step)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.arange(len(labels))
+    colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(labels)))
+    bars = ax.bar(x, gpu_steps, color=colors, width=0.6, edgecolor="white", linewidth=1.2)
+
+    for bar, val in zip(bars, gpu_steps):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
+                f"{val:.2f}s", ha="center", va="bottom", fontsize=11, fontweight="bold")
+
+    # Highlight best
+    best_idx = gpu_steps.index(min(gpu_steps))
+    bars[best_idx].set_edgecolor("red")
+    bars[best_idx].set_linewidth(3)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=10)
+    ax.set_ylabel("GPU Time per Step (s)", fontsize=12)
+    ax.set_title("Block Size Ablation (Single H200)", fontsize=14, fontweight="bold")
+    ax.set_ylim(0, max(gpu_steps) * 1.15)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+
+    path = os.path.join(out_dir, "ablation_block_size.png")
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"Chart saved to {path}")
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python scripts/generate_report.py <benchmark_dir> [ablation_dir]")
@@ -149,6 +254,14 @@ def main():
             print(f"Summary saved to {summary}")
         else:
             print("No ablation directories found.")
+            ablation_results = []
+
+        # Generate charts
+        out_dir = bench_dirs[-1] if bench_dirs else (ablation_dirs[-1] if ablation_dirs else ".")
+        if bench_results:
+            plot_speedup_chart(bench_results, out_dir)
+        if ablation_results:
+            plot_ablation_chart(ablation_results, out_dir)
     else:
         bench_dir = sys.argv[1]
         bench_results = load_results(bench_dir)
