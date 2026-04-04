@@ -4,7 +4,8 @@
 # This launcher exits quickly once submissions are queued; check logs/sparse_<RUN_ID>_*.out per mask.
 # CPU-only: no GPU work on this node (only sbatch fan-out).
 #
-#SBATCH --partition=cpu
+# Northeastern Explorer: `short` (not `cpu`). Override: sbatch -p … this script.
+#SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2

@@ -114,6 +114,11 @@ PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
 # Resume / safety: set to 1 to skip sbatch of stage 4 from stage 3 when sparse was already launched for this RUN_ID
 PIPELINE_SKIP_SPARSE_LAUNCH="${PIPELINE_SKIP_SPARSE_LAUNCH:-0}"
 
+# Slurm partitions: Northeastern Explorer uses `short` for CPU batch jobs (there is no `cpu` partition).
+# GPU interactive/batch is typically `gpu`. Override on other clusters, e.g. export CPU_PARTITION=cpu
+CPU_PARTITION="${CPU_PARTITION:-short}"
+GPU_PARTITION="${GPU_PARTITION:-gpu}"
+
 # Timeouts (seconds) — stay below Slurm wall; default 7h30m so `timeout` sends SIGTERM before job limit.
 # Override when running a single long-horizon sbatch (e.g. TRAIN_TIMEOUT_PER_DATASET=$((16*60*60))).
 TRAIN_TIMEOUT_PER_DATASET="${TRAIN_TIMEOUT_PER_DATASET:-$((7 * 60 * 60 + 30 * 60))}"   # 7h30m

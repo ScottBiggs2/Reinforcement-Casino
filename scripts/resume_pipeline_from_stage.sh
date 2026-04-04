@@ -26,7 +26,8 @@
 # (see MASK_OUT_BASE/<id>/.sparse_launch_submitted), use:
 #   PIPELINE_SKIP_SPARSE_LAUNCH=1 bash scripts/resume_pipeline_from_stage.sh 3 YOUR_RUN_ID
 #
-# Optional env (same as pipeline_common.sh): RUN_MASK_CKA, EVAL_LIMIT, PIPELINE_SKIP_SPARSE_LAUNCH, etc.
+# Optional env (same as pipeline_common.sh): RUN_MASK_CKA, EVAL_LIMIT, PIPELINE_SKIP_SPARSE_LAUNCH,
+# CPU_PARTITION (default short on Northeastern Explorer), GPU_PARTITION (default gpu), etc.
 
 set -euo pipefail
 
@@ -42,6 +43,9 @@ mkdir -p logs
 PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}"
 PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-128G}"
 PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
+# Northeastern Explorer: CPU batch partition is `short` (not `cpu`). Override if your site differs.
+CPU_PARTITION="${CPU_PARTITION:-short}"
+GPU_PARTITION="${GPU_PARTITION:-gpu}"
 
 NEXT=""
 
@@ -70,7 +74,7 @@ echo "  (paths use RUN_ID from this id — same as your original chain)"
 
 if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
   JID=$(sbatch --parsable \
-    --partition="${CPU_PARTITION:-cpu}" \
+    --partition="${CPU_PARTITION}" \
     --time="${PIPELINE_CPU_COMPARISON_TIME}" \
     --mem="${PIPELINE_CPU_COMPARISON_MEM}" \
     --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS}" \
@@ -81,7 +85,7 @@ if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
     "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
 elif [ "${STAGE}" = "3" ]; then
   JID=$(sbatch --parsable \
-    --partition="${CPU_PARTITION:-cpu}" \
+    --partition="${CPU_PARTITION}" \
     --time="${PIPELINE_CPU_COMPARISON_TIME}" \
     --mem="${PIPELINE_CPU_COMPARISON_MEM}" \
     --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS}" \
@@ -91,7 +95,12 @@ elif [ "${STAGE}" = "3" ]; then
     --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
     "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
 else
+  case "${STAGE}" in
+    2b) _sbatch_partition=(--partition="${GPU_PARTITION}") ;;
+    *) _sbatch_partition=(--partition="${CPU_PARTITION}") ;;
+  esac
   JID=$(sbatch --parsable \
+    "${_sbatch_partition[@]}" \
     --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
     "${REPO_ROOT}/scripts/${NEXT}")
 fi

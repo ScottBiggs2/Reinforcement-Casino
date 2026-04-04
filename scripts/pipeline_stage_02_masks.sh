@@ -1,11 +1,12 @@
 #!/bin/bash
-# Stage 2 entry (CPU, short wall): submits the split mask pipeline 02a→02b→02c→3.
+# Stage 2 entry (CPU, ~30m allocation): submits the split mask pipeline 02a→02b→02c→3.
 #
 # This script does NOT run mask Python and does NOT request a GPU. Mixed CPU/GPU mask work
 # is split across dedicated jobs (see pipeline_stage_02a_masks_warm.sh, …02b…, …02c…).
 # Kept as pipeline_stage_02_masks.sh for resume compatibility (e.g. resume stage 2all).
 #
-#SBATCH --partition=cpu
+# Northeastern Explorer CPU batch partition; override: sbatch -p … script.sh
+#SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
@@ -36,6 +37,7 @@ export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$RUN_ID}"
 
 echo "===== Stage 2 entry: submitting split mask chain (02a→02b→02c→3) RUN_ID=${RUN_ID} ====="
 jid=$(sbatch --parsable \
+  --partition="${CPU_PARTITION:-short}" \
   --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}" \
   "${REPO_ROOT}/scripts/pipeline_stage_02a_masks_warm.sh")
 echo "Submitted pipeline_stage_02a_masks_warm.sh → job ${jid}"

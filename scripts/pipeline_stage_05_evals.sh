@@ -1,7 +1,8 @@
 #!/bin/bash
 # Stage 5/5: submit benchmark eval jobs (baseline / dense / sparse). Short wall — only sbatch fan-out.
 # CPU-only: eval workers are separate GPU jobs from run_evals_slurm.sh.
-#SBATCH --partition=cpu
+# Northeastern Explorer: `short` (not `cpu`). Override: sbatch -p … this script.
+#SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2

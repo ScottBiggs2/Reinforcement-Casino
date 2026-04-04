@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stage 2a/5: warm masks only (delta-based; CPU partition — no idle-GPU risk). Chains to 2b (cold GPU).
-#SBATCH --partition=cpu
+# Northeastern Explorer: `short` (not `cpu`). Override: sbatch -p … this script.
+#SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16

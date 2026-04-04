@@ -1,6 +1,7 @@
 #!/bin/bash
 # Stage 2c/5: random baseline + complement inverses (CPU). Chains to stage 3a (comparisons).
-#SBATCH --partition=cpu
+# Northeastern Explorer: `short` (not `cpu`). Override: sbatch -p … this script.
+#SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -35,7 +36,7 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
 fi
 jid=$(sbatch --parsable \
   --dependency=afterok:"${SLURM_JOB_ID}" \
-  --partition="${CPU_PARTITION:-cpu}" \
+  --partition="${CPU_PARTITION:-short}" \
   --time="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}" \
   --mem="${PIPELINE_CPU_COMPARISON_MEM:-128G}" \
   --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS:-16}" \
