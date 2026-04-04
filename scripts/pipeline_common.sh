@@ -171,7 +171,10 @@ pipeline_setup() {
 
   export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
   export PYTHONUNBUFFERED=1
-  export RL_CASINO_WARM_MASK_SCORE_DEVICE="${RL_CASINO_WARM_MASK_SCORE_DEVICE:-cpu}"
+  # Default cuda: warm mask delta scoring uses GPU so Slurm GPU allocations stay utilized (some sites
+  # cancel "idle" GPU jobs). even_better_mask_finder.py honors this for magnitude/momentum/fisher.
+  # If you hit OOM on large models, export RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu before submit.
+  export RL_CASINO_WARM_MASK_SCORE_DEVICE="${RL_CASINO_WARM_MASK_SCORE_DEVICE:-cuda}"
   export RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL="${RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL:-250000000}"
 
   echo "Mask runtime knobs:"

@@ -3,9 +3,10 @@
 # Stages 1–2 stay on disk under your scratch roots; you re-submit from the stage you need.
 #
 # Usage (from repo root on the login node):
-#   bash scripts/resume_pipeline_from_stage.sh <3|4|5> <PIPELINE_RUN_ID>
+#   bash scripts/resume_pipeline_from_stage.sh <2|3|4|5> <PIPELINE_RUN_ID>
 #
 # Examples:
+#   bash scripts/resume_pipeline_from_stage.sh 2 20260329_185704_manual
 #   bash scripts/resume_pipeline_from_stage.sh 3 20260329_185704_manual
 #   # Skip comparisons if masks exist and you only want sparse + evals:
 #   bash scripts/resume_pipeline_from_stage.sh 4 20260329_185704_manual
@@ -23,8 +24,8 @@
 
 set -euo pipefail
 
-STAGE="${1:?usage: $0 <3|4|5> <PIPELINE_RUN_ID>}"
-RUN="${2:?usage: $0 <3|4|5> <PIPELINE_RUN_ID>}"
+STAGE="${1:?usage: $0 <2|3|4|5> <PIPELINE_RUN_ID>}"
+RUN="${2:?usage: $0 <2|3|4|5> <PIPELINE_RUN_ID>}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -37,11 +38,12 @@ PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-128G}"
 PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
 
 case "$STAGE" in
+  2) NEXT="pipeline_stage_02_masks.sh" ;;
   3) NEXT="pipeline_stage_03_comparisons.sh" ;;
   4) NEXT="pipeline_stage_04_sparse.sh" ;;
   5) NEXT="pipeline_stage_05_evals.sh" ;;
   *)
-    echo "ERROR: stage must be 3, 4, or 5 (got: ${STAGE})" >&2
+    echo "ERROR: stage must be 2, 3, 4, or 5 (got: ${STAGE})" >&2
     exit 1
     ;;
 esac
@@ -89,6 +91,7 @@ fi
 
 echo "Submitted job ${JID}"
 case "$STAGE" in
+  2) _log="pipeline_${JID}_p2_masks.out" ;;
   3)
     _log="pipeline_${JID}_p3_cmp_cpu.out"
     ;;

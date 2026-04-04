@@ -3,7 +3,9 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=04:00:00
+# Must cover warm (magnitude/momentum/fisher) + cold + random + inverse masks; align with 7h30 soft
+# timeouts in pipeline_common.sh and stay under a typical 8h site cap (same as other GPU stages).
+#SBATCH --time=07:45:00
 #SBATCH --job-name=pipe_p2_masks
 #SBATCH --mem=128G
 #SBATCH --ntasks=1

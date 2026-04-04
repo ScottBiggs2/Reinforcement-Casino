@@ -387,7 +387,7 @@ That smoke script:
 Useful smoke env knobs:
 
 - `RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL=1` forces the chunked selector on every run.
-- `RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu` keeps warm-score accumulation off GPU.
+- `RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu` forces warm-score accumulation off GPU (pipeline defaults to **cuda** so GPU Slurm jobs stay utilized; use **cpu** if you hit OOM).
 
 The main runner scripts under `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly for reproducibility. Set that variable to `0.0` in a script if you want legacy pure-global behavior.
 
