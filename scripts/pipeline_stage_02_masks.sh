@@ -1,16 +1,19 @@
 #!/bin/bash
-# Stage 2/5: warm + cold masks.
-#SBATCH --partition=gpu
+# Stage 2 entry (CPU, short wall): submits the split mask pipeline 02a→02b→02c→3.
+#
+# This script does NOT run mask Python and does NOT request a GPU. Mixed CPU/GPU mask work
+# is split across dedicated jobs (see pipeline_stage_02a_masks_warm.sh, …02b…, …02c…).
+# Kept as pipeline_stage_02_masks.sh for resume compatibility (e.g. resume stage 2all).
+#
+#SBATCH --partition=cpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:a100:1
-# Must cover warm (magnitude/momentum/fisher) + cold + random + inverse masks; align with 7h30 soft
-# timeouts in pipeline_common.sh and stay under a typical 8h site cap (same as other GPU stages).
-#SBATCH --time=07:45:00
-#SBATCH --job-name=pipe_p2_masks
-#SBATCH --mem=128G
 #SBATCH --ntasks=1
-#SBATCH --output=logs/pipeline_%j_p2_masks.out
-#SBATCH --error=logs/pipeline_%j_p2_masks.err
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
+#SBATCH --time=00:30:00
+#SBATCH --job-name=pipe_p2_entry
+#SBATCH --output=logs/pipeline_%j_p2_masks_entry.out
+#SBATCH --error=logs/pipeline_%j_p2_masks_entry.err
 
 set -euo pipefail
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
@@ -20,27 +23,20 @@ else
   REPO_ROOT="$(cd "${_SCRIPT_HOME}/.." && pwd)"
 fi
 cd "$REPO_ROOT"
+mkdir -p logs
 
-# shellcheck source=/dev/null
-source "${REPO_ROOT}/scripts/pipeline_common.sh"
-pipeline_setup
-
-echo "===== STAGE 2/5: masks (${RUN_ID}) ====="
-run_masks
-# Stage 3a: CPU by default (Jaccard/CSV/plots). If RUN_MASK_CKA=1, stage 3a will chain 3b (GPU CKA).
-if [ -z "${SLURM_JOB_ID:-}" ]; then
-  echo "ERROR: expected SLURM_JOB_ID for chaining" >&2
+if [ -z "${RUN_ID:-}" ] && [ -n "${PIPELINE_RUN_ID:-}" ]; then
+  export RUN_ID="${PIPELINE_RUN_ID}"
+fi
+if [ -z "${RUN_ID:-}" ]; then
+  echo "ERROR: RUN_ID or PIPELINE_RUN_ID must be set (pass via sbatch --export)" >&2
   exit 1
 fi
+export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$RUN_ID}"
+
+echo "===== Stage 2 entry: submitting split mask chain (02a→02b→02c→3) RUN_ID=${RUN_ID} ====="
 jid=$(sbatch --parsable \
-  --dependency=afterok:"${SLURM_JOB_ID}" \
-  --partition="${CPU_PARTITION:-cpu}" \
-  --time="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}" \
-  --mem="${PIPELINE_CPU_COMPARISON_MEM:-128G}" \
-  --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS:-16}" \
-  --ntasks=1 \
-  --output=logs/pipeline_%j_p3_cmp_cpu.out \
-  --error=logs/pipeline_%j_p3_cmp_cpu.err \
   --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}" \
-  "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
-echo "Chained next stage: pipeline_stage_03_comparisons_cpu.sh → Slurm job ${jid} (afterok:${SLURM_JOB_ID})"
+  "${REPO_ROOT}/scripts/pipeline_stage_02a_masks_warm.sh")
+echo "Submitted pipeline_stage_02a_masks_warm.sh → job ${jid}"
+echo "Follow logs: logs/pipeline_${jid}_p2a_masks_warm.out (then p2b / p2c as each stage chains)."

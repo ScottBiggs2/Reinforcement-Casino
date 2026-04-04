@@ -3,14 +3,20 @@
 # Stages 1–2 stay on disk under your scratch roots; you re-submit from the stage you need.
 #
 # Usage (from repo root on the login node):
-#   bash scripts/resume_pipeline_from_stage.sh <2|3|4|5> <PIPELINE_RUN_ID>
+#   bash scripts/resume_pipeline_from_stage.sh <stage> <PIPELINE_RUN_ID>
+#
+# Stage codes:
+#   2 | 2a   — warm masks only (CPU), then chain 2b→2c→3…
+#   2b       — cold Fisher + CAV only (GPU), then chain 2c→3…
+#   2c       — random + inverse masks only (CPU), then chain 3…
+#   2all     — stage 2 CPU entry script (submits 02a→02b→02c; same as 2/2a outcome)
+#   3 | 4 | 5 — comparisons, sparse launcher, evals
 #
 # Examples:
-#   bash scripts/resume_pipeline_from_stage.sh 2 20260329_185704_manual
+#   bash scripts/resume_pipeline_from_stage.sh 2a 20260329_185704_manual
+#   bash scripts/resume_pipeline_from_stage.sh 2b 20260329_185704_manual
 #   bash scripts/resume_pipeline_from_stage.sh 3 20260329_185704_manual
-#   # Skip comparisons if masks exist and you only want sparse + evals:
 #   bash scripts/resume_pipeline_from_stage.sh 4 20260329_185704_manual
-#   # Only eval fan-out (dense/sparse checkpoints already present):
 #   bash scripts/resume_pipeline_from_stage.sh 5 20260329_185704_manual
 #
 # Stage 3 is often wall-limited when RUN_MASK_CKA=1. For a faster retry:
@@ -24,8 +30,8 @@
 
 set -euo pipefail
 
-STAGE="${1:?usage: $0 <2|3|4|5> <PIPELINE_RUN_ID>}"
-RUN="${2:?usage: $0 <2|3|4|5> <PIPELINE_RUN_ID>}"
+STAGE="${1:?usage: $0 <2|2a|2b|2c|2all|3|4|5> <PIPELINE_RUN_ID>}"
+RUN="${2:?usage: $0 <2|2a|2b|2c|2all|3|4|5> <PIPELINE_RUN_ID>}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -37,28 +43,43 @@ PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}"
 PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-128G}"
 PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
 
+NEXT=""
+
 case "$STAGE" in
-  2) NEXT="pipeline_stage_02_masks.sh" ;;
+  2|2a) NEXT="pipeline_stage_02a_masks_warm.sh" ;;
+  2b) NEXT="pipeline_stage_02b_masks_cold.sh" ;;
+  2c) NEXT="pipeline_stage_02c_masks_post.sh" ;;
+  2all) NEXT="pipeline_stage_02_masks.sh" ;;
   3) NEXT="pipeline_stage_03_comparisons.sh" ;;
   4) NEXT="pipeline_stage_04_sparse.sh" ;;
   5) NEXT="pipeline_stage_05_evals.sh" ;;
   *)
-    echo "ERROR: stage must be 2, 3, 4, or 5 (got: ${STAGE})" >&2
+    echo "ERROR: stage must be 2, 2a, 2b, 2c, 2all, 3, 4, or 5 (got: ${STAGE})" >&2
     exit 1
     ;;
 esac
 
-if [ ! -f "${REPO_ROOT}/scripts/${NEXT}" ]; then
+if [ -n "${NEXT}" ] && [ ! -f "${REPO_ROOT}/scripts/${NEXT}" ]; then
   echo "ERROR: missing ${REPO_ROOT}/scripts/${NEXT}" >&2
   exit 1
 fi
 
-echo "Resuming pipeline at stage ${STAGE}: ${NEXT}"
+echo "Resuming pipeline at stage ${STAGE}: ${NEXT:-stage 3 comparisons}"
 echo "  PIPELINE_RUN_ID=${RUN}"
 echo "  (paths use RUN_ID from this id — same as your original chain)"
 
 if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
-  # Comparisons without CKA don't need a GPU; run on CPU partition to avoid GPU-idle cancellation policies.
+  JID=$(sbatch --parsable \
+    --partition="${CPU_PARTITION:-cpu}" \
+    --time="${PIPELINE_CPU_COMPARISON_TIME}" \
+    --mem="${PIPELINE_CPU_COMPARISON_MEM}" \
+    --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS}" \
+    --ntasks=1 \
+    --output=logs/pipeline_%j_p3_cmp_cpu.out \
+    --error=logs/pipeline_%j_p3_cmp_cpu.err \
+    --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
+    "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
+elif [ "${STAGE}" = "3" ]; then
   JID=$(sbatch --parsable \
     --partition="${CPU_PARTITION:-cpu}" \
     --time="${PIPELINE_CPU_COMPARISON_TIME}" \
@@ -70,31 +91,19 @@ if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
     --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
     "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
 else
-  if [ "${STAGE}" = "3" ]; then
-    # Even with CKA enabled, stage 3a should be CPU (it will chain 3b GPU CKA itself).
-    JID=$(sbatch --parsable \
-      --partition="${CPU_PARTITION:-cpu}" \
-      --time="${PIPELINE_CPU_COMPARISON_TIME}" \
-      --mem="${PIPELINE_CPU_COMPARISON_MEM}" \
-      --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS}" \
-      --ntasks=1 \
-      --output=logs/pipeline_%j_p3_cmp_cpu.out \
-      --error=logs/pipeline_%j_p3_cmp_cpu.err \
-      --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
-      "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
-  else
-    JID=$(sbatch --parsable \
-      --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
-      "${REPO_ROOT}/scripts/${NEXT}")
-  fi
+  JID=$(sbatch --parsable \
+    --export=ALL,PIPELINE_RUN_ID="${RUN}",RUN_ID="${RUN}" \
+    "${REPO_ROOT}/scripts/${NEXT}")
 fi
 
 echo "Submitted job ${JID}"
+
 case "$STAGE" in
-  2) _log="pipeline_${JID}_p2_masks.out" ;;
-  3)
-    _log="pipeline_${JID}_p3_cmp_cpu.out"
-    ;;
+  2|2a) _log="pipeline_${JID}_p2a_masks_warm.out" ;;
+  2b) _log="pipeline_${JID}_p2b_masks_cold.out" ;;
+  2c) _log="pipeline_${JID}_p2c_masks_post.out" ;;
+  2all) _log="pipeline_${JID}_p2_masks_entry.out" ;;
+  3) _log="pipeline_${JID}_p3_cmp_cpu.out" ;;
   4) _log="pipeline_${JID}_p4_sparse_launch.out" ;;
   5) _log="pipeline_${JID}_p5_eval.out" ;;
 esac

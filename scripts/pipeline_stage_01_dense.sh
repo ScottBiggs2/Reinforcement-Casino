@@ -25,4 +25,5 @@ pipeline_setup
 
 echo "===== STAGE 1/5: dense DPO (${RUN_ID}) ====="
 run_dense_dpo
-pipeline_submit_next_stage "pipeline_stage_02_masks.sh"
+# Stage 2 is always the split chain (02a CPU → 02b GPU → 02c CPU → 3). Alternate entry: scripts/pipeline_stage_02_masks.sh (CPU launcher only).
+pipeline_submit_next_stage "pipeline_stage_02a_masks_warm.sh"

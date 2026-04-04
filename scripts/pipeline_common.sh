@@ -91,6 +91,9 @@ PLOT_RANDOM_TRIALS="${PLOT_RANDOM_TRIALS:-3}"
 RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 # Complement masks (1−M): written as <stem>_inverse.pt next to each primary mask; included in comparisons + sparse.
 PIPELINE_GENERATE_INVERSE_MASKS="${PIPELINE_GENERATE_INVERSE_MASKS:-1}"
+# Mask stage 2: run subset of mask steps (split jobs 02a/02b/02c). Default all = legacy single-job behavior.
+# warm = delta-based warm masks only; cold = Fisher + CAV; post = random baseline + complement inverses.
+PIPELINE_MASK_PHASE="${PIPELINE_MASK_PHASE:-all}"
 
 # --- Slurm: respect cluster max wall (often 08:00:00) ---
 # Every pipeline stage’s #SBATCH --time must be ≤ that cap. GPU-heavy stages default to 07:45:00 so
@@ -323,7 +326,16 @@ run_dense_dpo() {
 
 run_masks() {
   check_budget
-  echo "=== Mask building (warm + cold + random baseline + optional complement masks) ==="
+  local phase="${PIPELINE_MASK_PHASE:-all}"
+  case "$phase" in
+    all|warm|cold|post) ;;
+    *)
+      echo "ERROR: PIPELINE_MASK_PHASE must be all|warm|cold|post (got: ${phase})" >&2
+      exit 1
+      ;;
+  esac
+
+  echo "=== Mask building (PIPELINE_MASK_PHASE=${phase}) ==="
 
   # For now, assume single dataset from DPO_DATASETS[0]
   local ds="${DPO_DATASETS[0]}"
@@ -365,85 +377,91 @@ run_masks() {
 
   local method sparsity ref_mag out_rand
 
-  echo "Warm-start masks from ${delta_dir}"
-  for method in magnitude momentum fisher; do
+  if [ "$phase" = "all" ] || [ "$phase" = "warm" ]; then
+    echo "Warm-start masks from ${delta_dir}"
+    for method in magnitude momentum fisher; do
+      for sparsity in "${SPARSITY_LIST[@]}"; do
+        run_one_mask_step "warm ${method} sparsity=${sparsity}" \
+          "$TRAIN_PY" src/warm_start/even_better_mask_finder.py \
+            --delta_log_dir "$delta_dir" \
+            --method "$method" \
+            --sparsity_percent "$sparsity" \
+            --target_step "${TARGET_STEP_DPO}" \
+            --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+            --output_file "${mask_base}/warm_${method}_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
+      done
+    done
+  fi
+
+  if [ "$phase" = "all" ] || [ "$phase" = "cold" ]; then
+    echo "Cold-start Fisher masks"
     for sparsity in "${SPARSITY_LIST[@]}"; do
-      run_one_mask_step "warm ${method} sparsity=${sparsity}" \
-        "$TRAIN_PY" src/warm_start/even_better_mask_finder.py \
-          --delta_log_dir "$delta_dir" \
-          --method "$method" \
+      run_one_mask_step "cold Fisher sparsity=${sparsity}" \
+        "$TRAIN_PY" src/cold_start/cold_mask_finder.py \
+          --model_name "$MODEL" \
+          --dataset_name "$COLD_DATASET_HF" \
           --sparsity_percent "$sparsity" \
-          --target_step "${TARGET_STEP_DPO}" \
+          --n_calibration_samples "${COLD_FISHER_N_CALIB}" \
           --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-          --output_file "${mask_base}/warm_${method}_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
+          --output_file "${mask_base}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n${COLD_FISHER_N_CALIB}.pt"
     done
-  done
 
-  echo "Cold-start Fisher masks"
-  for sparsity in "${SPARSITY_LIST[@]}"; do
-    run_one_mask_step "cold Fisher sparsity=${sparsity}" \
-      "$TRAIN_PY" src/cold_start/cold_mask_finder.py \
-        --model_name "$MODEL" \
-        --dataset_name "$COLD_DATASET_HF" \
-        --sparsity_percent "$sparsity" \
-        --n_calibration_samples "${COLD_FISHER_N_CALIB}" \
-        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-        --output_file "${mask_base}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n${COLD_FISHER_N_CALIB}.pt"
-  done
+    echo "Cold-start CAV masks"
+    for sparsity in "${SPARSITY_LIST[@]}"; do
+      run_one_mask_step "cold CAV sparsity=${sparsity}" \
+        "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
+          --model_name "$MODEL" \
+          --dataset_name "$COLD_DATASET_HF" \
+          --method cav \
+          --sparsity_percent "$sparsity" \
+          --subset_size "${COLD_CAV_SUBSET}" \
+          --num_batches "${COLD_CAV_NUM_BATCHES}" \
+          --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+          --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
+    done
+  fi
 
-  echo "Cold-start CAV masks"
-  for sparsity in "${SPARSITY_LIST[@]}"; do
-    run_one_mask_step "cold CAV sparsity=${sparsity}" \
-      "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
-        --model_name "$MODEL" \
-        --dataset_name "$COLD_DATASET_HF" \
-        --method cav \
-        --sparsity_percent "$sparsity" \
-        --subset_size "${COLD_CAV_SUBSET}" \
-        --num_batches "${COLD_CAV_NUM_BATCHES}" \
-        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-        --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
-  done
+  if [ "$phase" = "all" ] || [ "$phase" = "post" ]; then
+    echo "Random baseline masks (uniform scores; null baseline for comparisons + sparse DPO)"
+    for sparsity in "${SPARSITY_LIST[@]}"; do
+      ref_mag="${mask_base}/warm_magnitude_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
+      out_rand="${mask_base}/random_baseline_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}_seed${RANDOM_MASK_SEED}.pt"
+      if [ ! -f "$ref_mag" ]; then
+        echo "SKIP random baseline sparsity=${sparsity}: missing warm magnitude reference ${ref_mag}" | tee -a "$log_file" >&2
+        continue
+      fi
+      run_one_mask_step "random baseline sparsity=${sparsity} seed=${RANDOM_MASK_SEED}" \
+        "$TRAIN_PY" src/warm_start/random_mask_baseline.py \
+          --reference_mask "$ref_mag" \
+          --sparsity_percent "$sparsity" \
+          --seed "${RANDOM_MASK_SEED}" \
+          --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+          --output_file "$out_rand"
+    done
 
-  echo "Random baseline masks (uniform scores; null baseline for comparisons + sparse DPO)"
-  for sparsity in "${SPARSITY_LIST[@]}"; do
-    ref_mag="${mask_base}/warm_magnitude_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
-    out_rand="${mask_base}/random_baseline_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}_seed${RANDOM_MASK_SEED}.pt"
-    if [ ! -f "$ref_mag" ]; then
-      echo "SKIP random baseline sparsity=${sparsity}: missing warm magnitude reference ${ref_mag}" | tee -a "$log_file" >&2
-      continue
+    if [ "${PIPELINE_GENERATE_INVERSE_MASKS:-1}" = "1" ]; then
+      echo "Complement masks (1−M per primary .pt → *_inverse.pt; skipped if source missing)"
+      local invf invbase
+      shopt -s nullglob
+      for invf in "${mask_base}"/*.pt; do
+        invbase=$(basename "$invf")
+        case "$invbase" in
+          *_inverse.pt) continue ;;
+        esac
+        check_budget
+        run_one_mask_step "complement (inverse) of ${invbase}" \
+          "$TRAIN_PY" "${REPO_ROOT}/scripts/invert_mask.py" "$invf"
+      done
+      shopt -u nullglob
+    else
+      echo "SKIP complement masks (PIPELINE_GENERATE_INVERSE_MASKS=0)"
     fi
-    run_one_mask_step "random baseline sparsity=${sparsity} seed=${RANDOM_MASK_SEED}" \
-      "$TRAIN_PY" src/warm_start/random_mask_baseline.py \
-        --reference_mask "$ref_mag" \
-        --sparsity_percent "$sparsity" \
-        --seed "${RANDOM_MASK_SEED}" \
-        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-        --output_file "$out_rand"
-  done
-
-  if [ "${PIPELINE_GENERATE_INVERSE_MASKS:-1}" = "1" ]; then
-    echo "Complement masks (1−M per primary .pt → *_inverse.pt; skipped if source missing)"
-    local invf invbase
-    shopt -s nullglob
-    for invf in "${mask_base}"/*.pt; do
-      invbase=$(basename "$invf")
-      case "$invbase" in
-        *_inverse.pt) continue ;;
-      esac
-      check_budget
-      run_one_mask_step "complement (inverse) of ${invbase}" \
-        "$TRAIN_PY" "${REPO_ROOT}/scripts/invert_mask.py" "$invf"
-    done
-    shopt -u nullglob
-  else
-    echo "SKIP complement masks (PIPELINE_GENERATE_INVERSE_MASKS=0)"
   fi
 
   if [ "${mask_failures}" -gt 0 ]; then
-    echo "WARNING: ${mask_failures} mask step(s) failed in total. Pipeline continues; sparse training uses any .pt files under ${mask_base}." | tee -a "$log_file" >&2
+    echo "WARNING: ${mask_failures} mask step(s) failed in ${phase} phase. Pipeline continues; sparse training uses any .pt files under ${mask_base}." | tee -a "$log_file" >&2
   else
-    echo "All mask steps completed successfully." | tee -a "$log_file"
+    echo "Mask phase (${phase}) completed successfully (no step failures)." | tee -a "$log_file"
   fi
 }
 

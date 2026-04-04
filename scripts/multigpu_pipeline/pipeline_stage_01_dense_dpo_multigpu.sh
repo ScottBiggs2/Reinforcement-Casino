@@ -113,5 +113,5 @@ timeout --signal=TERM --kill-after=60 "${TRAIN_TIMEOUT_PER_DATASET}" \
       --run_name "$run_name" 2>&1 | tee "logs/full_pipeline_dpo_multigpu_${ds}_${RUN_ID}.log"
 
 echo "===== MULTIGPU STAGE 1 COMPLETE (${RUN_ID}) ====="
-echo "Next: run masks with scripts/pipeline_stage_02_masks.sh (single-GPU) or add a multigpu mask stage wrapper later."
+echo "Next: chain masks with scripts/pipeline_stage_02a_masks_warm.sh (02a→02b→02c) or scripts/pipeline_stage_02_masks.sh (CPU entry that submits 02a)."
 

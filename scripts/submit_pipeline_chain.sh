@@ -21,6 +21,8 @@ export RUN_ID="${PIPELINE_RUN_ID}"
 
 echo "PIPELINE_RUN_ID=${PIPELINE_RUN_ID}"
 echo "Submitting stage 1 (dense DPO)…"
+echo "Stage 2: split masks — 02a CPU (warm) → 02b GPU (cold) → 02c CPU (random+inverses) → stage 3."
+echo "  Optional entrypoint (CPU-only submit script): scripts/pipeline_stage_02_masks.sh"
 
 JID=$(sbatch --parsable \
   --export=ALL,PIPELINE_RUN_ID,RUN_ID \
@@ -29,4 +31,5 @@ JID=$(sbatch --parsable \
 echo "Stage 1 job id: ${JID}"
 echo "Watch:  squeue -u \"\$USER\""
 echo "Stage1 log (after job starts):  tail -f logs/pipeline_${JID}_p1_dense.out"
+echo "After stage 1, watch 02a:  logs/pipeline_<id>_p2a_masks_warm.out (ids printed when each stage submits the next)."
 echo "All stages use RUN_ID=${PIPELINE_RUN_ID} under your scratch roots (see pipeline_common.sh)."

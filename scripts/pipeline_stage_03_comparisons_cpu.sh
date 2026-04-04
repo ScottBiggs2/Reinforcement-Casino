@@ -4,7 +4,7 @@
 # This stage does NOT require a GPU unless RUN_MASK_CKA=1 runs CKA inline; prefer RUN_MASK_CKA=0 and use stage 3b for CKA on GPU.
 #
 # This script intentionally omits #SBATCH headers so it can be submitted with `sbatch -p ...`
-# from another stage (see pipeline_stage_02_masks.sh / resume_pipeline_from_stage.sh).
+# from another stage (see pipeline_stage_02c_masks_post.sh, pipeline_stage_02_masks.sh, resume_pipeline_from_stage.sh).
 
 set -euo pipefail
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
