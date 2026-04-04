@@ -111,15 +111,12 @@ def train(
     
     train_dataset = load_grpo_dataset(dataset_key, subset_size=subset_size)
     
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
-    multi_gpu = int(os.environ.get("WORLD_SIZE", 1)) > 1
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
-        device_map=None if multi_gpu else "auto"
+        device_map="auto"
     )
-    if multi_gpu or (hasattr(model, "to") and device.type == "cuda"):
-        model.to(device)
+    if hasattr(model, "to") and device.type == "cuda": model.to(device)
     model.config.use_cache = False
     
     # -------------------------------------------------------------------------

@@ -85,11 +85,7 @@ tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = "right"
 
-_multi_gpu = int(os.environ.get("WORLD_SIZE", 1)) > 1
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME, torch_dtype=torch.bfloat16,
-    device_map=None if _multi_gpu else "auto"
-)
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, torch_dtype=torch.bfloat16, device_map="auto")
 model.config.use_cache = False
 
 cfg = GRPOConfig(
