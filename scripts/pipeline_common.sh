@@ -81,12 +81,16 @@ RUN_MASK_CKA="${RUN_MASK_CKA:-0}"
 # export_layer_metrics_csv.py: per-layer svdvals for "effective rank" — skip entirely, or parallelize (see below).
 EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK="${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}"
 # When skip=0: thread pool size for per-layer SVD (does not fix unrelated Slurm cancellations).
-EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS="${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-4}"
+EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS="${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-8}"
 MASK_COMPARISON_TIMEOUT_JACCARD="${MASK_COMPARISON_TIMEOUT_JACCARD:-600}"
 MASK_COMPARISON_TIMEOUT_CKA="${MASK_COMPARISON_TIMEOUT_CKA:-$((2 * 60 * 60))}"
 CKA_N_SAMPLES="${CKA_N_SAMPLES:-64}"
 CKA_BATCH_SIZE="${CKA_BATCH_SIZE:-2}"
 PLOT_RANDOM_TRIALS="${PLOT_RANDOM_TRIALS:-3}"
+# Random baseline mask: same global sparsity selector as warm/cold masks; matched to warm-magnitude shapes.
+RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
+# Complement masks (1−M): written as <stem>_inverse.pt next to each primary mask; included in comparisons + sparse.
+PIPELINE_GENERATE_INVERSE_MASKS="${PIPELINE_GENERATE_INVERSE_MASKS:-1}"
 
 # --- Slurm: respect cluster max wall (often 08:00:00) ---
 # Every pipeline stage’s #SBATCH --time must be ≤ that cap. GPU-heavy stages default to 07:45:00 so
@@ -99,10 +103,13 @@ SPARSE_SLURM_MEM="${SPARSE_SLURM_MEM:-128G}"
 # afterok = run evals only if every sparse job succeeded; afterany = run evals when all have finished (any exit code)
 PIPELINE_SPARSE_EVAL_DEPENDENCY="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
 
-# Stage 3a (CPU): Jaccard / CSV / plots — cheaper than GPU stages (overridden on sbatch CLI from stage 2 / resume)
-PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-06:00:00}"
-PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-64G}"
-PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-4}"
+# Stage 3a (CPU): Jaccard / CSV / plots — cheaper than GPU stages (overridden on sbatch CLI from stage 2 / resume).
+# Defaults sized for the expanded comparison set while stage 4 sparse jobs run in parallel (≤8h cluster cap).
+PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}"
+PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-128G}"
+PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
+# Resume / safety: set to 1 to skip sbatch of stage 4 from stage 3 when sparse was already launched for this RUN_ID
+PIPELINE_SKIP_SPARSE_LAUNCH="${PIPELINE_SKIP_SPARSE_LAUNCH:-0}"
 
 # Timeouts (seconds) — stay below Slurm wall; default 7h30m so `timeout` sends SIGTERM before job limit.
 # Override when running a single long-horizon sbatch (e.g. TRAIN_TIMEOUT_PER_DATASET=$((16*60*60))).
@@ -203,6 +210,31 @@ pipeline_submit_next_stage() {
   echo "Chained next stage: ${next_script} → Slurm job ${jid} (afterok:${SLURM_JOB_ID})"
 }
 
+# Submit stage 4 (sparse launcher) at the *start* of stage 3 so per-mask sparse GPU jobs overlap wall time with comparisons.
+# Idempotent: skips if MASK_OUT_BASE/${RUN_ID}/.sparse_launch_submitted exists (written when a prior launch finished).
+# Override duplicate guard: PIPELINE_SKIP_SPARSE_LAUNCH=1 (skip) or remove the sentinel file to force a new launch.
+pipeline_submit_sparse_stage_early() {
+  if [ "${PIPELINE_SKIP_SPARSE_LAUNCH:-0}" = "1" ]; then
+    echo "SKIP early stage 4: PIPELINE_SKIP_SPARSE_LAUNCH=1"
+    return 0
+  fi
+  if [ -z "${SLURM_JOB_ID:-}" ]; then
+    echo "WARNING: pipeline_submit_sparse_stage_early: SLURM_JOB_ID unset; not submitting stage 4" >&2
+    return 0
+  fi
+  local sentinel
+  sentinel="${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_submitted"
+  if [ -f "$sentinel" ]; then
+    echo "SKIP early stage 4: sparse launch already recorded (${sentinel})."
+    return 0
+  fi
+  local sj
+  sj=$(sbatch --parsable \
+    --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}" \
+    "${REPO_ROOT}/scripts/pipeline_stage_04_sparse.sh")
+  echo "Early kickoff: stage 4 sparse launcher → Slurm job ${sj} (parallel with mask comparisons in job ${SLURM_JOB_ID})"
+}
+
 ########################################
 # 2. Dense DPO training
 ########################################
@@ -283,12 +315,12 @@ run_dense_dpo() {
 }
 
 ########################################
-# 3. Mask building (warm + cold)
+# 3. Mask building (warm + cold + random baseline)
 ########################################
 
 run_masks() {
   check_budget
-  echo "=== Mask building (warm + cold) ==="
+  echo "=== Mask building (warm + cold + random baseline + optional complement masks) ==="
 
   # For now, assume single dataset from DPO_DATASETS[0]
   local ds="${DPO_DATASETS[0]}"
@@ -328,7 +360,7 @@ run_masks() {
     fi
   }
 
-  local method sparsity
+  local method sparsity ref_mag out_rand
 
   echo "Warm-start masks from ${delta_dir}"
   for method in magnitude momentum fisher; do
@@ -369,6 +401,41 @@ run_masks() {
         --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
         --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
   done
+
+  echo "Random baseline masks (uniform scores; null baseline for comparisons + sparse DPO)"
+  for sparsity in "${SPARSITY_LIST[@]}"; do
+    ref_mag="${mask_base}/warm_magnitude_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
+    out_rand="${mask_base}/random_baseline_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}_seed${RANDOM_MASK_SEED}.pt"
+    if [ ! -f "$ref_mag" ]; then
+      echo "SKIP random baseline sparsity=${sparsity}: missing warm magnitude reference ${ref_mag}" | tee -a "$log_file" >&2
+      continue
+    fi
+    run_one_mask_step "random baseline sparsity=${sparsity} seed=${RANDOM_MASK_SEED}" \
+      "$TRAIN_PY" src/warm_start/random_mask_baseline.py \
+        --reference_mask "$ref_mag" \
+        --sparsity_percent "$sparsity" \
+        --seed "${RANDOM_MASK_SEED}" \
+        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+        --output_file "$out_rand"
+  done
+
+  if [ "${PIPELINE_GENERATE_INVERSE_MASKS:-1}" = "1" ]; then
+    echo "Complement masks (1−M per primary .pt → *_inverse.pt; skipped if source missing)"
+    local invf invbase
+    shopt -s nullglob
+    for invf in "${mask_base}"/*.pt; do
+      invbase=$(basename "$invf")
+      case "$invbase" in
+        *_inverse.pt) continue ;;
+      esac
+      check_budget
+      run_one_mask_step "complement (inverse) of ${invbase}" \
+        "$TRAIN_PY" "${REPO_ROOT}/scripts/invert_mask.py" "$invf"
+    done
+    shopt -u nullglob
+  else
+    echo "SKIP complement masks (PIPELINE_GENERATE_INVERSE_MASKS=0)"
+  fi
 
   if [ "${mask_failures}" -gt 0 ]; then
     echo "WARNING: ${mask_failures} mask step(s) failed in total. Pipeline continues; sparse training uses any .pt files under ${mask_base}." | tee -a "$log_file" >&2
@@ -416,7 +483,53 @@ run_mask_comparisons() {
     return 0
   }
 
-  local sparsity sp_safe warm_mag warm_mom warm_fish cold_fish cold_cav
+  # Jaccard + optional CKA + layer_metrics CSV for one pair (shared by structured + complement comparisons).
+  run_jaccard_cka_export_pair() {
+    local tag="$1" ma="$2" mb="$3"
+    if [ ! -f "$ma" ] || [ ! -f "$mb" ]; then
+      echo "SKIP comparison ${tag}: missing mask file(s)" | tee -a "$log_file"
+      echo "  A=${ma}" | tee -a "$log_file"
+      echo "  B=${mb}" | tee -a "$log_file"
+      return 0
+    fi
+
+    run_one_cmp_step "Jaccard ${tag}" \
+      timeout --signal=TERM --kill-after=60 "${MASK_COMPARISON_TIMEOUT_JACCARD}" \
+        "$TRAIN_PY" src/cold_start/mask_to_jaccard.py "$ma" "$mb" \
+          -o "${comp_dir}/jaccard_${tag}.json" || cmp_failures=$((cmp_failures + 1))
+
+    if [ "${RUN_MASK_CKA}" = "1" ]; then
+      run_one_cmp_step "CKA ${tag}" \
+        timeout --signal=TERM --kill-after=60 "${MASK_COMPARISON_TIMEOUT_CKA}" \
+          "$TRAIN_PY" src/cold_start/mask_to_cka.py "$ma" "$mb" \
+            --model_name "$MODEL" \
+            --dataset_name "$COLD_DATASET_HF" \
+            --device cuda \
+            --n_samples "${CKA_N_SAMPLES}" \
+            --batch_size "${CKA_BATCH_SIZE}" \
+            --seed 42 \
+            -o "${comp_dir}/cka_${tag}.json" || cmp_failures=$((cmp_failures + 1))
+    fi
+
+    if [ -f "${comp_dir}/jaccard_${tag}.json" ]; then
+      export_cmd=(
+        "$TRAIN_PY" src/cold_start/export_layer_metrics_csv.py "$ma" "$mb"
+        --jaccard-json "${comp_dir}/jaccard_${tag}.json"
+        -o "${comp_dir}/layer_metrics_${tag}.csv"
+      )
+      if [ -f "${comp_dir}/cka_${tag}.json" ]; then
+        export_cmd+=( --cka-json "${comp_dir}/cka_${tag}.json" )
+      fi
+      if [ "${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}" = "1" ]; then
+        export_cmd+=( --skip_effective_rank )
+      else
+        export_cmd+=( --effective_rank_workers "${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-4}" )
+      fi
+      run_one_cmp_step "layer_metrics CSV ${tag}" "${export_cmd[@]}" || cmp_failures=$((cmp_failures + 1))
+    fi
+  }
+
+  local sparsity sp_safe warm_mag warm_mom warm_fish cold_fish cold_cav random_mask
   local tags mas mbs i tag ma mb
   local -a export_cmd
 
@@ -428,57 +541,63 @@ run_mask_comparisons() {
     warm_fish="${mask_dir}/warm_fisher_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}.pt"
     cold_fish="${mask_dir}/cold_fisher_${model_sanitized}_sparsity${sparsity}pct_n${COLD_FISHER_N_CALIB}.pt"
     cold_cav="${mask_dir}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
+    random_mask="${mask_dir}/random_baseline_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_step${TARGET_STEP_DPO}_seed${RANDOM_MASK_SEED}.pt"
 
-    tags=( "sp${sp_safe}_wm_vs_cf" "sp${sp_safe}_wmom_vs_cc" "sp${sp_safe}_wf_vs_cf" )
-    mas=( "$warm_mag" "$warm_mom" "$warm_fish" )
-    mbs=( "$cold_fish" "$cold_cav" "$cold_fish" )
+    # File naming: jaccard_<tag>.json / cka_<tag>.json / layer_metrics_<tag>.csv (tag includes sparsity prefix sp<pct>_...).
+    # Core warm–cold anchors (historical trio)
+    run_jaccard_cka_export_pair "sp${sp_safe}_wm_vs_cf" "$warm_mag" "$cold_fish"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wmom_vs_cc" "$warm_mom" "$cold_cav"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wf_vs_cf" "$warm_fish" "$cold_fish"
 
-    for i in 0 1 2; do
-      tag="${tags[$i]}"
-      ma="${mas[$i]}"
-      mb="${mbs[$i]}"
-      if [ ! -f "$ma" ] || [ ! -f "$mb" ]; then
-        echo "SKIP comparison ${tag}: missing mask file(s)" | tee -a "$log_file"
-        echo "  A=${ma}" | tee -a "$log_file"
-        echo "  B=${mb}" | tee -a "$log_file"
-        continue
-      fi
+    # Random null vs structured (same global sparsity target)
+    run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_wm" "$random_mask" "$warm_mag"
+    run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_wf" "$random_mask" "$warm_fish"
+    run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_cf" "$random_mask" "$cold_fish"
 
-      run_one_cmp_step "Jaccard ${tag}" \
-        timeout --signal=TERM --kill-after=60 "${MASK_COMPARISON_TIMEOUT_JACCARD}" \
-          "$TRAIN_PY" src/cold_start/mask_to_jaccard.py "$ma" "$mb" \
-            -o "${comp_dir}/jaccard_${tag}.json" || cmp_failures=$((cmp_failures + 1))
+    # Warm×warm, cold×cold, cross warm–cold, extra random pairs
+    run_jaccard_cka_export_pair "sp${sp_safe}_wm_vs_wmom" "$warm_mag" "$warm_mom"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wm_vs_wf" "$warm_mag" "$warm_fish"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wmom_vs_wf" "$warm_mom" "$warm_fish"
+    run_jaccard_cka_export_pair "sp${sp_safe}_cf_vs_cc" "$cold_fish" "$cold_cav"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wm_vs_cc" "$warm_mag" "$cold_cav"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wf_vs_cc" "$warm_fish" "$cold_cav"
+    run_jaccard_cka_export_pair "sp${sp_safe}_wmom_vs_cf" "$warm_mom" "$cold_fish"
+    run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_wmom" "$random_mask" "$warm_mom"
+    run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_cc" "$random_mask" "$cold_cav"
 
-      if [ "${RUN_MASK_CKA}" = "1" ]; then
-        run_one_cmp_step "CKA ${tag}" \
-          timeout --signal=TERM --kill-after=60 "${MASK_COMPARISON_TIMEOUT_CKA}" \
-            "$TRAIN_PY" src/cold_start/mask_to_cka.py "$ma" "$mb" \
-              --model_name "$MODEL" \
-              --dataset_name "$COLD_DATASET_HF" \
-              --device cuda \
-              --n_samples "${CKA_N_SAMPLES}" \
-              --batch_size "${CKA_BATCH_SIZE}" \
-              --seed 42 \
-              -o "${comp_dir}/cka_${tag}.json" || cmp_failures=$((cmp_failures + 1))
-      fi
+    # Complement (*_inverse.pt) masks: overlap sanity (primary vs its inverse) + cross-method pairs
+    if [ "${PIPELINE_GENERATE_INVERSE_MASKS:-1}" = "1" ]; then
+      local warm_mag_inv warm_mom_inv warm_fish_inv cold_fish_inv cold_cav_inv random_inv
+      warm_mag_inv="${warm_mag%.pt}_inverse.pt"
+      warm_mom_inv="${warm_mom%.pt}_inverse.pt"
+      warm_fish_inv="${warm_fish%.pt}_inverse.pt"
+      cold_fish_inv="${cold_fish%.pt}_inverse.pt"
+      cold_cav_inv="${cold_cav%.pt}_inverse.pt"
+      random_inv="${random_mask%.pt}_inverse.pt"
 
-      if [ -f "${comp_dir}/jaccard_${tag}.json" ]; then
-        export_cmd=(
-          "$TRAIN_PY" src/cold_start/export_layer_metrics_csv.py "$ma" "$mb"
-          --jaccard-json "${comp_dir}/jaccard_${tag}.json"
-          -o "${comp_dir}/layer_metrics_${tag}.csv"
-        )
-        if [ -f "${comp_dir}/cka_${tag}.json" ]; then
-          export_cmd+=( --cka-json "${comp_dir}/cka_${tag}.json" )
-        fi
-        if [ "${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}" = "1" ]; then
-          export_cmd+=( --skip_effective_rank )
-        else
-          export_cmd+=( --effective_rank_workers "${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-4}" )
-        fi
-        run_one_cmp_step "layer_metrics CSV ${tag}" "${export_cmd[@]}" || cmp_failures=$((cmp_failures + 1))
-      fi
-    done
+      tags=( "sp${sp_safe}_wm_vs_wminv" "sp${sp_safe}_wmom_vs_wmominv" "sp${sp_safe}_wf_vs_wfinv" \
+             "sp${sp_safe}_cf_vs_cfinv" "sp${sp_safe}_cc_vs_ccinv" "sp${sp_safe}_rand_vs_randinv" )
+      mas=( "$warm_mag" "$warm_mom" "$warm_fish" "$cold_fish" "$cold_cav" "$random_mask" )
+      mbs=( "$warm_mag_inv" "$warm_mom_inv" "$warm_fish_inv" "$cold_fish_inv" "$cold_cav_inv" "$random_inv" )
+
+      for i in 0 1 2 3 4 5; do
+        tag="${tags[$i]}"
+        ma="${mas[$i]}"
+        mb="${mbs[$i]}"
+        run_jaccard_cka_export_pair "$tag" "$ma" "$mb"
+      done
+
+      tags=( "sp${sp_safe}_wminv_vs_cf" "sp${sp_safe}_wminv_vs_cc" "sp${sp_safe}_wfinv_vs_cf" "sp${sp_safe}_wmominv_vs_cf" )
+      mas=( "$warm_mag_inv" "$warm_mag_inv" "$warm_fish_inv" "$warm_mom_inv" )
+      mbs=( "$cold_fish" "$cold_cav" "$cold_fish" "$cold_fish" )
+
+      for i in 0 1 2 3; do
+        tag="${tags[$i]}"
+        ma="${mas[$i]}"
+        mb="${mbs[$i]}"
+        run_jaccard_cka_export_pair "$tag" "$ma" "$mb"
+      done
+    fi
   done
 
   run_one_cmp_step "convert_json_reports_to_csv" \
@@ -614,6 +733,13 @@ launch_parallel_sparse_jobs_and_eval() {
     --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}" \
     "${REPO_ROOT}/scripts/pipeline_stage_05_evals.sh")
   echo "Eval stage job id: ${ej}"
+
+  if [ "${#jids[@]}" -gt 0 ]; then
+    touch "${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_submitted"
+    echo "Recorded sparse launch for RUN_ID=${RUN_ID} (${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_submitted)"
+  else
+    echo "No sparse GPU jobs submitted (no .pt masks); sentinel not written — re-run stage 4 after masks exist."
+  fi
 }
 
 ########################################

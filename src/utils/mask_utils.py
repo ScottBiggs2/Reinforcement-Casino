@@ -1,7 +1,7 @@
 import torch
 import os
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 # Default masking mode:
 # - global ranking across all scored weights
@@ -736,3 +736,86 @@ def save_masks(masks, output_file, metadata=None):
     print(f"Total parameters: {total_params:,}")
     print(f"Kept parameters: {int(kept_params):,}")
     print(f"Final sparsity: {actual_sparsity:.2f}%")
+
+
+def load_masks_file(path: str) -> Tuple[Dict[str, torch.Tensor], Optional[Dict[str, Any]], bool]:
+    """
+    Load masks from a .pt file written by warm_start / cold_start tooling.
+
+    Supports:
+    - Wrapped format: ``{"masks": {name: tensor, ...}, "metadata": {...}}``
+    - Legacy raw dict: ``{name: tensor, ...}`` (e.g. early ``mask_finder.py`` outputs).
+
+    Returns
+    -------
+    masks : dict
+        Parameter name -> mask tensor (typically 0/1 floats: 1 = include weight).
+    metadata : dict or None
+        Present only for wrapped format.
+    uses_wrapped_format : bool
+        True if the file used the wrapped layout (so saves can match the original style).
+    """
+    data = torch.load(path, map_location="cpu", weights_only=True)
+    if isinstance(data, dict) and "masks" in data:
+        return data["masks"], data.get("metadata"), True
+    if isinstance(data, dict):
+        return data, None, False
+    raise ValueError(f"Unrecognized mask file format (expected dict): {path}")
+
+
+def invert_mask_tensors(masks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """
+    Element-wise complement of binary inclusion masks.
+
+    If the original mask has 1 for weights to **include** and 0 for weights to **exclude**,
+    the result has 1 where the original had 0 and 0 where the original had 1 (same dtype/shape
+    per tensor, on CPU like typical saved masks).
+    """
+    inverted: Dict[str, torch.Tensor] = {}
+    for name, m in masks.items():
+        m32 = m.detach().cpu().to(torch.float32)
+        inv = 1.0 - m32
+        inverted[name] = inv.to(dtype=m.dtype)
+    return inverted
+
+
+def invert_mask_file(
+    input_path: str,
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Load a mask ``.pt`` file, invert each tensor (complement), and save without modifying
+    the source file.
+
+    Output naming (when ``output_path`` is omitted): ``<stem>_inverse.pt`` next to the input,
+    e.g. ``masks/cold_fisher_x_sparsity10pct.pt`` -> ``masks/cold_fisher_x_sparsity10pct_inverse.pt``.
+
+    Wrapped inputs (``{"masks", "metadata"}``) are saved the same way with extra metadata
+    recording the source path. Raw dict masks are saved as a plain dict (legacy format).
+    """
+    masks, metadata, wrapped = load_masks_file(input_path)
+    inverted = invert_mask_tensors(masks)
+
+    if output_path is None:
+        root, ext = os.path.splitext(input_path)
+        output_path = f"{root}_inverse{ext or '.pt'}"
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    abs_in = os.path.abspath(input_path)
+    if wrapped:
+        new_meta: Dict[str, Any] = dict(metadata) if metadata else {}
+        new_meta["inverse_of"] = abs_in
+        new_meta["mask_is_complement"] = True
+        new_meta["complement_definition"] = (
+            "inverted_mask = 1 - original_mask (per element); "
+            "original had 1=include, 0=exclude"
+        )
+        save_masks(inverted, output_path, metadata=new_meta)
+    else:
+        torch.save(inverted, output_path)
+        print(f"\nInverse masks saved to: {output_path}")
+
+    return output_path

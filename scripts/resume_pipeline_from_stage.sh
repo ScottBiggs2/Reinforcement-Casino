@@ -15,7 +15,11 @@
 # Stage 3 is often wall-limited when RUN_MASK_CKA=1. For a faster retry:
 #   RUN_MASK_CKA=0 bash scripts/resume_pipeline_from_stage.sh 3 YOUR_RUN_ID
 #
-# Optional env (same as pipeline_common.sh): RUN_MASK_CKA, EVAL_LIMIT, etc.
+# Stage 3 kicks off stage 4 (sparse) at job start. If sparse already ran for this RUN_ID
+# (see MASK_OUT_BASE/<id>/.sparse_launch_submitted), use:
+#   PIPELINE_SKIP_SPARSE_LAUNCH=1 bash scripts/resume_pipeline_from_stage.sh 3 YOUR_RUN_ID
+#
+# Optional env (same as pipeline_common.sh): RUN_MASK_CKA, EVAL_LIMIT, PIPELINE_SKIP_SPARSE_LAUNCH, etc.
 
 set -euo pipefail
 
@@ -28,9 +32,9 @@ cd "$REPO_ROOT"
 mkdir -p logs
 
 # Match pipeline_common.sh defaults for stage 3a (CPU comparisons)
-PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-06:00:00}"
-PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-64G}"
-PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-4}"
+PIPELINE_CPU_COMPARISON_TIME="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}"
+PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-128G}"
+PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
 
 case "$STAGE" in
   3) NEXT="pipeline_stage_03_comparisons.sh" ;;

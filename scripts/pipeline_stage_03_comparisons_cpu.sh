@@ -1,7 +1,7 @@
 #!/bin/bash
 # Stage 3/5 (CPU): mask comparisons (Jaccard / CSV / plots).
-# This stage does NOT require a GPU unless RUN_MASK_CKA=1; on some clusters, GPU jobs that
-# don't use the GPU get cancelled. Use this CPU flavor when RUN_MASK_CKA=0.
+# Stage 4 (sparse launcher) is submitted at the *start* of this job so sparse GPU training overlaps comparisons.
+# This stage does NOT require a GPU unless RUN_MASK_CKA=1 runs CKA inline; prefer RUN_MASK_CKA=0 and use stage 3b for CKA on GPU.
 #
 # This script intentionally omits #SBATCH headers so it can be submitted with `sbatch -p ...`
 # from another stage (see pipeline_stage_02_masks.sh / resume_pipeline_from_stage.sh).
@@ -19,9 +19,14 @@ cd "$REPO_ROOT"
 source "${REPO_ROOT}/scripts/pipeline_common.sh"
 pipeline_setup
 
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-${PIPELINE_CPU_COMPARISON_CPUS:-16}}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-${PIPELINE_CPU_COMPARISON_CPUS:-16}}"
+
 echo "===== STAGE 3a/5 (CPU): mask comparisons (${RUN_ID}) ====="
 
-# CPU-safe portion: Jaccard / CSV / plots. (CKA is delegated to stage 3b on GPU.)
+pipeline_submit_sparse_stage_early
+
+# CPU-safe portion: Jaccard / CSV / plots. (CKA refresh on GPU is stage 3b when RUN_MASK_CKA=1.)
 run_mask_comparisons
 
 if [ "${RUN_MASK_CKA:-0}" = "1" ]; then
@@ -35,7 +40,4 @@ if [ "${RUN_MASK_CKA:-0}" = "1" ]; then
     --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}" \
     "${REPO_ROOT}/scripts/pipeline_stage_03b_cka_gpu.sh")
   echo "Chained next stage: pipeline_stage_03b_cka_gpu.sh → Slurm job ${jid} (afterok:${SLURM_JOB_ID})"
-else
-  pipeline_submit_next_stage "pipeline_stage_04_sparse.sh"
 fi
-

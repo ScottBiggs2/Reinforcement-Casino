@@ -33,9 +33,9 @@ fi
 jid=$(sbatch --parsable \
   --dependency=afterok:"${SLURM_JOB_ID}" \
   --partition="${CPU_PARTITION:-cpu}" \
-  --time="${PIPELINE_CPU_COMPARISON_TIME:-06:00:00}" \
-  --mem="${PIPELINE_CPU_COMPARISON_MEM:-64G}" \
-  --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS:-4}" \
+  --time="${PIPELINE_CPU_COMPARISON_TIME:-07:45:00}" \
+  --mem="${PIPELINE_CPU_COMPARISON_MEM:-128G}" \
+  --cpus-per-task="${PIPELINE_CPU_COMPARISON_CPUS:-16}" \
   --ntasks=1 \
   --output=logs/pipeline_%j_p3_cmp_cpu.out \
   --error=logs/pipeline_%j_p3_cmp_cpu.err \

@@ -18,19 +18,20 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `verify_training.sh` - short DPO training verification across datasets.
 - `verify_grpo_training.sh` - short GRPO dense+sparse verification.
 - `run_masks.sh` - warm/cold/random mask comparison workflow.
+- `invert_mask.py` - CLI for complement masks (`1−M`); pipeline writes `<stem>_inverse.pt` per primary mask when `PIPELINE_GENERATE_INVERSE_MASKS=1` (default).
 - `run_dpo_and_masks.sh` - DPO + mask generation workflow.
 - `run_mask_diagnostics.sh` - attention masking diagnostic.
 - `submit_gen_grpo_masks_gpu.slurm` - GPU-safe Slurm launcher for GRPO mask generation + plots inside Apptainer/Singularity (`--nv` + CUDA preflight).
 - `install_lm_eval.sh` - installs lm-eval and related dependencies.
 - `run_ablation_*.sh` - targeted ablation workflows.
 - `run_full_pipeline.sh` - **one Slurm job** for the entire train → masks → comparisons → sparse → eval flow (wall **≤8h**; full pipelines usually need the **chain** instead).
-- `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) so each stage respects a typical **8h max** wall. GPU-heavy stages default to **7h45** Slurm time with **7h30** soft `timeout`s; stage **4** (sparse launcher) and **5** (eval fan-out) use the **cpu** partition with small mem. Shared logic lives in `pipeline_common.sh`.
+- `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) so each stage respects a typical **8h max** wall. GPU-heavy stages default to **7h45** Slurm time with **7h30** soft `timeout`s. **Stage 4** (sparse launcher) is submitted at the **start** of stage 3 so sparse GPU jobs overlap mask comparisons; stage **4**’s launcher and **5** (eval fan-out) use the **cpu** partition with small mem. Shared logic lives in `pipeline_common.sh`.
 - `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **7h45** per mask; override `SPARSE_SLURM_MEM` if needed).
 - `multigpu_pipeline/` - **parallel multi-GPU entrypoints** (keeps the single-GPU pipeline unchanged). Currently provides a multi-GPU dense DPO stage 1 launcher.
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
 
-End-to-end flow: **dense DPO → warm/cold masks → mask comparisons → parallel sparse DPO (one Slurm job per mask) → benchmark eval `sbatch` fan-out**.
+End-to-end flow: **dense DPO → warm/cold masks + random baseline + complement (`*_inverse.pt`) masks → stage 3 starts parallel sparse DPO (`sbatch` per mask `.pt`) while running mask comparisons (structured + extended pairs, random vs structured, complement sanity + cross pairs) → benchmark eval `sbatch` fan-out** after sparse jobs finish.
 
 | Mode | When to use | Command |
 |------|-------------|---------|
@@ -39,7 +40,7 @@ End-to-end flow: **dense DPO → warm/cold masks → mask comparisons → parall
 
 Defaults and scratch paths are in [`pipeline_common.sh`](pipeline_common.sh). Override with **environment variables** before launching (same names as in that file: `MODEL`, `DPO_DATASETS`, `NUM_STEPS_DPO`, `TARGET_STEP_DPO`, eval knobs, etc.).
 
-**Slurm / resources:** GPU stages use `#SBATCH --time=07:45:00` (under a typical **8h** cap). `TRAIN_TIMEOUT_PER_DATASET`, `MASK_TIMEOUT`, and `SPARSE_TIMEOUT_PER_MASK` default to **7h30m** so processes get SIGTERM before Slurm. CPU-only stage **3a** (Jaccard / CSV) uses `PIPELINE_CPU_COMPARISON_TIME` (default **6h**), `PIPELINE_CPU_COMPARISON_MEM` (**64G**), `PIPELINE_CPU_COMPARISON_CPUS` (**4**). If your site has no `cpu` partition, edit `#SBATCH --partition` in `pipeline_stage_04_sparse.sh` and `pipeline_stage_05_evals.sh` (and the `sbatch` lines in `pipeline_stage_02_masks.sh` / `resume_pipeline_from_stage.sh` for stage 3a).
+**Slurm / resources:** GPU stages use `#SBATCH --time=07:45:00` (under a typical **8h** cap). `TRAIN_TIMEOUT_PER_DATASET`, `MASK_TIMEOUT`, and `SPARSE_TIMEOUT_PER_MASK` default to **7h30m** so processes get SIGTERM before Slurm. CPU-only stage **3a** (Jaccard / CSV / plots) uses `PIPELINE_CPU_COMPARISON_TIME` (default **7h45m**), `PIPELINE_CPU_COMPARISON_MEM` (**128G**), `PIPELINE_CPU_COMPARISON_CPUS` (**16**) to cover the expanded comparison set while sparse runs elsewhere. Stage **3b** (optional CKA) uses **7h45** GPU wall in `pipeline_stage_03b_cka_gpu.sh`. If your site has no `cpu` partition, edit `#SBATCH --partition` in `pipeline_stage_04_sparse.sh` and `pipeline_stage_05_evals.sh` (and the `sbatch` lines in `pipeline_stage_02_masks.sh` / `resume_pipeline_from_stage.sh` for stage 3a).
 
 ### Single-GPU dense DPO — Tulu3 paper-style hyperparams (`SEQ` 1024)
 
@@ -55,15 +56,15 @@ export HF_TOKEN="hf_xxxxxxxx"
 
 export MODEL="meta-llama/Llama-3.1-8B-Instruct"
 export DPO_DATASETS="tulu3"
-export NUM_STEPS_DPO=2000
+export NUM_STEPS_DPO=250
 
-# Paper-style (Tulu3 DPO); sequence length 1024 for faster steps than 2048
+# Paper-style (Tulu3 DPO); sequence length 768 for faster steps than 2048, reduce grad accumulation from 128 to 64
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=1
-export DPO_GRADIENT_ACCUMULATION_STEPS=128
+export DPO_GRADIENT_ACCUMULATION_STEPS=64
 export DPO_LEARNING_RATE=5e-7
 export DPO_WARMUP_RATIO=0.1
 export DPO_WEIGHT_DECAY=0.0
-export DPO_MAX_LENGTH=1024
+export DPO_MAX_LENGTH=768
 export DPO_MAX_PROMPT_LENGTH=512
 
 export DELTA_LOG_INTERVAL=50
@@ -102,7 +103,10 @@ export HF_TOKEN="hf_xxxxxxxx"   # required if the hub gates the model
 # export PIPELINE_SPARSE_EVAL_DEPENDENCY=afterany   # eval stage runs after all sparse jobs *finish* (even if some failed)
 # export SPARSE_SLURM_TIME=07:45:00                 # wall time per parallel sparse GPU job (default; ≤8h cluster max)
 # export SPARSE_SLURM_MEM=96G                       # optional: lower host RAM if your cluster charges by mem
-# export PIPELINE_CPU_COMPARISON_TIME=08:00:00      # optional: extend stage 3a wall if Jaccard/CSV needs it (default 6h)
+# export PIPELINE_CPU_COMPARISON_TIME=07:45:00      # stage 3a wall (default 7h45; ≤8h cluster cap)
+# export PIPELINE_SKIP_SPARSE_LAUNCH=1              # resume stage 3 without re-submitting stage 4 if .sparse_launch_submitted exists
+# export RANDOM_MASK_SEED=42                        # seed for random baseline mask (default 42); must match when resuming comparisons
+# export PIPELINE_GENERATE_INVERSE_MASKS=0          # omit complement masks (*_inverse.pt) + their comparisons/sparse jobs (default 1)
 # export RUN_MASK_CKA=1                             # enable mask CKA in comparisons (GPU-heavy)
 # export EVAL_LIMIT=100                             # cap benchmark size; omit or empty for full runs
 
@@ -121,8 +125,9 @@ tail -f logs/pipeline_JOBID_p1_dense.out
 **Where outputs go** (see `TRAIN_OUT_BASE`, `MASK_OUT_BASE`, etc. in `pipeline_common.sh` — often under `/scratch/.../rl_casino_*`):
 
 - Dense training: `TRAIN_OUT_BASE/${PIPELINE_RUN_ID}/`
-- Masks: `MASK_OUT_BASE/${PIPELINE_RUN_ID}/`
-- Comparisons: `MASK_OUT_BASE/${PIPELINE_RUN_ID}/comparisons/`
+- Masks: `MASK_OUT_BASE/${PIPELINE_RUN_ID}/` (includes `random_baseline_*_seed${RANDOM_MASK_SEED}.pt` and `*_inverse.pt` complement masks unless disabled)
+- Comparisons: `MASK_OUT_BASE/${PIPELINE_RUN_ID}/comparisons/` — artifacts are `jaccard_<tag>.json`, optional `cka_<tag>.json`, `layer_metrics_<tag>.csv`. Tags per sparsity prefix `sp<pct>_`: **anchors** `wm_vs_cf`, `wmom_vs_cc`, `wf_vs_cf`; **random vs structured** `rand_vs_wm|wf|cf|wmom|cc`; **warm×warm** `wm_vs_wmom`, `wm_vs_wf`, `wmom_vs_wf`; **cold** `cf_vs_cc`; **cross** `wm_vs_cc`, `wf_vs_cc`, `wmom_vs_cf`; **complement** `wm_vs_wminv`, …, `wminv_vs_cf`, … (see `run_mask_comparisons` in `pipeline_common.sh`).
+- Sparse launch marker: `MASK_OUT_BASE/${PIPELINE_RUN_ID}/.sparse_launch_submitted` is created after stage 4 successfully queues sparse GPU jobs (skips duplicate early launch on resume).
 - Sparse runs: `SPARSE_OUT_BASE/${PIPELINE_RUN_ID}/<mask_stem>/`
 - Parallel sparse **per-job logs**: `logs/sparse_${PIPELINE_RUN_ID}_<mask_stem>_*.out`
 - Eval harness: `EVAL_OUT_BASE/${PIPELINE_RUN_ID}/...` (plus each eval `sbatch` log under `logs/`)
@@ -131,7 +136,7 @@ tail -f logs/pipeline_JOBID_p1_dense.out
 
 **Slurm submit directory:** Always run `sbatch` or `bash scripts/submit_pipeline_chain.sh` from the **repository root** (the directory you `cd` into before submitting). Slurm sets `SLURM_SUBMIT_DIR` to that path; the pipeline uses it to find `scripts/pipeline_common.sh`. If you submit from elsewhere, sourcing `pipeline_common.sh` fails with “No such file” under `/var/spool/slurmd/...`.
 
-### Single long job (no parallel sparse workers)
+### Single long job (nested Slurm sparse workers)
 
 ```bash
 cd /path/to/rl_casino
@@ -139,7 +144,7 @@ export HF_TOKEN="hf_xxxxxxxx"   # if needed
 sbatch scripts/run_full_pipeline.sh
 ```
 
-Sparse DPO runs **sequentially** inside this job. Use the chained pipeline if you want parallel sparse GPUs.
+This allocation runs dense DPO, masks, then **submits** parallel sparse GPU jobs (`pipeline_stage_04_sparse.sh`) and runs mask comparisons in the same job (overlap). Evals are queued by the stage 4 launcher when sparse jobs finish. Nested `sbatch` must be allowed. For the **chained** multi-job pipeline (recommended for long runs), use `submit_pipeline_chain.sh` instead.
 
 ## Notes
 
@@ -229,7 +234,7 @@ echo "Stage 1 (multigpu dense DPO) job id: $J1  RUN_ID=$RUN_ID"
 J2=$(sbatch --parsable --dependency=afterok:"$J1" --export=ALL,PIPELINE_RUN_ID="$RUN_ID",RUN_ID="$RUN_ID" scripts/pipeline_stage_02_masks.sh)
 echo "Stage 2 (masks) job id: $J2"
 
-# Stage 2 will chain stage 3 CPU comparisons → stage 4 sparse → stage 5 eval submissions via existing scripts.
+# Stage 2 chains stage 3 (comparisons): stage 3 submits stage 4 (sparse) at job start, then runs comparisons; stage 5 evals queue when sparse jobs finish.
 ```
 
 Success/progress checks:

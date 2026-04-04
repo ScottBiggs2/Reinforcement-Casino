@@ -1,6 +1,7 @@
 #!/bin/bash
-# Single Slurm job: run the entire pipeline in one allocation (wall must cover all stages).
-# Typical clusters cap jobs at 8h — a full train→masks→sparse pipeline usually does not fit in one slot.
+# Single Slurm job: dense DPO → masks → (sparse jobs submitted early) → comparisons → done.
+# Sparse training runs in separate GPU jobs; eval fan-out is stage 5 (queued by the sparse launcher).
+# Typical clusters cap jobs at 8h — full pipelines usually need the chained pipeline instead.
 # Prefer: bash scripts/submit_pipeline_chain.sh
 #
 # Usage (repo root): sbatch scripts/run_full_pipeline.sh
@@ -36,7 +37,6 @@ pipeline_setup
 echo "===== FULL PIPELINE START (${RUN_ID}) ====="
 run_dense_dpo
 run_masks
+pipeline_submit_sparse_stage_early
 run_mask_comparisons
-run_sparse_dpo
-submit_evals
-echo "===== FULL PIPELINE COMPLETE (${RUN_ID}) ====="
+echo "===== FULL PIPELINE COMPLETE (${RUN_ID}) (sparse + evals run via nested Slurm from stage 4 launcher) ====="
