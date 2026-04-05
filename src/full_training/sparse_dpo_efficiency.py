@@ -54,6 +54,11 @@ def train(
     dataset_key,
     output_base_dir,
     dataset_cache_dir,
+    warmup_ratio,
+    weight_decay,
+    max_length,
+    max_prompt_length,
+    dpo_beta,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -148,12 +153,14 @@ def train(
     if save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
     
-    # DPO Config
+    # DPO Config — keep defaults aligned with src/full_training/DPO_train.py / pipeline DPO_* env
     dpo_config = DPOConfig(
         output_dir=os.path.join(run_dir, "checkpoints"),
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
+        warmup_ratio=warmup_ratio,
+        weight_decay=weight_decay,
         max_steps=n_steps,
         logging_steps=1,
         report_to="wandb" if use_wandb else "none",
@@ -161,6 +168,9 @@ def train(
         remove_unused_columns=False,
         bf16=True,
         gradient_checkpointing=True,
+        beta=dpo_beta,
+        max_length=max_length,
+        max_prompt_length=max_prompt_length,
     )
     
     trainer = DPOTrainer(
@@ -194,7 +204,17 @@ if __name__ == "__main__":
     parser.add_argument("--n_steps", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--grad_accum", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=5e-5)
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=5e-6,
+        help="Peak LR (default 5e-6, same as DPO_train.py / dense pipeline)",
+    )
+    parser.add_argument("--warmup_ratio", type=float, default=0.0)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument("--max_length", type=int, default=1024)
+    parser.add_argument("--max_prompt_length", type=int, default=512)
+    parser.add_argument("--dpo_beta", type=float, default=0.1)
     parser.add_argument("--subset_size", type=int, default=None)
     parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "sparse_adamw"], default="sparse_adamw")
     parser.add_argument("--block_size", type=int, default=32)
@@ -241,4 +261,9 @@ if __name__ == "__main__":
         dataset_key=args.dataset,
         output_base_dir=args.output_base_dir,
         dataset_cache_dir=args.dataset_cache_dir,
+        warmup_ratio=args.warmup_ratio,
+        weight_decay=args.weight_decay,
+        max_length=args.max_length,
+        max_prompt_length=args.max_prompt_length,
+        dpo_beta=args.dpo_beta,
     )

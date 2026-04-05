@@ -273,6 +273,7 @@ run_dense_dpo() {
     fi
 
     # Optional DPO hyperparameters (paper / ablations). Omit env vars → DPO_train.py defaults.
+# Same vars apply to sparse DPO (sparse_dpo_efficiency.py) via run_sparse_dpo_one_mask.
     local dpo_extra=()
     if [ -n "${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-}" ]; then
       dpo_extra+=(--per_device_train_batch_size "${DPO_PER_DEVICE_TRAIN_BATCH_SIZE}")
@@ -665,6 +666,27 @@ run_sparse_dpo_one_mask() {
     sparse_subset_args+=(--subset_size "$SUBSET_DPO")
   fi
 
+  # Match dense DPO_train.py effective defaults when env vars are unset (same as run_dense_dpo).
+  local sparse_bs="${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-4}"
+  local sparse_ga="${DPO_GRADIENT_ACCUMULATION_STEPS:-4}"
+  local sparse_lr="${DPO_LEARNING_RATE:-5e-6}"
+  local sparse_dpo_extra=()
+  if [ -n "${DPO_WARMUP_RATIO:-}" ]; then
+    sparse_dpo_extra+=(--warmup_ratio "${DPO_WARMUP_RATIO}")
+  fi
+  if [ -n "${DPO_WEIGHT_DECAY:-}" ]; then
+    sparse_dpo_extra+=(--weight_decay "${DPO_WEIGHT_DECAY}")
+  fi
+  if [ -n "${DPO_MAX_LENGTH:-}" ]; then
+    sparse_dpo_extra+=(--max_length "${DPO_MAX_LENGTH}")
+  fi
+  if [ -n "${DPO_MAX_PROMPT_LENGTH:-}" ]; then
+    sparse_dpo_extra+=(--max_prompt_length "${DPO_MAX_PROMPT_LENGTH}")
+  fi
+  if [ -n "${DPO_BETA:-}" ]; then
+    sparse_dpo_extra+=(--dpo_beta "${DPO_BETA}")
+  fi
+
   timeout --signal=TERM --kill-after=60 "${SPARSE_TIMEOUT_PER_MASK}" \
     "$TRAIN_PY" src/full_training/sparse_dpo_efficiency.py \
       --model_name "$MODEL" \
@@ -672,8 +694,10 @@ run_sparse_dpo_one_mask() {
       --mask "$mask" \
       --dataset "${DPO_DATASETS[0]}" \
       --n_steps "$NUM_STEPS_DPO" \
-      --batch_size 4 \
-      --grad_accum 4 \
+      --batch_size "$sparse_bs" \
+      --grad_accum "$sparse_ga" \
+      --lr "$sparse_lr" \
+      "${sparse_dpo_extra[@]}" \
       "${sparse_subset_args[@]}" \
       --optimizer sparse_adamw \
       --block_size 32 \
