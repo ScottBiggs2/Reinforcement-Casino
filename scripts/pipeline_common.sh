@@ -54,6 +54,7 @@ echo "Scratch: SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}  TRAIN_OUT_BASE=${TRAIN_OU
 # Model / dataset (export HF_TOKEN for gated Llama; Tulu3 = allenai/llama-3.1-tulu-3-8b-preference-mixture)
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 DPO_DATASETS=("tulu3")       # dataset registry keys; drives cold masks + sparse DPO
+# Dense DPO (--num_steps) and sparse DPO (--n_steps) both use this; keep one knob for fair comparisons.
 NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
 # SUBSET_DPO unset or empty = full dataset (omit --subset_size). Example: SUBSET_DPO=4096 for a cap
 SUBSET_DPO="${SUBSET_DPO:-}"
@@ -189,6 +190,12 @@ pipeline_setup() {
   echo "  PYTHONUNBUFFERED=${PYTHONUNBUFFERED}"
   echo "  RL_CASINO_WARM_MASK_SCORE_DEVICE=${RL_CASINO_WARM_MASK_SCORE_DEVICE}"
   echo "  RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL=${RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL}"
+
+  echo "DPO steps + LR (dense DPO_train.py & sparse_dpo_efficiency.py; export before sbatch for parity across stages):"
+  echo "  NUM_STEPS_DPO=${NUM_STEPS_DPO}"
+  echo "  DPO_LEARNING_RATE=${DPO_LEARNING_RATE:-}  (empty → 5e-6 default in both trainers)"
+  echo "  DPO_WARMUP_RATIO=${DPO_WARMUP_RATIO:-}  (empty → 0.0)"
+  echo "  LR schedule: linear (explicit in both DPOConfig blocks)"
 
   echo "Environment check (training):"
   "$TRAIN_PY" -c "import torch, trl; print(f'Torch: {torch.__version__}, TRL: {trl.__version__}')" || {

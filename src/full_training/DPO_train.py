@@ -224,6 +224,7 @@ cfg = DPOConfig(
     learning_rate=args.learning_rate,
     warmup_ratio=args.warmup_ratio,
     weight_decay=args.weight_decay,
+    lr_scheduler_type="linear",
     max_steps=-1 if NUM_EPOCHS is not None else NUM_STEPS,
     num_train_epochs=NUM_EPOCHS if NUM_EPOCHS is not None else 1,
     bf16=True, 
@@ -238,6 +239,11 @@ cfg = DPOConfig(
     beta=args.dpo_beta,
     max_length=args.max_length,
     max_prompt_length=args.max_prompt_length,
+)
+
+print(
+    f"DPO training: max_steps={cfg.max_steps}, num_train_epochs={cfg.num_train_epochs}, "
+    f"peak_lr={args.learning_rate}, warmup_ratio={args.warmup_ratio}, lr_scheduler=linear"
 )
 
 trainer = DPOTrainer(

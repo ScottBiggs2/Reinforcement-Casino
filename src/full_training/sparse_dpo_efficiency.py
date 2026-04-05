@@ -35,6 +35,7 @@ def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
     return "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized).strip("_")
 
+
 def train(
     model_name,
     checkpoint_path,
@@ -87,7 +88,14 @@ def train(
     print(f"Dataset: {dataset_key} ({dataset_name})")
     print(f"Optimizer: {optimizer_type}")
     print(f"WandB: {use_wandb}, CSV: {save_csv}")
-    
+    print(
+        f"DPO training: max_steps={n_steps}, num_train_epochs=1, peak_lr={learning_rate}, "
+        f"warmup_ratio={warmup_ratio}, lr_scheduler=linear (Trainer; align with DPO_train.py / pipeline NUM_STEPS_DPO)"
+    )
+
+    # Callback only uses this for optional full-delta dumps; not tied to dense delta_logs.
+    checkpoint_schedule = [n_steps] if n_steps > 0 else []
+
     # Load Components
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
@@ -122,9 +130,6 @@ def train(
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
         
-    # Checkpoint Schedule
-    checkpoint_schedule = list(range(10, 50, 10)) + list(range(100, 250, 50))
-    
     # Callbacks
     callbacks = []
     
@@ -153,7 +158,7 @@ def train(
     if save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
     
-    # DPO Config — keep defaults aligned with src/full_training/DPO_train.py / pipeline DPO_* env
+    # DPO Config — align with src/full_training/DPO_train.py (step-based run: max_steps + num_train_epochs=1)
     dpo_config = DPOConfig(
         output_dir=os.path.join(run_dir, "checkpoints"),
         per_device_train_batch_size=batch_size,
@@ -162,6 +167,8 @@ def train(
         warmup_ratio=warmup_ratio,
         weight_decay=weight_decay,
         max_steps=n_steps,
+        num_train_epochs=1,
+        lr_scheduler_type="linear",
         logging_steps=1,
         report_to="wandb" if use_wandb else "none",
         run_name=run_name,
