@@ -20,6 +20,8 @@ from src.utils.mask_utils import (
 def choose_score_device(runtime_device: str) -> str:
     override = os.environ.get("RL_CASINO_WARM_MASK_SCORE_DEVICE")
     if override in {"cpu", "cuda"}:
+        if override == "cuda" and not torch.cuda.is_available():
+            return "cpu"
         return override
     # Warm mask scoring is dominated by elementwise accumulation and benefits more
     # from cheap host memory than from GPU residency when the full model is scored.
@@ -395,63 +397,68 @@ def verify_masks(masks, steps_and_paths):
 
 def main(args):
     delta_log_dir = args.delta_log_dir or "./delta_logs"
-    
+
+    # Pipeline stage 2a (CPU Slurm partition) sets this; same effect as --force_cpu for diagnostics.
+    if os.environ.get("RL_CASINO_WARM_MASK_SCORE_DEVICE") == "cpu":
+        args.force_cpu = True
+
     # Create output directory
     os.makedirs("masks", exist_ok=True)
-    
-    # Auto-fix CUDA_VISIBLE_DEVICES if not set
-    if not args.force_cpu and os.environ.get('CUDA_VISIBLE_DEVICES') is None:
-        print("⚠️  CUDA_VISIBLE_DEVICES not set, attempting auto-detection...")
-        
-        # Check for GPU devices
-        gpu_devices = []
-        for i in range(8):  # Check up to 8 GPUs
-            if os.path.exists(f'/dev/nvidia{i}'):
-                gpu_devices.append(str(i))
-        
-        if gpu_devices:
-            os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(gpu_devices)
-            print(f"✓ Auto-set CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
-            # Force PyTorch to reinitialize CUDA
-            import importlib
-            if 'torch.cuda' in sys.modules:
-                importlib.reload(torch.cuda)
-        else:
-            print("⚠️  No GPU devices found in /dev/nvidia*")
-    
-    # Check GPU availability with diagnostics
-    print("\n=== GPU Diagnostics ===")
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    print(f"CUDA version: {torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
-    
-    if torch.cuda.is_available():
-        print(f"GPU count: {torch.cuda.device_count()}")
-        print(f"Current device: {torch.cuda.current_device()}")
-        print(f"GPU name: {torch.cuda.get_device_name(0)}")
-        print(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+
+    if args.force_cpu:
+        print(
+            "Warm masks: CPU scoring (RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu or --force_cpu); "
+            "skipping GPU diagnostics."
+        )
     else:
-        print("\n⚠️  CUDA not available!")
-        print("Common fixes for SLURM/HPC:")
-        print("  1. Make sure you're running this in a GPU job (srun/sbatch with --gres=gpu)")
-        print("  2. Check: nvidia-smi")
-        print("  3. Check: echo $CUDA_VISIBLE_DEVICES")
-        print("  4. Try: module load cuda")
-        if not args.force_cpu:
-            print("\nAdd --force-cpu flag to run on CPU anyway (very slow for large models)")
-            return
+        # Auto-fix CUDA_VISIBLE_DEVICES if not set
+        if os.environ.get('CUDA_VISIBLE_DEVICES') is None:
+            print("⚠️  CUDA_VISIBLE_DEVICES not set, attempting auto-detection...")
+
+            # Check for GPU devices
+            gpu_devices = []
+            for i in range(8):  # Check up to 8 GPUs
+                if os.path.exists(f'/dev/nvidia{i}'):
+                    gpu_devices.append(str(i))
+
+            if gpu_devices:
+                os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(gpu_devices)
+                print(f"✓ Auto-set CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
+                # Force PyTorch to reinitialize CUDA
+                import importlib
+                if 'torch.cuda' in sys.modules:
+                    importlib.reload(torch.cuda)
+            else:
+                print("⚠️  No GPU devices found in /dev/nvidia*")
+
+        # Check GPU availability with diagnostics
+        print("\n=== GPU Diagnostics ===")
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"CUDA version: {torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
+
+        if torch.cuda.is_available():
+            print(f"GPU count: {torch.cuda.device_count()}")
+            print(f"Current device: {torch.cuda.current_device()}")
+            print(f"GPU name: {torch.cuda.get_device_name(0)}")
+            print(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
         else:
-            print("\n⚠️  Running on CPU as requested (will be very slow)")
-    
-    device = 'cuda' if (torch.cuda.is_available() and not args.force_cpu) else 'cpu'
+            print("\n⚠️  CUDA not available — continuing with CPU mask scoring (no silent skip).")
+            print(
+                "    For GPU jobs: use srun/sbatch with GPU allocation, "
+                "or set RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu / --force_cpu on CPU nodes."
+            )
+            args.force_cpu = True
+
+    device = "cuda" if (torch.cuda.is_available() and not args.force_cpu) else "cpu"
     print(f"\n✓ Using device: {device}")
     
     # Get streaming iterator
     steps_and_paths = load_deltas_streaming(delta_log_dir, args.target_step)
     if not steps_and_paths:
-        print("Failed to find delta files. Exiting.")
-        return
+        print("ERROR: No delta files found; cannot build masks.", file=sys.stderr)
+        sys.exit(1)
     
     steps = [s for s, _ in steps_and_paths]
     print(f"\nFound deltas for steps: {steps}")
@@ -514,17 +521,17 @@ def main(args):
         method_suffix = "fisher"
     
     else:
-        print(f"Unknown method: {args.method}")
-        return
-    
+        print(f"ERROR: Unknown method: {args.method}", file=sys.stderr)
+        sys.exit(1)
+
     if masks is None:
-        print("Failed to compute masks. Exiting.")
-        return
-    
+        print("ERROR: Mask computation returned no masks.", file=sys.stderr)
+        sys.exit(1)
+
     # Verify masks
     if not verify_masks(masks, steps_and_paths):
-        print("Mask verification failed!")
-        return
+        print("ERROR: Mask verification failed.", file=sys.stderr)
+        sys.exit(1)
     
     # Compute Jaccard similarity if requested
     jaccard_results = None
