@@ -6,10 +6,10 @@
 #   bash scripts/resume_pipeline_from_stage.sh <stage> <PIPELINE_RUN_ID>
 #
 # Stage codes:
-#   2 | 2a   — warm masks only (CPU), then chain 2b→2c→3…
+#   2 | 2a   — warm masks only (GPU), then chain 2b→2c→3…
 #   2b       — cold Fisher + CAV only (GPU), then chain 2c→3…
 #   2c       — random + inverse masks only (CPU), then chain 3…
-#   2all     — stage 2 CPU entry script (submits 02a→02b→02c; same as 2/2a outcome)
+#   2all     — stage 2 entry script (submits 02a→02b→02c)
 #   3 | 4 | 5 — comparisons, sparse launcher, evals
 #
 # Examples:
@@ -96,7 +96,7 @@ elif [ "${STAGE}" = "3" ]; then
     "${REPO_ROOT}/scripts/pipeline_stage_03_comparisons_cpu.sh")
 else
   case "${STAGE}" in
-    2b) _sbatch_partition=(--partition="${GPU_PARTITION}") ;;
+    2|2a|2b) _sbatch_partition=(--partition="${GPU_PARTITION}") ;;
     *) _sbatch_partition=(--partition="${CPU_PARTITION}") ;;
   esac
   JID=$(sbatch --parsable \

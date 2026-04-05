@@ -21,8 +21,8 @@ export RUN_ID="${PIPELINE_RUN_ID}"
 
 echo "PIPELINE_RUN_ID=${PIPELINE_RUN_ID}"
 echo "Submitting stage 1 (dense DPO)…"
-echo "Stage 2: split masks — 02a CPU (warm) → 02b GPU (cold) → 02c CPU (random+inverses) → stage 3."
-echo "  Optional entrypoint (CPU-only submit script): scripts/pipeline_stage_02_masks.sh"
+echo "Stage 2: split masks — 02a GPU (warm) → 02b GPU (cold) → 02c CPU (random+inverses) → stage 3."
+echo "  Optional entrypoint (short launcher): scripts/pipeline_stage_02_masks.sh"
 
 JID=$(sbatch --parsable \
   --export=ALL,PIPELINE_RUN_ID,RUN_ID \

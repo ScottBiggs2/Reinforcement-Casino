@@ -3,7 +3,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=07:45:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=pipe_p2b_cold
 #SBATCH --mem=128G
 #SBATCH --ntasks=1

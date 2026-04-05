@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=07:45:00
+#SBATCH --time=04:00:00
 #SBATCH --job-name=pipe_p2c_post
 #SBATCH --mem=128G
 #SBATCH --output=logs/pipeline_%j_p2c_masks_post.out

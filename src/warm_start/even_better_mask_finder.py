@@ -18,15 +18,21 @@ from src.utils.mask_utils import (
 
 
 def choose_score_device(runtime_device: str) -> str:
+    """
+    Device for streaming delta accumulation and create_mask_from_scores_gpu_efficient.
+
+    - RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu|cuda forces host or device scoring.
+    - Otherwise, when the main runtime is CUDA and PyTorch sees a GPU, use CUDA so
+      Slurm GPU allocations are not idle during warm masks. Set the env var to ``cpu``
+      if you hit GPU OOM or prefer host RAM on CPU-only partitions.
+    """
     override = os.environ.get("RL_CASINO_WARM_MASK_SCORE_DEVICE")
     if override in {"cpu", "cuda"}:
         if override == "cuda" and not torch.cuda.is_available():
             return "cpu"
         return override
-    # Warm mask scoring is dominated by elementwise accumulation and benefits more
-    # from cheap host memory than from GPU residency when the full model is scored.
     if runtime_device == "cuda":
-        return "cpu"
+        return "cuda" if torch.cuda.is_available() else "cpu"
     return runtime_device
 
 def load_deltas_streaming(delta_log_dir, target_step=None):
