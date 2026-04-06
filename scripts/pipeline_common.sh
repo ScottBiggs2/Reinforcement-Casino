@@ -54,19 +54,34 @@ echo "Scratch: SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}  TRAIN_OUT_BASE=${TRAIN_OU
 # Model / dataset (export HF_TOKEN for gated Llama; Tulu3 = allenai/llama-3.1-tulu-3-8b-preference-mixture)
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 DPO_DATASETS=("tulu3")       # dataset registry keys; drives cold masks + sparse DPO
-# Dense DPO (--num_steps) and sparse DPO (--n_steps) both use this; keep one knob for fair comparisons.
-NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
+# Dense DPO (--num_steps) and sparse DPO (--n_steps) both use this (paper defaults: scripts/README.md).
+NUM_STEPS_DPO="${NUM_STEPS_DPO:-250}"
+# Peak LR: passed explicitly to dense + sparse so magnitudes always match (default paper 5e-7).
+DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 # SUBSET_DPO unset or empty = full dataset (omit --subset_size). Example: SUBSET_DPO=4096 for a cap
 SUBSET_DPO="${SUBSET_DPO:-}"
 
 SPARSITY_LIST=("97.5")
-# Must match an existing deltas_step_<N>.pt (warm masks). With 500 steps & defaults: deltas at 50..min(50,500/10)=50 → [50]; if DELTA_LOG_END_STEP=200, checkpoints include 200 while training runs 500 steps.
+# Must match an existing deltas_step_<N>.pt (warm masks). Default TARGET aligns with 250-step runs.
 TARGET_STEP_DPO="${TARGET_STEP_DPO:-200}"
 MIN_LAYER_KEEP_RATIO="0.0025"
 
 # DPO_train delta schedule: every DELTA_LOG_INTERVAL steps up to DELTA_LOG_END_STEP (omit for auto = 10%% of num_steps)
 DELTA_LOG_INTERVAL="${DELTA_LOG_INTERVAL:-50}"
 DELTA_LOG_END_STEP="${DELTA_LOG_END_STEP:-200}"
+
+# Slurm sbatch children only inherit exported variables — export training knobs so sparse GPU jobs match dense.
+export NUM_STEPS_DPO
+export DPO_LEARNING_RATE
+export DPO_PER_DEVICE_TRAIN_BATCH_SIZE
+export DPO_GRADIENT_ACCUMULATION_STEPS
+export DPO_WARMUP_RATIO
+export DPO_WEIGHT_DECAY
+export DPO_MAX_LENGTH
+export DPO_MAX_PROMPT_LENGTH
+export DPO_BETA
+export DELTA_LOG_INTERVAL
+export DELTA_LOG_END_STEP
 
 # Eval: empty EVAL_LIMIT = full benchmarks (no --limit). EVAL_FORCE_HF_BACKEND=0 → vLLM when installed (full throughput)
 EVAL_LIMIT="${EVAL_LIMIT:-}"
@@ -191,9 +206,9 @@ pipeline_setup() {
   echo "  RL_CASINO_WARM_MASK_SCORE_DEVICE=${RL_CASINO_WARM_MASK_SCORE_DEVICE}"
   echo "  RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL=${RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL}"
 
-  echo "DPO steps + LR (dense DPO_train.py & sparse_dpo_efficiency.py; export before sbatch for parity across stages):"
+  echo "DPO steps + LR (dense + sparse; exported for Slurm nested jobs):"
   echo "  NUM_STEPS_DPO=${NUM_STEPS_DPO}"
-  echo "  DPO_LEARNING_RATE=${DPO_LEARNING_RATE:-}  (empty → 5e-6 default in both trainers)"
+  echo "  DPO_LEARNING_RATE=${DPO_LEARNING_RATE}"
   echo "  DPO_WARMUP_RATIO=${DPO_WARMUP_RATIO:-}  (empty → 0.0)"
   echo "  LR schedule: linear (explicit in both DPOConfig blocks)"
 
@@ -279,17 +294,15 @@ run_dense_dpo() {
       delta_end_args+=(--delta_log_end_step "$DELTA_LOG_END_STEP")
     fi
 
-    # Optional DPO hyperparameters (paper / ablations). Omit env vars → DPO_train.py defaults.
-# Same vars apply to sparse DPO (sparse_dpo_efficiency.py) via run_sparse_dpo_one_mask.
-    local dpo_extra=()
+    # Optional DPO hyperparameters (paper / ablations). Learning rate always passed — same magnitude as sparse.
+    local dpo_extra=(
+      --learning_rate "${DPO_LEARNING_RATE}"
+    )
     if [ -n "${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-}" ]; then
       dpo_extra+=(--per_device_train_batch_size "${DPO_PER_DEVICE_TRAIN_BATCH_SIZE}")
     fi
     if [ -n "${DPO_GRADIENT_ACCUMULATION_STEPS:-}" ]; then
       dpo_extra+=(--gradient_accumulation_steps "${DPO_GRADIENT_ACCUMULATION_STEPS}")
-    fi
-    if [ -n "${DPO_LEARNING_RATE:-}" ]; then
-      dpo_extra+=(--learning_rate "${DPO_LEARNING_RATE}")
     fi
     if [ -n "${DPO_WARMUP_RATIO:-}" ]; then
       dpo_extra+=(--warmup_ratio "${DPO_WARMUP_RATIO}")
@@ -676,7 +689,7 @@ run_sparse_dpo_one_mask() {
   # Match dense DPO_train.py effective defaults when env vars are unset (same as run_dense_dpo).
   local sparse_bs="${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-4}"
   local sparse_ga="${DPO_GRADIENT_ACCUMULATION_STEPS:-4}"
-  local sparse_lr="${DPO_LEARNING_RATE:-5e-6}"
+  local sparse_lr="${DPO_LEARNING_RATE}"
   local sparse_dpo_extra=()
   if [ -n "${DPO_WARMUP_RATIO:-}" ]; then
     sparse_dpo_extra+=(--warmup_ratio "${DPO_WARMUP_RATIO}")
@@ -764,7 +777,7 @@ launch_parallel_sparse_jobs_and_eval() {
       --job-name="sp_${safe}" \
       --output="logs/sparse_${RUN_ID}_${safe}_%j.out" \
       --error="logs/sparse_${RUN_ID}_${safe}_%j.err" \
-      --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}",PIPELINE_MASK_FILE="${mask}" \
+      --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}",PIPELINE_MASK_FILE="${mask}",NUM_STEPS_DPO="${NUM_STEPS_DPO}",DPO_LEARNING_RATE="${DPO_LEARNING_RATE}" \
       "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh")
     jids+=("$jid")
     echo "  → Slurm job ${jid}"

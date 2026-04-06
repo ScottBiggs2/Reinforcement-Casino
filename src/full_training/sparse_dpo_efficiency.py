@@ -208,14 +208,14 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--mask", type=str, default="masks/top_10.0pct_momentum_w25_step25.pt")
-    parser.add_argument("--n_steps", type=int, default=100)
+    parser.add_argument("--n_steps", type=int, default=250, help="Must match dense --num_steps / pipeline NUM_STEPS_DPO")
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--grad_accum", type=int, default=4)
     parser.add_argument(
         "--lr",
         type=float,
-        default=5e-6,
-        help="Peak LR (default 5e-6, same as DPO_train.py / dense pipeline)",
+        default=5e-7,
+        help="Peak LR (default 5e-7, same as DPO_train.py / pipeline DPO_LEARNING_RATE)",
     )
     parser.add_argument("--warmup_ratio", type=float, default=0.0)
     parser.add_argument("--weight_decay", type=float, default=0.0)
