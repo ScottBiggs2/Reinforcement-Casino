@@ -25,6 +25,7 @@ wandb/
 coding_assistant_notes.md
 
 results/
+outputs/
 *.pt 
 *.pth
 *.json

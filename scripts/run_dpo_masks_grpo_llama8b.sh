@@ -30,8 +30,8 @@ echo "GPU: ${CUDA_VISIBLE_DEVICES:-none}"
 echo "Working dir: $(pwd)"
 
 # ── Environment ──────────────────────────────────────────────────────────────
-CONDA_ENV_PRIMARY="/scratch/xie.yiyi/conda_envs/rl_casino"
-CONDA_ENV_FALLBACK="/home/xie.yiyi/.conda/envs/rl_casino"
+CONDA_ENV_PRIMARY="/scratch/${USER}/conda_envs/rl_casino"
+CONDA_ENV_FALLBACK="/home/${USER}/.conda/envs/rl_casino"
 
 if [ -d "$CONDA_ENV_PRIMARY" ]; then
     ENV_PATH="$CONDA_ENV_PRIMARY"
@@ -64,8 +64,8 @@ GRAD_ACCUM=8
 NUM_GENERATIONS=8
 GEN_BATCH_SIZE=8
 LR=1e-6
-OUTPUT_DIR="/home/xie.yiyi/Reinforcement-Casino/mask_swapping"
-CACHE_DIR="/scratch/xie.yiyi/hf_cache/datasets"
+OUTPUT_DIR="$REPO_ROOT/outputs/llama8b_grpo"
+CACHE_DIR="/scratch/${USER}/hf_cache/datasets"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 mkdir -p "$OUTPUT_DIR"
