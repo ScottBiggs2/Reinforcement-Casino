@@ -22,9 +22,10 @@
 # Stage 3 is often wall-limited when RUN_MASK_CKA=1. For a faster retry:
 #   RUN_MASK_CKA=0 bash scripts/resume_pipeline_from_stage.sh 3 YOUR_RUN_ID
 #
-# Stage 3 kicks off stage 4 (sparse) at job start. If sparse already ran for this RUN_ID
-# (see MASK_OUT_BASE/<id>/.sparse_launch_submitted), use:
-#   PIPELINE_SKIP_SPARSE_LAUNCH=1 bash scripts/resume_pipeline_from_stage.sh 3 YOUR_RUN_ID
+# Stage 3 kicks off stage 4 (sparse) at job start — do NOT also run `resume … 4` unless you know stage 4 failed
+# and you removed MASK_OUT_BASE/<id>/.sparse_launch_submitted (duplicate launches waste GPU).
+# Re-run stage 3 without re-queuing sparse: PIPELINE_SKIP_SPARSE_LAUNCH=1 bash scripts/resume_pipeline_from_stage.sh 3 YOUR_RUN_ID
+# Force a new stage 4 after cleaning outputs: PIPELINE_FORCE_SPARSE_RELUNCH=1 bash scripts/resume_pipeline_from_stage.sh 4 YOUR_RUN_ID
 #
 # Optional env (same as pipeline_common.sh): RUN_MASK_CKA, EVAL_LIMIT, PIPELINE_SKIP_SPARSE_LAUNCH,
 # CPU_PARTITION (default short on Northeastern Explorer), GPU_PARTITION (default gpu), etc.
@@ -71,6 +72,20 @@ fi
 echo "Resuming pipeline at stage ${STAGE}: ${NEXT:-stage 3 comparisons}"
 echo "  PIPELINE_RUN_ID=${RUN}"
 echo "  (paths use RUN_ID from this id — same as your original chain)"
+
+# Login-node guard: stage 4 is normally submitted by stage 3; refuse duplicate resume 4.
+if [ "${STAGE}" = "4" ]; then
+  SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+  MASK_OUT_BASE="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}"
+  _sfile="${MASK_OUT_BASE}/${RUN}/.sparse_launch_submitted"
+  if [ -f "${_sfile}" ] && [ "${PIPELINE_FORCE_SPARSE_RELUNCH:-0}" != "1" ]; then
+    echo "ERROR: Stage 4 already completed for RUN_ID=${RUN} (${_sfile})." >&2
+    echo "  Do not run resume 4 again — stage 3 already queues sparse at its start." >&2
+    echo "  To redo: scancel duplicate jobs, remove sparse outputs, rm -f \"${_sfile}\", then:" >&2
+    echo "    PIPELINE_FORCE_SPARSE_RELUNCH=1 bash scripts/resume_pipeline_from_stage.sh 4 ${RUN}" >&2
+    exit 1
+  fi
+fi
 
 if [ "${STAGE}" = "3" ] && [ "${RUN_MASK_CKA:-0}" != "1" ]; then
   JID=$(sbatch --parsable \

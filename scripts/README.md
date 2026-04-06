@@ -19,6 +19,8 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `verify_grpo_training.sh` - short GRPO dense+sparse verification.
 - `run_masks.sh` - warm/cold/random mask comparison workflow.
 - `invert_mask.py` - CLI for complement masks (`1−M`); pipeline writes `<stem>_inverse.pt` per primary mask when `PIPELINE_GENERATE_INVERSE_MASKS=1` (default).
+- `verify_inverse_masks.sh` - check `*_inverse.pt` counts vs primaries under `MASK_OUT_BASE/<RUN_ID>/` and grep complement lines in `logs/full_pipeline_masks_<RUN_ID>.log`.
+- `wipe_pipeline_artifacts.sh` - **destructive** reset: optional `scancel -u $USER`, remove `--run-id` subtrees or `--full-scratch` trees, optional `--repo-logs`, optional `--include-hf-cache`. Requires `--yes`. See script header.
 - `run_dpo_and_masks.sh` - DPO + mask generation workflow.
 - `run_mask_diagnostics.sh` - attention masking diagnostic.
 - `submit_gen_grpo_masks_gpu.slurm` - GPU-safe Slurm launcher for GRPO mask generation + plots inside Apptainer/Singularity (`--nv` + CUDA preflight).

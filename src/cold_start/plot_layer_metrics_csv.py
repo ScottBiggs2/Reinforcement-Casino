@@ -426,8 +426,8 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="/home/biggs.s/figs",
-        help="Directory to write plot PNGs (created if missing).",
+        default=str(Path.home() / "figs"),
+        help="Directory to write plot PNGs (created if missing). Default: ~/figs.",
     )
     parser.add_argument(
         "--random-trials",

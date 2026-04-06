@@ -94,6 +94,8 @@ COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-16}"
 
 # Mask comparison stage: set RUN_MASK_CKA=1 for GPU-heavy activation CKA (add time budget)
 RUN_MASK_CKA="${RUN_MASK_CKA:-0}"
+# plot_layer_metrics_csv PNGs: set to an absolute dir to override. If unset, stage 3 uses
+#   ${MASK_OUT_BASE}/${RUN_ID}/comparisons/plots (see run_mask_comparisons).
 # export_layer_metrics_csv.py: per-layer svdvals for "effective rank" — skip entirely, or parallelize (see below).
 EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK="${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}"
 # When skip=0: thread pool size for per-layer SVD (does not fix unrelated Slurm cancellations).
@@ -211,6 +213,7 @@ pipeline_setup() {
   echo "  DPO_LEARNING_RATE=${DPO_LEARNING_RATE}"
   echo "  DPO_WARMUP_RATIO=${DPO_WARMUP_RATIO:-}  (empty → 0.0)"
   echo "  LR schedule: linear (explicit in both DPOConfig blocks)"
+  echo "  plot_layer_metrics PNGs: PLOT_LAYER_METRICS_OUTPUT_DIR=${PLOT_LAYER_METRICS_OUTPUT_DIR:-<unset → .../comparisons/plots for each RUN_ID>}"
 
   echo "Environment check (training):"
   "$TRAIN_PY" -c "import torch, trl; print(f'Torch: {torch.__version__}, TRL: {trl.__version__}')" || {
@@ -244,8 +247,9 @@ pipeline_submit_next_stage() {
 }
 
 # Submit stage 4 (sparse launcher) at the *start* of stage 3 so per-mask sparse GPU jobs overlap wall time with comparisons.
-# Idempotent: skips if MASK_OUT_BASE/${RUN_ID}/.sparse_launch_submitted exists (written when a prior launch finished).
-# Override duplicate guard: PIPELINE_SKIP_SPARSE_LAUNCH=1 (skip) or remove the sentinel file to force a new launch.
+# Skips if MASK_OUT_BASE/${RUN_ID}/.sparse_launch_submitted exists.
+# Duplicate guard for concurrent launches: launch_parallel_sparse_jobs_and_eval uses .sparse_launch_lock (mkdir).
+# Override: PIPELINE_SKIP_SPARSE_LAUNCH=1 (skip early 4) or PIPELINE_FORCE_SPARSE_RELUNCH=1 inside stage 4 (clears sentinel+lock).
 pipeline_submit_sparse_stage_early() {
   if [ "${PIPELINE_SKIP_SPARSE_LAUNCH:-0}" = "1" ]; then
     echo "SKIP early stage 4: PIPELINE_SKIP_SPARSE_LAUNCH=1"
@@ -255,10 +259,15 @@ pipeline_submit_sparse_stage_early() {
     echo "WARNING: pipeline_submit_sparse_stage_early: SLURM_JOB_ID unset; not submitting stage 4" >&2
     return 0
   fi
-  local sentinel
+  local sentinel lock
   sentinel="${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_submitted"
+  lock="${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_lock"
   if [ -f "$sentinel" ]; then
     echo "SKIP early stage 4: sparse launch already recorded (${sentinel})."
+    return 0
+  fi
+  if [ -d "$lock" ]; then
+    echo "SKIP early stage 4: sparse launch in progress (${lock})."
     return 0
   fi
   local sj
@@ -507,9 +516,16 @@ run_mask_comparisons() {
 
   local mask_dir="${MASK_OUT_BASE}/${RUN_ID}"
   local comp_dir="${mask_dir}/comparisons"
+  local plot_dir
+  if [ -n "${PLOT_LAYER_METRICS_OUTPUT_DIR:-}" ]; then
+    plot_dir="${PLOT_LAYER_METRICS_OUTPUT_DIR}"
+  else
+    plot_dir="${comp_dir}/plots"
+  fi
   local log_file="logs/full_pipeline_mask_comparisons_${RUN_ID}.log"
   local cmp_failures=0
   mkdir -p "$comp_dir"
+  mkdir -p "$plot_dir"
 
   run_one_cmp_step() {
     local desc="$1"
@@ -654,9 +670,10 @@ run_mask_comparisons() {
   run_one_cmp_step "plot_layer_metrics_csv" \
     "$TRAIN_PY" src/cold_start/plot_layer_metrics_csv.py \
       --input-dir "$comp_dir" --recursive --pattern "layer_metrics_*.csv" \
+      --output-dir "$plot_dir" \
       --random-trials "${PLOT_RANDOM_TRIALS}" || cmp_failures=$((cmp_failures + 1))
 
-  echo "Mask comparison artifacts under: ${comp_dir}"
+  echo "Mask comparison artifacts under: ${comp_dir} (PNGs under: ${plot_dir})"
   if [ "${cmp_failures}" -gt 0 ]; then
     echo "WARNING: ${cmp_failures} mask comparison step(s) had failures. See ${log_file}" | tee -a "$log_file" >&2
   fi
@@ -754,6 +771,30 @@ run_sparse_dpo() {
 # SPARSE_SLURM_TIME / SPARSE_SLURM_MEM: per sparse GPU child job (defaults in pipeline_common header; ≤8h wall).
 launch_parallel_sparse_jobs_and_eval() {
   local mask_dir="${MASK_OUT_BASE}/${RUN_ID}"
+  local sentinel="${mask_dir}/.sparse_launch_submitted"
+  local lock="${mask_dir}/.sparse_launch_lock"
+
+  if [ "${PIPELINE_FORCE_SPARSE_RELUNCH:-0}" = "1" ]; then
+    echo "PIPELINE_FORCE_SPARSE_RELUNCH=1: clearing sparse launch sentinel and lock"
+    rm -f "$sentinel"
+    rmdir "$lock" 2>/dev/null || true
+  fi
+
+  if [ -f "$sentinel" ]; then
+    echo "ERROR: Sparse launch already completed for RUN_ID=${RUN_ID} (${sentinel})." >&2
+    echo "  Stage 3 already queues stage 4 at its start — do not also run: bash scripts/resume_pipeline_from_stage.sh 4 ${RUN_ID}" >&2
+    echo "  To redo sparse+eval: scancel duplicate jobs, rm sparse outputs, rm -f \"$sentinel\", then resubmit stage 4 with PIPELINE_FORCE_SPARSE_RELUNCH=1 if the launcher alone is rerun." >&2
+    exit 1
+  fi
+
+  if ! mkdir "$lock" 2>/dev/null; then
+    echo "ERROR: Another stage-4 launch is running or left a stale lock (${lock})." >&2
+    echo "  If no pipe_p4_launch job is active: rmdir \"$lock\" after confirming no duplicate submissions." >&2
+    exit 1
+  fi
+  cleanup_sparse_lock() { rmdir "$lock" 2>/dev/null || true; }
+  trap cleanup_sparse_lock EXIT
+
   local dep_kind="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
   local wall="${SPARSE_SLURM_TIME:-07:45:00}"
   local jids=()
@@ -805,11 +846,14 @@ launch_parallel_sparse_jobs_and_eval() {
   echo "Eval stage job id: ${ej}"
 
   if [ "${#jids[@]}" -gt 0 ]; then
-    touch "${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_submitted"
-    echo "Recorded sparse launch for RUN_ID=${RUN_ID} (${MASK_OUT_BASE}/${RUN_ID}/.sparse_launch_submitted)"
+    touch "$sentinel"
+    echo "Recorded sparse launch for RUN_ID=${RUN_ID} (${sentinel})"
   else
     echo "No sparse GPU jobs submitted (no .pt masks); sentinel not written — re-run stage 4 after masks exist."
   fi
+
+  trap - EXIT
+  cleanup_sparse_lock
 }
 
 ########################################
