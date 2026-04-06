@@ -33,6 +33,11 @@ COMMON_OUTPUT_DIR="/scratch/$USER/rl_casino_outputs"
 
 mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR" "$COMMON_OUTPUT_DIR"
 
+# Copy HF token to scratch HF_HOME if it exists in default location
+if [ -f "$HOME/.cache/huggingface/token" ] && [ ! -f "$HF_HOME/token" ]; then
+    cp "$HOME/.cache/huggingface/token" "$HF_HOME/token"
+fi
+
 # === ENVIRONMENT SETUP ===
 source "$HOME/miniconda/etc/profile.d/conda.sh" 2>/dev/null || source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null
 conda activate /home/$USER/.conda/envs/rl_casino || conda activate /scratch/$USER/conda_envs/rl_casino
