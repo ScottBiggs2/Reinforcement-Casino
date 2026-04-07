@@ -1,17 +1,18 @@
 #!/bin/bash
-# Run Dense DPO training with Llama-3.1-8B-Instruct on a single H200.
+# Run Dense DPO training with Llama-3.1-8B-Instruct on multi-GPU.
 # Purpose: Generate weight deltas for warm-start mask generation.
 # Usage:
 #   sbatch scripts/run_dpo_llama8b.sh
 #   RUN_TAG=light_r1 sbatch scripts/run_dpo_llama8b.sh
+#   sbatch --gres=gpu:v100-sxm2:4 scripts/run_dpo_llama8b.sh  # override GPU type
 #SBATCH --job-name=llama8b_dpo
 #SBATCH --output=logs/llama8b_dpo_%j.out
 #SBATCH --error=logs/llama8b_dpo_%j.err
-#SBATCH --partition=gpu
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:h200:1
-#SBATCH --mem=128G
+#SBATCH --gres=gpu:4
+#SBATCH --mem=256G
 #SBATCH --time=08:00:00
 
 # === CONFIGURATION ===
@@ -19,7 +20,6 @@ MODEL="meta-llama/Llama-3.1-8B-Instruct"
 DATASET="light-r1"
 N_STEPS=500
 BATCH_SIZE=1
-GRAD_ACCUM=8
 LR=1e-6
 DPO_BETA=0.1
 MAX_LENGTH=1024
@@ -58,20 +58,37 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
+# === MULTI-GPU (auto-detect from SLURM) ===
+if [ -n "${SLURM_GPUS_ON_NODE:-}" ]; then
+    NGPUS="$SLURM_GPUS_ON_NODE"
+elif [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    NGPUS=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | wc -l)
+else
+    NGPUS=1
+fi
+GRAD_ACCUM=$((8 / NGPUS))
+[ "$GRAD_ACCUM" -lt 1 ] && GRAD_ACCUM=1
+
+if [ "$NGPUS" -gt 1 ]; then
+    LAUNCH="accelerate launch --num_processes $NGPUS --multi_gpu"
+else
+    LAUNCH="python"
+fi
+
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-RUN_NAME="llama8b_dpo_${RUN_TAG:-dense}_${TIMESTAMP}"
+RUN_NAME="llama8b_dpo_${RUN_TAG:-dense}_${NGPUS}gpu_${TIMESTAMP}"
 
 echo "=================================================="
 echo "Job started at: $(date)"
 echo "Node: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
-echo "GPU: ${CUDA_VISIBLE_DEVICES:-none}"
+echo "GPUs: $NGPUS | Grad accum: $GRAD_ACCUM"
 echo "HF_HOME: $HF_HOME"
 echo "Output dir: $COMMON_OUTPUT_DIR"
 echo "Run name: $RUN_NAME"
 echo "=================================================="
 
-python src/full_training/DPO_train.py \
+$LAUNCH src/full_training/DPO_train.py \
     --model_name "$MODEL" \
     --dataset "$DATASET" \
     --num_steps "$N_STEPS" \

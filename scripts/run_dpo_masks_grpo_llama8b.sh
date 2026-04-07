@@ -1,16 +1,17 @@
 #!/bin/bash
-# Run GRPO training (sparse or dense) with Llama-3.1-8B-Instruct on a single GPU.
+# Run GRPO training (sparse or dense) with Llama-3.1-8B-Instruct on multi-GPU.
 # Usage:
 #   MASK_PATH=/path/to/mask.pt RUN_TAG=cav_dpo sbatch scripts/run_dpo_masks_grpo_llama8b.sh
 #   RUN_TAG=dense_baseline sbatch scripts/run_dpo_masks_grpo_llama8b.sh   # no mask = dense
+#   sbatch --gres=gpu:v100-sxm2:4 scripts/run_dpo_masks_grpo_llama8b.sh  # override GPU type
 #SBATCH --job-name=llama8b_grpo
 #SBATCH --output=logs/llama8b_grpo_%j.out
 #SBATCH --error=logs/llama8b_grpo_%j.err
-#SBATCH --partition=gpu
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:h200:1
-#SBATCH --mem=128G
+#SBATCH --gres=gpu:4
+#SBATCH --mem=256G
 #SBATCH --time=08:00:00
 
 # === CONFIGURATION ===
@@ -19,7 +20,6 @@ DATASET="math-220k"
 N_STEPS=200
 SUBSET=512
 BATCH_SIZE=1
-GRAD_ACCUM=8
 NUM_GENERATIONS=8
 GEN_BATCH_SIZE=8
 LR=1e-6
@@ -56,11 +56,28 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
+# === MULTI-GPU (auto-detect from SLURM) ===
+if [ -n "${SLURM_GPUS_ON_NODE:-}" ]; then
+    NGPUS="$SLURM_GPUS_ON_NODE"
+elif [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    NGPUS=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | wc -l)
+else
+    NGPUS=1
+fi
+GRAD_ACCUM=$((8 / NGPUS))
+[ "$GRAD_ACCUM" -lt 1 ] && GRAD_ACCUM=1
+
+if [ "$NGPUS" -gt 1 ]; then
+    LAUNCH="accelerate launch --num_processes $NGPUS --multi_gpu"
+else
+    LAUNCH="python"
+fi
+
 echo "=================================================="
 echo "Job started at: $(date)"
 echo "Node: $(hostname)"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
-echo "GPU: ${CUDA_VISIBLE_DEVICES:-none}"
+echo "GPUs: $NGPUS | Grad accum: $GRAD_ACCUM"
 echo "Working dir: $(pwd)"
 echo "HF_HOME: $HF_HOME"
 echo "Output dir: $COMMON_OUTPUT_DIR"
@@ -69,7 +86,7 @@ echo "=================================================="
 
 # === TIMESTAMP & RUN NAME ===
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-RUN_NAME="llama8b_dpo_mask_grpo_${RUN_TAG:-unknown}_${TIMESTAMP}"
+RUN_NAME="llama8b_dpo_mask_grpo_${RUN_TAG:-unknown}_${NGPUS}gpu_${TIMESTAMP}"
 OUTPUT_DIR="${COMMON_OUTPUT_DIR}/${RUN_NAME}"
 mkdir -p "$OUTPUT_DIR"
 
@@ -79,7 +96,7 @@ if [ -n "${MASK_PATH:-}" ] && [ -f "$MASK_PATH" ]; then
     echo "Run name: ${RUN_NAME}"
     echo "=================================================="
 
-    python src/full_training/sparse_grpo_bsr.py \
+    $LAUNCH src/full_training/sparse_grpo_bsr.py \
         --model_name "$MODEL" \
         --dataset "$DATASET" \
         --n_steps "$N_STEPS" \
@@ -101,7 +118,7 @@ else
     echo "Run name: ${RUN_NAME}"
     echo "=================================================="
 
-    python src/full_training/GRPO_train.py \
+    $LAUNCH src/full_training/GRPO_train.py \
         --model_name "$MODEL" \
         --dataset "$DATASET" \
         --num_steps "$N_STEPS" \
