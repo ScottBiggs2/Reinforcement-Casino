@@ -82,6 +82,7 @@ python src/full_training/DPO_train.py \
     --max_length "$MAX_LENGTH" \
     --max_prompt_length "$MAX_PROMPT_LENGTH" \
     --delta_log_interval "$DELTA_LOG_INTERVAL" \
+    --optim adamw_torch \
     --gradient_checkpointing \
     --output_base_dir "$COMMON_OUTPUT_DIR" \
     --dataset_cache_dir "$HF_DATASETS_CACHE" \
