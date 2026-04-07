@@ -9,7 +9,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:h200:1
 #SBATCH --mem=128G
 #SBATCH --time=08:00:00
 
@@ -20,8 +20,8 @@ N_STEPS=200
 SUBSET=512
 BATCH_SIZE=1
 GRAD_ACCUM=8
-NUM_GENERATIONS=2
-GEN_BATCH_SIZE=2
+NUM_GENERATIONS=8
+GEN_BATCH_SIZE=8
 LR=1e-6
 WANDB_PROJECT="huggingface"
 
