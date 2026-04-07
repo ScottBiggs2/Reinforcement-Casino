@@ -20,8 +20,8 @@ N_STEPS=200
 SUBSET=512
 BATCH_SIZE=1
 GRAD_ACCUM=8
-NUM_GENERATIONS=8
-GEN_BATCH_SIZE=8
+NUM_GENERATIONS=4
+GEN_BATCH_SIZE=4
 LR=1e-6
 WANDB_PROJECT="huggingface"
 
@@ -43,6 +43,7 @@ source "$HOME/miniconda/etc/profile.d/conda.sh" 2>/dev/null || source "$(conda i
 conda activate /home/$USER/.conda/envs/rl_casino || conda activate /scratch/$USER/conda_envs/rl_casino
 
 export PYTHONPATH="$(pwd):$PYTHONPATH"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export WANDB_PROJECT=$WANDB_PROJECT
 
 # === REPO ROOT ===
