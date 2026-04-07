@@ -98,15 +98,15 @@ cfg = GRPOConfig(
     max_steps=NUM_STEPS,
     num_train_epochs=1,
     bf16=True, fp16=False,
-    optim="adamw_torch",
+    optim="adamw_bnb_8bit",
     gradient_checkpointing=True,
     logging_steps=1,
     save_steps=999999,
     remove_unused_columns=False,
     num_generations=args.num_generations,
     generation_batch_size=args.generation_batch_size,
-    max_completion_length=1024,
-    max_prompt_length=512,
+    max_completion_length=512,
+    max_prompt_length=256,
     beta=0.1,
 )
 
