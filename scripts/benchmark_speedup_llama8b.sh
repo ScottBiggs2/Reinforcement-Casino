@@ -152,25 +152,35 @@ run_and_track "LoRA + AdamW (r=16)" \
         --dataset_cache_dir "$CACHE_DIR"
 
 # ── 4. Sparse BSR + SparseAdamW ─────────────────────────────────────────────
-run_and_track "Sparse BSR + SparseAdamW" \
-    python src/full_training/sparse_grpo_bsr.py \
-        --model_name "$MODEL" \
-        --dataset "$DATASET" \
-        --n_steps "$N_STEPS" \
-        --subset_size "$SUBSET" \
-        --batch_size "$BATCH_SIZE" \
-        --grad_accum "$GRAD_ACCUM" \
-        --num_generations "$NUM_GENERATIONS" \
-        --generation_batch_size "$GEN_BATCH_SIZE" \
-        --lr "$LR" \
-        --optimizer sparse_adamw \
-        --mask "$MASK_PATH" \
-        --block_size_bsr 16 \
-        --block_size_adam 128 \
-        --use_wandb \
-        --output_base_dir "$OUTPUT_DIR" \
-        --dataset_cache_dir "$CACHE_DIR" \
-        --save_model false
+# Requires a mask file matching the 8B model architecture.
+# Skip if no mask is available; generate one first with the mask pipeline.
+if [ -f "$MASK_PATH" ]; then
+    run_and_track "Sparse BSR + SparseAdamW" \
+        python src/full_training/sparse_grpo_bsr.py \
+            --model_name "$MODEL" \
+            --dataset "$DATASET" \
+            --n_steps "$N_STEPS" \
+            --subset_size "$SUBSET" \
+            --batch_size "$BATCH_SIZE" \
+            --grad_accum "$GRAD_ACCUM" \
+            --num_generations "$NUM_GENERATIONS" \
+            --generation_batch_size "$GEN_BATCH_SIZE" \
+            --lr "$LR" \
+            --optimizer sparse_adamw \
+            --mask "$MASK_PATH" \
+            --block_size_bsr 16 \
+            --block_size_adam 128 \
+            --use_wandb \
+            --output_base_dir "$OUTPUT_DIR" \
+            --dataset_cache_dir "$CACHE_DIR" \
+            --save_model false
+else
+    echo ""
+    echo "============================================================"
+    echo "SKIPPING Sparse BSR — no mask file found at $MASK_PATH"
+    echo "Generate a mask first, then re-run with MASK_PATH=<path>"
+    echo "============================================================"
+fi
 
 # ── Collect Results ──────────────────────────────────────────────────────────
 echo ""
