@@ -44,6 +44,8 @@ conda activate /home/$USER/.conda/envs/rl_casino || conda activate /scratch/$USE
 
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export NCCL_DEBUG=INFO
+export NCCL_P2P_DISABLE=1
 export WANDB_PROJECT=$WANDB_PROJECT
 
 # === REPO ROOT ===
