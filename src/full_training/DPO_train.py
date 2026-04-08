@@ -311,60 +311,19 @@ class FlexibleCheckpointCallback(TrainerCallback):
         model = kwargs["model"]
         step = state.global_step
 
-        layer_stats = {}
-        full_deltas_to_save = {}
-
-        with torch.no_grad():
-            for name, param in model.named_parameters():
-                current = param.detach().float().cpu()
-                diff = current - self.base_state[name]
-
-                l2 = torch.norm(diff).item()
-                frac_big = (diff.abs() > self.threshold).float().mean().item()
-
-                layer_stats[name] = {
-                    "l2_from_init": l2,
-                    "frac_big_from_init": frac_big,
-                }
-
-                # Check if this step is in our checkpoint schedule
-                if step in self.checkpoint_schedule:
-                    full_deltas_to_save[name] = diff.clone()
-
-        # Always save stats (cheap JSON file)
-        stats_path = os.path.join(self.delta_log_dir, f"stats_step_{step}.json")
-        with open(stats_path, "w") as f:
-            json.dump(layer_stats, f)
-
-        # Aggregate summaries for wandb
-        all_l2 = [v["l2_from_init"] for v in layer_stats.values()]
-        all_frac = [v["frac_big_from_init"] for v in layer_stats.values()]
-        mean_l2 = sum(all_l2) / len(all_l2)
-        mean_frac = sum(all_frac) / len(all_frac)
-
-        attn_l2 = []
-        mlp_l2 = []
-        for n, st in layer_stats.items():
-            low = n.lower()
-            if "attn" in low or "q_proj" in low or "k_proj" in low or "v_proj" in low or "o_proj" in low:
-                attn_l2.append(st["l2_from_init"])
-            if "mlp" in low or "ffn" in low or "feed_forward" in low or "gate_proj" in low or "up_proj" in low or "down_proj" in low:
-                mlp_l2.append(st["l2_from_init"])
-
-        wandb.log({
-            "step": step,
-            "subnet/mean_l2_from_init": mean_l2,
-            "subnet/mean_frac_big_from_init": mean_frac,
-            "subnet/attn_mean_l2": (sum(attn_l2)/len(attn_l2)) if attn_l2 else 0.0,
-            "subnet/mlp_mean_l2": (sum(mlp_l2)/len(mlp_l2)) if mlp_l2 else 0.0,
-        }, step=step)
-
-        # Save full deltas on checkpoint schedule
+        # Only iterate and clone parameters if we are on the checkpoint schedule.
+        # This removes the massive per-step overhead of cloning 32GB to CPU.
         if step in self.checkpoint_schedule:
+            full_deltas_to_save = {}
+            with torch.no_grad():
+                for name, param in model.named_parameters():
+                    current = param.detach().float().cpu()
+                    diff = current - self.base_state[name]
+                    full_deltas_to_save[name] = diff
+
             delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
             torch.save(full_deltas_to_save, delta_file)
-            print(f"  ✓ Saved checkpoint at step {step}")
-            # Note: Not uploading to wandb since artifacts are already saved on cloud GPU
+            print(f"  ✓ Saved weight deltas at step {step}")
 
         return control
 

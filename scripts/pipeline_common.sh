@@ -723,6 +723,11 @@ run_sparse_dpo_one_mask() {
   if [ -n "${DPO_BETA:-}" ]; then
     sparse_dpo_extra+=(--dpo_beta "${DPO_BETA}")
   fi
+  # Gradient checkpointing: defaults to True in sparse_dpo_efficiency.py.
+  # We explicitly disable it only if DPO_GRADIENT_CHECKPOINTING=0.
+  if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
+    sparse_dpo_extra+=(--no_gradient_checkpointing)
+  fi
 
   timeout --signal=TERM --kill-after=60 "${SPARSE_TIMEOUT_PER_MASK}" \
     "$TRAIN_PY" src/full_training/sparse_dpo_efficiency.py \
@@ -925,4 +930,3 @@ submit_evals() {
 
   echo "Eval jobs submitted (if any). Check with: squeue -u \$USER"
 }
-

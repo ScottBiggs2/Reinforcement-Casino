@@ -60,6 +60,7 @@ def train(
     max_length,
     max_prompt_length,
     dpo_beta,
+    gradient_checkpointing=True,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -174,7 +175,7 @@ def train(
         run_name=run_name,
         remove_unused_columns=False,
         bf16=True,
-        gradient_checkpointing=True,
+        gradient_checkpointing=gradient_checkpointing,
         beta=dpo_beta,
         max_length=max_length,
         max_prompt_length=max_prompt_length,
@@ -238,6 +239,8 @@ if __name__ == "__main__":
     parser.add_argument("--output_base_dir", type=str, default=default_rl_casino_outputs(), help="Base directory for outputs")
     parser.add_argument("--dataset_cache_dir", type=str, default=default_hf_datasets_cache(), help="Cache directory for HuggingFace datasets")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=None)
+    parser.add_argument("--no_gradient_checkpointing", action="store_true")
     
     def str2bool(v):
         if isinstance(v, bool): return v
@@ -273,4 +276,5 @@ if __name__ == "__main__":
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
         dpo_beta=args.dpo_beta,
+        gradient_checkpointing=False if args.no_gradient_checkpointing else (True if args.gradient_checkpointing is True else True),
     )
