@@ -10,7 +10,7 @@
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:h200:4
 #SBATCH --mem=256G
 #SBATCH --time=08:00:00
 
