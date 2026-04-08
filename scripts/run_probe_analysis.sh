@@ -70,7 +70,7 @@ MASK_B_LABEL="${MASK_B_LABEL:-Fisher-GRPO}"
 LAYER_STRIDE="${LAYER_STRIDE:-2}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 MAX_LENGTH="${MAX_LENGTH:-128}"
-INCLUDE_BASELINE="${INCLUDE_BASELINE:-1}"
+NO_BASELINE="${NO_BASELINE:-0}"
 
 echo "[config] MODEL=$MODEL"
 echo "[config] MASK_A=$MASK_A"
@@ -78,7 +78,7 @@ echo "[config] MASK_B=$MASK_B"
 echo "[config] OUTPUT_DIR=$OUTPUT_DIR"
 echo "[config] LAYER_STRIDE=$LAYER_STRIDE"
 echo "[config] BATCH_SIZE=$BATCH_SIZE"
-echo "[config] INCLUDE_BASELINE=$INCLUDE_BASELINE"
+echo "[config] NO_BASELINE=$NO_BASELINE"
 
 # ── Validate masks exist ─────────────────────────────────────────────
 for f in "$MASK_A" "$MASK_B"; do
@@ -90,8 +90,8 @@ done
 
 # ── Run probe analysis ───────────────────────────────────────────────
 BASELINE_FLAG=""
-if [ "$INCLUDE_BASELINE" = "1" ]; then
-    BASELINE_FLAG="--include_baseline"
+if [ "$NO_BASELINE" = "1" ]; then
+    BASELINE_FLAG="--no_baseline"
 fi
 
 mkdir -p "$OUTPUT_DIR"

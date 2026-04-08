@@ -508,6 +508,114 @@ def plot_probe_heatmap(
     plt.close()
 
 
+def plot_delta_heatmap(
+    results_by_config: dict,
+    baseline_key: str,
+    sample_indices: list,
+    property_order: list,
+    output_path: str,
+):
+    """Plot Δaccuracy (masked − baseline) heatmap for each non-baseline config.
+
+    Args:
+        results_by_config: {config_label: {prop_name: {layer_name: accuracy}}}
+        baseline_key: key in results_by_config for the unmasked baseline
+        sample_indices: list of integer layer indices that were sampled
+        property_order: list of property names in display order
+        output_path: path for the output PNG
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+
+    baseline_results = results_by_config[baseline_key]
+    mask_configs = {k: v for k, v in results_by_config.items() if k != baseline_key}
+
+    if not mask_configs:
+        print("[plot] No mask configs to compare against baseline; skipping delta plot.")
+        return
+
+    n_configs = len(mask_configs)
+    n_props = len(property_order)
+    n_layers = len(sample_indices)
+    layer_labels = [f"layer {i}" for i in sample_indices]
+
+    def _build_matrix(prop_results):
+        mat = np.full((n_props, n_layers), np.nan)
+        for pi, prop in enumerate(property_order):
+            if prop not in prop_results:
+                continue
+            sorted_names = sorted(prop_results[prop].keys(), key=_layer_index)
+            for li, lname in enumerate(sorted_names):
+                if li < n_layers:
+                    mat[pi, li] = prop_results[prop][lname]
+        return mat
+
+    baseline_mat = _build_matrix(baseline_results)
+
+    # Compute all deltas to find symmetric color range
+    delta_mats = {}
+    for config_label, prop_results in mask_configs.items():
+        delta_mats[config_label] = _build_matrix(prop_results) - baseline_mat
+
+    all_deltas = np.concatenate([m[~np.isnan(m)] for m in delta_mats.values()])
+    abs_max = max(0.05, np.nanmax(np.abs(all_deltas)))  # at least ±0.05 range
+
+    cmap = plt.cm.RdBu
+    norm = mcolors.TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
+
+    fig_width = max(10, 4 * n_configs + 2)
+    fig, axes = plt.subplots(
+        1, n_configs,
+        figsize=(fig_width, n_props * 0.9 + 2.5),
+        squeeze=False,
+    )
+    axes = axes[0]
+
+    for ax, (config_label, delta_mat) in zip(axes, delta_mats.items()):
+        display_mat = np.where(np.isnan(delta_mat), 0.0, delta_mat)
+        im = ax.imshow(display_mat, cmap=cmap, norm=norm, aspect="auto")
+
+        ax.set_xticks(range(n_layers))
+        ax.set_xticklabels(layer_labels, rotation=45, ha="right", fontsize=9)
+        ax.set_yticks(range(n_props))
+        ax.set_yticklabels(property_order, fontsize=11)
+        ax.set_title(config_label, fontsize=13, fontweight="bold", pad=10)
+
+        for pi in range(n_props):
+            for li in range(n_layers):
+                val = delta_mat[pi, li]
+                if np.isnan(val):
+                    continue
+                txt_color = "white" if abs(val) > abs_max * 0.65 else "black"
+                sign = "+" if val > 0 else ""
+                ax.text(
+                    li, pi, f"{sign}{val:.2f}",
+                    ha="center", va="center",
+                    fontsize=7.5, color=txt_color, fontweight="bold",
+                )
+
+    fig.subplots_adjust(right=0.86, wspace=0.35)
+    cbar_ax = fig.add_axes([0.89, 0.15, 0.025, 0.7])
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, cax=cbar_ax)
+    cbar.set_label("Δ accuracy (masked − baseline)", fontsize=10, labelpad=8)
+    cbar_ax.text(
+        0.5, -0.04, "knowledge\nlost",
+        ha="center", va="top", transform=cbar_ax.transAxes, fontsize=8,
+    )
+    cbar_ax.text(
+        0.5, 1.04, "knowledge\ngained",
+        ha="center", va="bottom", transform=cbar_ax.transAxes, fontsize=8,
+    )
+
+    fig.suptitle("Δ Probe Accuracy: Mask vs Baseline", fontsize=14, y=1.01)
+
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"[plot] Saved delta heatmap → {output_path}")
+    plt.close()
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -520,8 +628,10 @@ def parse_args():
     p.add_argument("--mask_b", required=True, help="Path to mask B .pt file")
     p.add_argument("--mask_a_label", default="Mask A", help="Display label for mask A")
     p.add_argument("--mask_b_label", default="Mask B", help="Display label for mask B")
-    p.add_argument("--include_baseline", action="store_true",
-                   help="Also run on the unmasked model as a baseline panel")
+    p.add_argument("--include_baseline", action="store_true", default=True,
+                   help="Run unmasked model as baseline (default: on, needed for delta plots)")
+    p.add_argument("--no_baseline", action="store_true",
+                   help="Skip the unmasked baseline (disables delta heatmap)")
     p.add_argument("--output_dir", default="probe_results",
                    help="Directory for JSON and PNG outputs")
     p.add_argument("--layer_stride", type=int, default=4,
@@ -535,6 +645,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.no_baseline:
+        args.include_baseline = False
     os.makedirs(args.output_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -666,7 +778,7 @@ def main():
     print(f"\n[main] Saved results JSON → {json_path}")
 
     # ------------------------------------------------------------------
-    # Plot heatmap
+    # Plot heatmaps
     # ------------------------------------------------------------------
     plot_path = os.path.join(args.output_dir, "probe_heatmap.png")
     plot_probe_heatmap(
@@ -675,6 +787,17 @@ def main():
         property_order=list(PROBE_DATASETS.keys()),
         output_path=plot_path,
     )
+
+    baseline_key = "Baseline\n(no mask)"
+    if baseline_key in results_by_config:
+        delta_path = os.path.join(args.output_dir, "probe_delta_heatmap.png")
+        plot_delta_heatmap(
+            results_by_config,
+            baseline_key=baseline_key,
+            sample_indices=sample_indices,
+            property_order=list(PROBE_DATASETS.keys()),
+            output_path=delta_path,
+        )
 
     print("\n[main] Done.")
 
