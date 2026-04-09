@@ -72,7 +72,7 @@ def _load_hf_probe_datasets(samples_per_class: int = DEFAULT_SAMPLES_PER_CLASS,
     print(f"[data] Loading syntax probe (BLiMP subject_verb_number_local)...")
     try:
         blimp = load_dataset(
-            "nyu-mll/blimp", "subject_verb_number_local",
+            "nyu-mll/blimp", "regular_plural_subject_verb_agreement_1",
             split="train", cache_dir=cache_dir, trust_remote_code=True,
         )
         # good sentence → 1 (grammatical), bad sentence → 0 (ungrammatical)
