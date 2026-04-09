@@ -267,6 +267,11 @@ def compute_fisher_scores(model, calibration_data, device="cuda", mlp_only=False
     for name in fisher_scores:
         fisher_scores[name] /= n_batches
 
+    # Move scores to CPU before normalization to avoid GPU OOM on large models
+    print("  Moving Fisher scores to CPU...")
+    for name in fisher_scores:
+        fisher_scores[name] = fisher_scores[name].cpu()
+
     if normalize_per_layer:
         print("  Applying per-layer z-score normalization...")
         for name in fisher_scores:

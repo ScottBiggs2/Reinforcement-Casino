@@ -15,7 +15,6 @@ class SNIPScorer:
         model.eval()
         model.zero_grad(set_to_none=True)
 
-        total_loss = torch.tensor(0.0, device=device)
         n_batches  = 0
 
         for i in range(0, len(chosen_texts), batch_size):
@@ -37,10 +36,9 @@ class SNIPScorer:
                 attention_mask=attention_mask,
                 labels=labels,
             )
-            total_loss = total_loss + out.loss
+            # Backward per batch to avoid retaining the full computation graph in memory
+            (out.loss / max(len(chosen_texts) // batch_size, 1)).backward()
             n_batches  += 1
-
-        (total_loss / max(n_batches, 1)).backward()
 
         scores = {}
         with torch.no_grad():
