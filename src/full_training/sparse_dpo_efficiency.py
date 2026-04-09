@@ -106,9 +106,8 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
-        device_map="auto"
+        device_map=None
     )
-    if hasattr(model, "to") and device.type == "cuda": model.to(device)
     model.config.use_cache = False
     
     # Mask Manager

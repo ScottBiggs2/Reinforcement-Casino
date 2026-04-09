@@ -220,7 +220,7 @@ def compute_momentum_mask_streaming(
             for name in param_names:
                 if name in curr_deltas and name in prev_deltas:
                     velocity = curr_deltas[name] - prev_deltas[name]
-                    velocity_window[name].append(velocity)
+                    velocity_window[name].append(velocity.cpu())
                     
                     # Keep only last 'window_size' velocities
                     if len(velocity_window[name]) > window_size:
@@ -246,7 +246,7 @@ def compute_momentum_mask_streaming(
             continue
         
         # Stack velocities on the score device.
-        vel_stack = torch.stack(velocity_window[name])
+        vel_stack = torch.stack(velocity_window[name]).to(score_device)
         
         mean_velocity = vel_stack.mean(dim=0)
         std_velocity = vel_stack.std(dim=0) + 1e-8
