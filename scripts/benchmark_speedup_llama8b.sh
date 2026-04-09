@@ -42,7 +42,7 @@ echo "GPU:      ${CUDA_VISIBLE_DEVICES:-auto}"
 source "$HOME/miniconda/etc/profile.d/conda.sh" 2>/dev/null || source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null
 conda activate /home/$USER/.conda/envs/rl_casino || conda activate /scratch/$USER/conda_envs/rl_casino
 
-export PYTHONPATH="$(pwd):$PYTHONPATH"
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
 export PYTHONPATH="/scratch/$USER/pip_packages:$PYTHONPATH"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
