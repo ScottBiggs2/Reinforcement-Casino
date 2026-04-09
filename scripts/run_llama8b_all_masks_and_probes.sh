@@ -37,8 +37,8 @@ WARM_DPO_MOMENTUM="${SCRATCH_ROOT}/rl_casino_masks/llama8b/warm_momentum_step50_
 # Fisher warm DPO — still queued; probes involving it will be skipped until it exists
 WARM_DPO_FISHER="${SCRATCH_ROOT}/rl_casino_masks/llama8b/warm_fisher_step50_sp97.5.pt"
 
-# Existing GRPO deltas (most recent successful run)
-GRPO_DELTA_DIR="${GRPO_DELTA_DIR:-${SCRATCH_ROOT}/rl_casino_outputs/llama8b_dpo_mask_grpo_dense_baseline_4gpu_20260408_022221/deltas}"
+# Existing GRPO deltas (1gpu run with deltas up to step 200)
+GRPO_DELTA_DIR="${GRPO_DELTA_DIR:-${SCRATCH_ROOT}/rl_casino_outputs/llama8b_dpo_mask_grpo_dense_baseline_1gpu_20260408_044634/deltas/meta_llama_llama_3_1_8b_instruct_math_220k_grpo_dense}"
 
 # New output dirs
 COLD_MASK_DIR="${COLD_MASK_DIR:-${SCRATCH_ROOT}/rl_casino_masks/llama8b_cold}"
