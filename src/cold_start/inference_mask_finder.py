@@ -221,7 +221,8 @@ def compute_fisher_scores(model, calibration_data, device="cuda", mlp_only=False
             continue
         if not param.requires_grad:
             continue
-        fisher_scores[name] = torch.zeros_like(param, dtype=torch.float32)
+        # Accumulate on CPU to avoid GPU OOM on large models (e.g. 8B on V100 32GB)
+        fisher_scores[name] = torch.zeros(param.shape, dtype=torch.float32, device="cpu")
         scored_params[name] = param
 
     print(f"  Scoring {len(fisher_scores)} parameter tensors")
@@ -258,7 +259,7 @@ def compute_fisher_scores(model, calibration_data, device="cuda", mlp_only=False
         with torch.no_grad():
             for name, param in scored_params.items():
                 if param.grad is not None:
-                    fisher_scores[name] += param.grad.float().pow(2)
+                    fisher_scores[name] += param.grad.float().pow(2).cpu()
 
         n_batches += 1
         batch_start = batch_end
@@ -266,11 +267,6 @@ def compute_fisher_scores(model, calibration_data, device="cuda", mlp_only=False
     print(f"\n  Normalizing by {n_batches} mini-batches ({total_samples} samples)...")
     for name in fisher_scores:
         fisher_scores[name] /= n_batches
-
-    # Move scores to CPU before normalization to avoid GPU OOM on large models
-    print("  Moving Fisher scores to CPU...")
-    for name in fisher_scores:
-        fisher_scores[name] = fisher_scores[name].cpu()
 
     if normalize_per_layer:
         print("  Applying per-layer z-score normalization...")
