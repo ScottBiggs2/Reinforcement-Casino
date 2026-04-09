@@ -67,7 +67,7 @@ cat > "$JOB1_SCRIPT" << EOF
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:h200:1
 #SBATCH --mem=128G
 #SBATCH --time=04:00:00
 #SBATCH --output=logs/llama8b_cold_masks_%j.out
@@ -127,7 +127,7 @@ cat > "$JOB2_SCRIPT" << EOF
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:h200:1
 #SBATCH --mem=128G
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/llama8b_warm_grpo_%j.out
@@ -187,7 +187,7 @@ cat > "$JOB3_SCRIPT" << EOF
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:a100:1
+#SBATCH --gres=gpu:h200:1
 #SBATCH --mem=128G
 #SBATCH --time=06:00:00
 #SBATCH --output=logs/llama8b_probes_%j.out
