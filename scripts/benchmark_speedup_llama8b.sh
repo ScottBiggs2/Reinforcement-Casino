@@ -18,7 +18,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=08:00:00
 
 set -euo pipefail
 
@@ -63,7 +63,7 @@ echo "HF_HOME:  $HF_HOME"
 # ── Shared Config ───────────────────────────────────────────────────────────
 MODEL="meta-llama/Llama-3.1-8B-Instruct"
 DATASET="math-220k"
-N_STEPS=50
+N_STEPS=20
 SUBSET=512
 BATCH_SIZE=1
 GRAD_ACCUM=8
