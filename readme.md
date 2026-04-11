@@ -538,8 +538,23 @@ sbatch scripts/run_evals_slurm.sh \
 
 ```
 
-Job States: 
-5530469: Warm Fisher
-5530482: Warm Magnitude
-5530495: Warm Momentum
-5530552: Dense Baseline
+# Core paper hyperparameters matching (Tulu3 DPO settings scaled for a single H200)
+export NUM_STEPS_DPO=1000
+export DPO_LEARNING_RATE=5e-7
+export DPO_WARMUP_RATIO=0.1
+export DPO_MAX_LENGTH=1024
+export DPO_MAX_PROMPT_LENGTH=512  
+export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=2
+export DPO_GRADIENT_ACCUMULATION_STEPS=64
+export DPO_GRADIENT_CHECKPOINTING=1
+
+# Mask metrics and CPU-offloading parameters
+export RL_CASINO_WARM_MASK_SCORE_DEVICE="cpu"
+export TARGET_STEP_DPO=200
+export DELTA_LOG_END_STEP=200
+export RUN_MASK_CKA=1
+export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=0
+
+# Standardized launch
+export PIPELINE_RUN_ID="tulu3_1000_h200_fresh_0408"
+bash scripts/submit_pipeline_chain.sh
