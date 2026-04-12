@@ -525,7 +525,21 @@ def main(args):
             min_layer_keep_ratio=args.min_layer_keep_ratio,
         )
         method_suffix = "fisher"
-    
+
+    elif args.method == "ground_truth":
+        # "Ground truth" mask: absolute magnitude of the final-step delta only.
+        # This captures the net drift from initial weights to final checkpoint —
+        # the ideal oracle for what actually changed end-to-end.
+        masks = compute_ground_truth_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            device,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+        method_suffix = "ground_truth"
+
     else:
         print(f"ERROR: Unknown method: {args.method}", file=sys.stderr)
         sys.exit(1)
@@ -594,7 +608,7 @@ if __name__ == "__main__":
         description="GPU-accelerated sparse mask generation with streaming for large models"
     )
     parser.add_argument("--delta_log_dir", type=str, default="./delta_logs")
-    parser.add_argument("--method", type=str, choices=["magnitude", "momentum", "fisher"], default="magnitude")
+    parser.add_argument("--method", type=str, choices=["magnitude", "momentum", "fisher", "ground_truth"], default="magnitude")
     parser.add_argument("--sparsity_percent", type=float, default=90.0)
     parser.add_argument("--target_step", type=int, default=None)
     parser.add_argument("--momentum_window", type=int, default=5)
