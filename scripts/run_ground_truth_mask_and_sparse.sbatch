@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --partition=gpu
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --time=03:00:00
 #SBATCH --mem=128G
 #SBATCH --job-name=gt_mask_sparse
