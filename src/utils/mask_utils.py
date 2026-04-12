@@ -139,10 +139,12 @@ def _apply_tie_break_noise_inplace(
     tie_break_noise_scale: float,
 ) -> None:
     scale = _compute_noise_scale(valid_scores, tie_break_noise_scale)
+    # Hardcoded seed for reproducibility during tie-breaking
+    torch.manual_seed(42)
     for name, score in valid_scores.items():
         noise = torch.randn_like(score) * scale
         valid_scores[name] = score + noise
-    print(f"Applied tie-break noise (scale={scale:.3e})")
+    print(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
 
 
 def _select_floor_indices(
@@ -383,10 +385,10 @@ def _create_mask_global_chunked(
                     continue
                 available_chunk = chunk[available]
                 available_idx = torch.nonzero(available, as_tuple=False).squeeze(-1) + start
-                above_mask = available_chunk > hi
+                above_mask = available_chunk > (hi + 1e-9)
                 if torch.any(above_mask):
                     above_parts.append(available_idx[above_mask])
-                boundary_mask = (available_chunk >= lo) & (available_chunk <= hi)
+                boundary_mask = (available_chunk >= (lo - 1e-9)) & (available_chunk <= (hi + 1e-9))
                 if torch.any(boundary_mask):
                     boundary_idx = available_idx[boundary_mask]
                     boundary_parts.append((boundary_idx, available_chunk[boundary_mask]))
@@ -475,8 +477,9 @@ def _create_mask_global_flat(
 
     if add_tie_break_noise:
         scale = max(all_scores.abs().max().item() * tie_break_noise_scale, 1e-12)
+        torch.manual_seed(42)
         all_scores = all_scores + torch.randn_like(all_scores) * scale
-        print(f"Applied tie-break noise (scale={scale:.3e})")
+        print(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
 
     global_mask_flat = torch.zeros_like(all_scores, dtype=torch.bool)
 
@@ -545,7 +548,7 @@ def create_mask_from_scores_gpu_efficient(
     sparsity_percent,
     device='cuda',
     add_tie_break_noise: bool = True,
-    tie_break_noise_scale: float = 1e-10,
+    tie_break_noise_scale: float = 1e-6,
     min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
     local_pool: bool = False,
 ):
