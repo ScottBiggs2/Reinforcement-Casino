@@ -82,7 +82,7 @@ def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_nois
 
     for name, score in scores_dict.items():
         if score is None or score.numel() == 0:
-            masks[name] = torch.zeros_like(score, dtype=torch.float32).cpu()
+            masks[name] = torch.zeros_like(score, dtype=torch.bool).cpu()
             continue
 
         s = score.to(device=device, dtype=torch.float32)
@@ -95,7 +95,7 @@ def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_nois
             flat = flat + torch.randn_like(flat) * scale
 
         idx = _topk_indices_safe(flat, k=n_keep, largest=True)
-        mask_flat = torch.zeros(n, device=device, dtype=torch.float32)
+        mask_flat = torch.zeros(n, device=device, dtype=torch.bool)
         mask_flat[idx] = 1.0
 
         masks[name] = mask_flat.reshape(score.shape).cpu()
@@ -434,7 +434,7 @@ def _create_mask_global_chunked(
         if idx % 50 == 0:
             print(f"  Processing layer {idx+1}/{len(masks_bool)}")
         total_kept += int(mask.sum().item())
-        masks[name] = mask.to(dtype=torch.float32)
+        masks[name] = mask.to(dtype=torch.bool)
 
     actual_sparsity = 100.0 - (total_kept / total_params * 100.0)
     print("\nVerification:")
@@ -532,7 +532,7 @@ def _create_mask_global_flat(
             print(f"  Processing layer {idx+1}/{len(offsets)}")
         m = global_mask_flat[start:end].reshape(shape)
         total_kept += int(m.sum().item())
-        masks[name] = m.to(dtype=torch.float32).cpu()
+        masks[name] = m.to(dtype=torch.bool).cpu()
 
     actual_sparsity = 100.0 - (total_kept / total_params * 100.0)
     print("\nVerification:")
@@ -774,11 +774,15 @@ def invert_mask_tensors(masks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tenso
     the result has 1 where the original had 0 and 0 where the original had 1 (same dtype/shape
     per tensor, on CPU like typical saved masks).
     """
-    inverted: Dict[str, torch.Tensor] = {}
     for name, m in masks.items():
-        m32 = m.detach().cpu().to(torch.float32)
-        inv = 1.0 - m32
-        inverted[name] = inv.to(dtype=m.dtype)
+        # bool mask inversion: use logical NOT
+        if m.dtype == torch.bool:
+            inverted[name] = ~m.detach().cpu()
+        else:
+            # Fallback for old float masks
+            m32 = m.detach().cpu().to(torch.float32)
+            inv = (1.0 - m32).to(dtype=m.dtype)
+            inverted[name] = inv
     return inverted
 
 

@@ -45,9 +45,9 @@ class SparseMaskManager:
             mask = mask.to(device, non_blocking=True)
             self.masks[name] = mask
             
-            # Compute statistics
-            sparsity = (mask == 0.0).sum().item() / mask.numel()  # % of zeros
-            nonzero_count = (mask != 0.0).sum().item()
+            # Compute statistics (handle both float and bool)
+            sparsity = (mask == 0).sum().item() / mask.numel()  # % of zeros
+            nonzero_count = (mask != 0).sum().item()
             
             self.mask_stats[name] = {
                 'shape': tuple(mask.shape),
