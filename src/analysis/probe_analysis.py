@@ -50,12 +50,17 @@ from cold_start.utils.activation_hooks import FeatureExtractor
 # the previous 30-per-class hand-written set.
 # ---------------------------------------------------------------------------
 
-DEFAULT_SAMPLES_PER_CLASS = 200
-
-def _load_hf_probe_datasets(samples_per_class: int = DEFAULT_SAMPLES_PER_CLASS,
+def _load_hf_probe_datasets(samples_per_class: int = None,
                             cache_dir: str = None, seed: int = 42) -> dict:
     """Load probe datasets from HuggingFace and return in the same format
     as the old hardcoded PROBE_DATASETS dict.
+
+    Args:
+        samples_per_class: Max samples per class. None = use all available data
+                           (balanced to the smallest class across all properties).
+        cache_dir: HuggingFace datasets cache directory.
+        seed: Random seed for shuffling order (not for subsetting when using
+              full data).
 
     Returns:
         {property_name: {"description": str, "examples": [(text, label), ...]}}
@@ -63,135 +68,109 @@ def _load_hf_probe_datasets(samples_per_class: int = DEFAULT_SAMPLES_PER_CLASS,
     from datasets import load_dataset
 
     rng = random.Random(seed)
-    n = samples_per_class
 
     datasets = {}
 
     # ── 1. Syntax: BLiMP subject-verb agreement ──────────────────────────
-    # BLiMP provides minimal pairs; each row has a good and bad sentence.
-    print(f"[data] Loading syntax probe (BLiMP subject_verb_number_local)...")
+    print(f"[data] Loading syntax probe (BLiMP regular_plural_subject_verb_agreement_1)...")
     try:
         blimp = load_dataset(
             "nyu-mll/blimp", "regular_plural_subject_verb_agreement_1",
             split="train", cache_dir=cache_dir, trust_remote_code=True,
         )
-        # good sentence → 1 (grammatical), bad sentence → 0 (ungrammatical)
         good = [(row["sentence_good"], 1) for row in blimp]
         bad = [(row["sentence_bad"], 0) for row in blimp]
-        rng.shuffle(good)
-        rng.shuffle(bad)
-        examples = good[:n] + bad[:n]
-        rng.shuffle(examples)
         datasets["syntax"] = {
             "description": "Subject-verb agreement grammaticality (BLiMP; 0=bad, 1=good)",
-            "examples": examples,
+            "pos": good, "neg": bad,
         }
-        print(f"[data]   syntax: {len(examples)} examples ({n} per class)")
+        print(f"[data]   syntax: {len(good)} good, {len(bad)} bad")
     except Exception as e:
         print(f"[data]   WARNING: BLiMP load failed ({e}), falling back to CoLA")
         cola = load_dataset("glue", "cola", split="validation", cache_dir=cache_dir)
         pos = [(row["sentence"], 1) for row in cola if row["label"] == 1]
         neg = [(row["sentence"], 0) for row in cola if row["label"] == 0]
-        rng.shuffle(pos)
-        rng.shuffle(neg)
-        k = min(n, len(pos), len(neg))
-        examples = pos[:k] + neg[:k]
-        rng.shuffle(examples)
         datasets["syntax"] = {
             "description": "Linguistic acceptability (CoLA; 0=unacceptable, 1=acceptable)",
-            "examples": examples,
+            "pos": pos, "neg": neg,
         }
-        print(f"[data]   syntax (CoLA fallback): {len(examples)} examples ({k} per class)")
+        print(f"[data]   syntax (CoLA fallback): {len(pos)} pos, {len(neg)} neg")
 
     # ── 2. Semantics: SST-2 sentiment ────────────────────────────────────
     print(f"[data] Loading semantics probe (SST-2)...")
     sst2 = load_dataset("glue", "sst2", split="validation", cache_dir=cache_dir)
     pos = [(row["sentence"], 1) for row in sst2 if row["label"] == 1]
     neg = [(row["sentence"], 0) for row in sst2 if row["label"] == 0]
-    rng.shuffle(pos)
-    rng.shuffle(neg)
-    k = min(n, len(pos), len(neg))
-    examples = pos[:k] + neg[:k]
-    rng.shuffle(examples)
     datasets["semantics"] = {
         "description": "Sentiment polarity (SST-2; 0=negative, 1=positive)",
-        "examples": examples,
+        "pos": pos, "neg": neg,
     }
-    print(f"[data]   semantics: {len(examples)} examples ({k} per class)")
+    print(f"[data]   semantics: {len(pos)} pos, {len(neg)} neg")
 
     # ── 3. Factual: AG News (World=0 vs Sci/Tech=1) ─────────────────────
     print(f"[data] Loading factual probe (AG News)...")
     agnews = load_dataset("fancyzhx/ag_news", split="test", cache_dir=cache_dir)
-    # AG News labels: 0=World, 1=Sports, 2=Business, 3=Sci/Tech
     world = [(row["text"], 0) for row in agnews if row["label"] == 0]
     scitech = [(row["text"], 1) for row in agnews if row["label"] == 3]
-    rng.shuffle(world)
-    rng.shuffle(scitech)
-    k = min(n, len(world), len(scitech))
-    examples = world[:k] + scitech[:k]
-    rng.shuffle(examples)
     datasets["factual"] = {
         "description": "Topic classification (AG News; 0=World, 1=Sci/Tech)",
-        "examples": examples,
+        "pos": scitech, "neg": world,
     }
-    print(f"[data]   factual: {len(examples)} examples ({k} per class)")
+    print(f"[data]   factual: {len(world)} world, {len(scitech)} sci/tech")
 
     # ── 4. Math: GSM8K-style arithmetic (correct vs incorrect) ───────────
     print(f"[data] Loading math probe (GSM8K)...")
     try:
         gsm8k = load_dataset("openai/gsm8k", "main", split="test", cache_dir=cache_dir)
-        # Use the question as text; label 1 = real question, 0 = shuffled question
         questions = [row["question"] for row in gsm8k]
         rng.shuffle(questions)
-        real_qs = [(q, 1) for q in questions[:n]]
-        # Create "wrong" examples by shuffling sentences within questions
+        # Split in half: first half = real, second half = shuffled
+        half = len(questions) // 2
+        real_qs = [(q, 1) for q in questions[:half]]
         fake_qs = []
-        for q in questions[n:n*2]:
+        for q in questions[half:half * 2]:
             sentences = q.split(". ")
             rng.shuffle(sentences)
             fake_qs.append((". ".join(sentences), 0))
-        k = min(n, len(real_qs), len(fake_qs))
-        examples = real_qs[:k] + fake_qs[:k]
-        rng.shuffle(examples)
         datasets["math"] = {
             "description": "Math coherence (GSM8K; 0=shuffled, 1=coherent)",
-            "examples": examples,
+            "pos": real_qs, "neg": fake_qs,
         }
-        print(f"[data]   math: {len(examples)} examples ({k} per class)")
+        print(f"[data]   math: {len(real_qs)} real, {len(fake_qs)} shuffled")
     except Exception as e:
         print(f"[data]   WARNING: GSM8K load failed ({e}), using MMLU abstract_algebra")
         mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test", cache_dir=cache_dir)
-        # Use question text; label = whether answer is A (0) or not (1) — simple binary split
         classA = [(row["question"], 0) for row in mmlu if row["answer"] == 0]
         classB = [(row["question"], 1) for row in mmlu if row["answer"] != 0]
-        rng.shuffle(classA)
-        rng.shuffle(classB)
-        k = min(n, len(classA), len(classB))
-        examples = classA[:k] + classB[:k]
-        rng.shuffle(examples)
         datasets["math"] = {
             "description": "Math reasoning (MMLU abstract_algebra; binary split)",
+            "pos": classB, "neg": classA,
+        }
+        print(f"[data]   math (MMLU fallback): {len(classA)} classA, {len(classB)} classB")
+
+    # ── Balance: use full data, equalized to smallest class ──────────────
+    # Find the global min class size across all properties
+    global_min = min(
+        min(len(d["pos"]), len(d["neg"])) for d in datasets.values()
+    )
+    if samples_per_class is not None:
+        global_min = min(global_min, samples_per_class)
+
+    print(f"[data] Balancing all properties to {global_min} per class "
+          f"({global_min * 2} per property, {global_min * 2 * len(datasets)} total)")
+
+    result = {}
+    for prop_name, d in datasets.items():
+        pos = d["pos"][:global_min]
+        neg = d["neg"][:global_min]
+        examples = pos + neg
+        rng.shuffle(examples)
+        result[prop_name] = {
+            "description": d["description"],
             "examples": examples,
         }
-        print(f"[data]   math (MMLU fallback): {len(examples)} examples ({k} per class)")
 
-    # ── Equalize sizes across properties ─────────────────────────────────
-    min_total = min(len(d["examples"]) for d in datasets.values())
-    # Make sure it's even (balanced)
-    min_per_class = min_total // 2
-    for prop_name in datasets:
-        exs = datasets[prop_name]["examples"]
-        class0 = [e for e in exs if e[1] == 0][:min_per_class]
-        class1 = [e for e in exs if e[1] == 1][:min_per_class]
-        balanced = class0 + class1
-        rng.shuffle(balanced)
-        datasets[prop_name]["examples"] = balanced
-
-    final_n = len(next(iter(datasets.values()))["examples"])
-    print(f"[data] All properties equalized to {final_n} examples "
-          f"({final_n // 2} per class)")
-
-    return datasets
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -514,8 +493,8 @@ def parse_args():
     p.add_argument("--max_length", type=int, default=128)
     p.add_argument("--cv_folds", type=int, default=5,
                    help="Cross-validation folds for probe accuracy (default: 5)")
-    p.add_argument("--samples_per_class", type=int, default=DEFAULT_SAMPLES_PER_CLASS,
-                   help=f"Samples per class per property from HF datasets (default: {DEFAULT_SAMPLES_PER_CLASS})")
+    p.add_argument("--samples_per_class", type=int, default=None,
+                   help="Samples per class per property (default: None = use all available data)")
     p.add_argument("--dataset_cache_dir", default=None,
                    help="HuggingFace datasets cache directory")
     p.add_argument("--probe_cache", default=None,
