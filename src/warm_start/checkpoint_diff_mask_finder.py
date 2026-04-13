@@ -18,13 +18,22 @@ from src.utils.mask_utils import (
 
 def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
     """
-    Loads a state dict from either a HuggingFace model directory or a .pt file.
+    Loads a state dict from a .pt file, .safetensors file, or a HuggingFace model (local/remote).
     """
-    if os.path.isdir(path):
-        print(f"Loading HuggingFace model from directory: {path}")
-        from transformers import AutoModelForCausalLM
-        # Load only the state dict to save memory if possible, 
-        # but AutoModel handles sharding and naming conventions better.
+    # 1. Check if it's a direct file path (.pt or .safetensors)
+    if os.path.isfile(path) and path.endswith((".pt", ".safetensors")):
+        print(f"Loading state dict from file: {path}")
+        if path.endswith(".safetensors"):
+            from safetensors.torch import load_file
+            return load_file(path, device=device)
+        else:
+            return torch.load(path, map_location=device, weights_only=True)
+    
+    # 2. Otherwise, treat it as a HuggingFace model (local directory or Hub ID)
+    # transformers.AutoModel.from_pretrained handles both local paths and Hub IDs.
+    print(f"Loading HuggingFace model: {path}")
+    from transformers import AutoModelForCausalLM
+    try:
         model = AutoModelForCausalLM.from_pretrained(
             path, 
             torch_dtype=torch.float32, # Load as fp32 for subtraction accuracy
@@ -37,15 +46,9 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
         del model
         gc.collect()
         return state_dict
-    elif os.path.isfile(path):
-        print(f"Loading state dict from file: {path}")
-        if path.endswith(".safetensors"):
-            from safetensors.torch import load_file
-            return load_file(path, device=device)
-        else:
-            return torch.load(path, map_location=device, weights_only=True)
-    else:
-        raise ValueError(f"Path not found: {path}")
+    except Exception as e:
+        raise ValueError(f"Could not load HuggingFace model or file from '{path}': {e}")
+
 
 def is_mlp_param(name):
     # MLP layer name patterns -- covers LLaMA, Gemma, Mistral, Qwen naming conventions
