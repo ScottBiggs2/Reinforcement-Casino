@@ -20,34 +20,57 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
     """
     Loads a state dict from a .pt file, .safetensors file, or a HuggingFace model (local/remote).
     """
-    # 1. Check if it's a direct file path (.pt or .safetensors)
-    if os.path.isfile(path) and path.endswith((".pt", ".safetensors")):
-        print(f"Loading state dict from file: {path}")
-        if path.endswith(".safetensors"):
-            from safetensors.torch import load_file
-            return load_file(path, device=device)
+    # 1. Check if it's a local file or directory that exists
+    if os.path.exists(path):
+        if os.path.isfile(path) and path.endswith((".pt", ".safetensors")):
+            print(f"Loading state dict from local file: {path}")
+            if path.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                return load_file(path, device=device)
+            else:
+                return torch.load(path, map_location=device, weights_only=True)
         else:
-            return torch.load(path, map_location=device, weights_only=True)
-    
-    # 2. Otherwise, treat it as a HuggingFace model (local directory or Hub ID)
-    # transformers.AutoModel.from_pretrained handles both local paths and Hub IDs.
-    print(f"Loading HuggingFace model: {path}")
+            # Treat as local HuggingFace directory
+            print(f"Loading local HuggingFace model directory: {path}")
+            from transformers import AutoModelForCausalLM
+            model = AutoModelForCausalLM.from_pretrained(
+                path, 
+                torch_dtype=torch.float32,
+                device_map=None,
+                low_cpu_mem_usage=True
+            )
+            state_dict = model.state_dict()
+            state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
+            del model
+            gc.collect()
+            return state_dict
+
+    # 2. If path doesn't exist locally, check if it might be a HuggingFace Hub ID
+    # Hub IDs usually have 0 or 1 slashes (e.g., 'gpt2' or 'meta-llama/Llama-2-7b')
+    if "/" in path and path.count("/") > 1:
+        raise FileNotFoundError(
+            f"Local path not found: '{path}'. \n"
+            f"If this is a local checkpoint, verify the path exists. \n"
+            f"HuggingFace Hub IDs typically don't have this many slashes."
+        )
+
+    print(f"Path not found locally, attempting HuggingFace Hub load: {path}")
     from transformers import AutoModelForCausalLM
     try:
         model = AutoModelForCausalLM.from_pretrained(
             path, 
-            torch_dtype=torch.float32, # Load as fp32 for subtraction accuracy
+            torch_dtype=torch.float32,
             device_map=None,
             low_cpu_mem_usage=True
         )
         state_dict = model.state_dict()
-        # Move to CPU explicitly and detach to be safe
         state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
         del model
         gc.collect()
         return state_dict
     except Exception as e:
         raise ValueError(f"Could not load HuggingFace model or file from '{path}': {e}")
+
 
 
 def is_mlp_param(name):
