@@ -208,6 +208,7 @@ LAYER_STRIDE=4    # Llama 8B has 32 layers
 BATCH_SIZE=4
 MAX_LENGTH=128
 PROBE_OUTPUT_DIR="${PROBE_OUTPUT_DIR}"
+PROBE_CACHE="\${PROBE_OUTPUT_DIR}/probe_dataset_cache.json"
 
 # Mask directories
 COLD="${COLD_MASK_DIR}"
@@ -219,6 +220,11 @@ WARM_DPO_MOM="${WARM_DPO_MOMENTUM}"
 WARM_DPO_FISH="${WARM_DPO_FISHER}"
 
 mkdir -p "\$PROBE_OUTPUT_DIR"
+
+# Clear stale results from previous runs (different probe samples)
+echo "Clearing old probe results for a clean re-run..."
+find "\$PROBE_OUTPUT_DIR" -name "probe_results.json" -delete 2>/dev/null || true
+rm -f "\$PROBE_CACHE"
 
 echo "=============================================="
 echo " Probe Analysis — Llama 8B — ALL mask pairs"
@@ -257,6 +263,7 @@ run_probe() {
     --layer_stride "\$LAYER_STRIDE" \\
     --batch_size "\$BATCH_SIZE" \\
     --max_length "\$MAX_LENGTH" \\
+    --probe_cache "\$PROBE_CACHE" \\
     --include_baseline || echo "WARNING: probe \$LABEL failed"
 }
 

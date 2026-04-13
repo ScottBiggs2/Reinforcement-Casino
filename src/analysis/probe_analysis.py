@@ -518,6 +518,9 @@ def parse_args():
                    help=f"Samples per class per property from HF datasets (default: {DEFAULT_SAMPLES_PER_CLASS})")
     p.add_argument("--dataset_cache_dir", default=None,
                    help="HuggingFace datasets cache directory")
+    p.add_argument("--probe_cache", default=None,
+                   help="Path to cached probe dataset JSON. If set, overrides auto-detection. "
+                        "Ensures all runs use identical probe samples.")
     return p.parse_args()
 
 
@@ -528,13 +531,35 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
-    # Load probe datasets from HuggingFace
+    # Load probe datasets (with disk caching for cross-run consistency)
     # ------------------------------------------------------------------
     cache_dir = args.dataset_cache_dir or os.environ.get("HF_DATASETS_CACHE")
-    PROBE_DATASETS = _load_hf_probe_datasets(
-        samples_per_class=args.samples_per_class,
-        cache_dir=cache_dir,
-    )
+    if args.probe_cache:
+        probe_cache_path = args.probe_cache
+    else:
+        probe_cache_path = os.path.join(args.output_dir, os.pardir, "probe_dataset_cache.json")
+        probe_cache_path = os.path.normpath(probe_cache_path)
+
+    if os.path.exists(probe_cache_path):
+        print(f"[data] Loading cached probe dataset from {probe_cache_path}")
+        with open(probe_cache_path) as f:
+            PROBE_DATASETS = json.load(f)
+        # Convert lists back to tuples
+        for prop in PROBE_DATASETS:
+            PROBE_DATASETS[prop]["examples"] = [
+                (t, l) for t, l in PROBE_DATASETS[prop]["examples"]
+            ]
+        print(f"[data] Loaded {len(PROBE_DATASETS)} properties from cache")
+    else:
+        PROBE_DATASETS = _load_hf_probe_datasets(
+            samples_per_class=args.samples_per_class,
+            cache_dir=cache_dir,
+        )
+        # Cache to disk for subsequent runs
+        os.makedirs(os.path.dirname(probe_cache_path), exist_ok=True)
+        with open(probe_cache_path, "w") as f:
+            json.dump(PROBE_DATASETS, f)
+        print(f"[data] Cached probe dataset → {probe_cache_path}")
 
     expected_n = None
     for prop_name, prop_data in PROBE_DATASETS.items():

@@ -36,34 +36,71 @@ def load_all_results(results_dir):
     return all_data
 
 
-def extract_mean_accuracies(all_data):
-    """Extract mean accuracy per (mask_name, property) across layers.
+def _baseline_fingerprint(prop_results: dict) -> str:
+    """Create a hashable fingerprint from baseline layer-level accuracies."""
+    parts = []
+    for prop in sorted(prop_results.keys()):
+        layer_vals = prop_results[prop]
+        # Round to avoid floating-point noise
+        vals_str = ",".join(f"{v:.4f}" for v in sorted(layer_vals.values()))
+        parts.append(f"{prop}:{vals_str}")
+    return "|".join(parts)
+
+
+def extract_mean_accuracies_grouped(all_data):
+    """Extract mean accuracy per (mask_name, property), grouped by baseline.
+
+    Different probe runs may use different random samples, producing different
+    baselines.  This function detects that and returns one group per unique
+    baseline so that delta computations are always against the correct reference.
 
     Returns:
-        masks: dict {mask_name: {property: mean_accuracy}}
-        baseline: {property: mean_accuracy}  (averaged across runs)
+        list of dicts, each with keys:
+            "baseline": {property: mean_accuracy}
+            "masks":    {mask_name: {property: mean_accuracy}}
+            "comparisons": [list of comparison_name strings in this group]
     """
-    masks = {}
-    baselines = defaultdict(list)
+    # First pass: identify baseline fingerprint per comparison
+    comparison_groups = defaultdict(list)  # fingerprint -> [comparison_name]
+    baseline_by_fp = {}  # fingerprint -> {prop: {layer: acc}}
 
     for comparison_name, data in all_data.items():
         for config_label, prop_results in data.items():
             config_clean = config_label.replace("\n", " ").strip()
-
-            accs = {}
-            for prop, layer_dict in prop_results.items():
-                vals = list(layer_dict.values())
-                accs[prop] = np.mean(vals)
-
             if "baseline" in config_clean.lower() or "no mask" in config_clean.lower():
-                for prop, val in accs.items():
-                    baselines[prop].append(val)
-            else:
+                fp = _baseline_fingerprint(prop_results)
+                comparison_groups[fp].append(comparison_name)
+                baseline_by_fp[fp] = prop_results
+                break
+
+    # Second pass: collect masks per group
+    groups = []
+    for fp, comp_names in comparison_groups.items():
+        bl_prop_results = baseline_by_fp[fp]
+        baseline = {}
+        for prop, layer_dict in bl_prop_results.items():
+            baseline[prop] = np.mean(list(layer_dict.values()))
+
+        masks = {}
+        for comp_name in comp_names:
+            data = all_data[comp_name]
+            for config_label, prop_results in data.items():
+                config_clean = config_label.replace("\n", " ").strip()
+                if "baseline" in config_clean.lower() or "no mask" in config_clean.lower():
+                    continue
+                accs = {}
+                for prop, layer_dict in prop_results.items():
+                    accs[prop] = np.mean(list(layer_dict.values()))
                 if config_clean not in masks:
                     masks[config_clean] = accs
 
-    baseline = {prop: np.mean(vals) for prop, vals in baselines.items()}
-    return masks, baseline
+        groups.append({
+            "baseline": baseline,
+            "masks": masks,
+            "comparisons": comp_names,
+        })
+
+    return groups
 
 
 def plot_summary_bar(masks, baseline, properties, output_path):
@@ -316,29 +353,104 @@ def main():
     all_data = load_all_results(args.results_dir)
     print(f"[summary] Found {len(all_data)} comparisons")
 
-    masks, baseline = extract_mean_accuracies(all_data)
-    print(f"[summary] {len(masks)} unique mask configurations")
-    print(f"[summary] Baseline: {baseline}")
+    groups = extract_mean_accuracies_grouped(all_data)
+    print(f"[summary] Detected {len(groups)} baseline group(s)")
 
     properties = ["syntax", "semantics", "factual", "math"]
 
-    # 1. Summary bar chart
-    plot_summary_bar(masks, baseline, properties,
-                     os.path.join(output_dir, "summary_bar_chart.png"))
+    for gi, group in enumerate(groups):
+        baseline = group["baseline"]
+        masks = group["masks"]
+        comps = group["comparisons"]
 
-    # 2. Delta heatmap
-    plot_delta_heatmap(masks, baseline, properties,
-                       os.path.join(output_dir, "summary_delta_heatmap.png"))
+        if len(groups) == 1:
+            prefix = ""
+            grp_dir = output_dir
+        else:
+            prefix = f"group{gi + 1}_"
+            grp_dir = os.path.join(output_dir, f"group{gi + 1}")
+            os.makedirs(grp_dir, exist_ok=True)
 
-    # 3. DPO vs GRPO scatter
-    plot_dpo_vs_grpo(masks, properties,
-                     os.path.join(output_dir, "summary_dpo_vs_grpo.png"))
+        bl_syntax = baseline.get("syntax", 0)
+        print(f"\n[summary] Group {gi + 1}: {len(masks)} masks, "
+              f"baseline syntax={bl_syntax:.4f}")
+        print(f"  Comparisons: {comps}")
+        print(f"  Masks: {list(masks.keys())}")
 
-    # 4. Grouped comparison (Cold/Warm × DPO/GRPO)
-    plot_grouped_comparison(masks, baseline, properties,
-                            os.path.join(output_dir, "summary_grouped_comparison.png"))
+        plot_summary_bar(masks, baseline, properties,
+                         os.path.join(grp_dir, f"{prefix}summary_bar_chart.png"))
+
+        plot_delta_heatmap(masks, baseline, properties,
+                           os.path.join(grp_dir, f"{prefix}summary_delta_heatmap.png"))
+
+        plot_dpo_vs_grpo(masks, properties,
+                         os.path.join(grp_dir, f"{prefix}summary_dpo_vs_grpo.png"))
+
+        plot_grouped_comparison(masks, baseline, properties,
+                                os.path.join(grp_dir, f"{prefix}summary_grouped_comparison.png"))
+
+    # Also generate a combined plot with ALL masks, using per-mask correct baseline
+    if len(groups) > 1:
+        print(f"\n[summary] Generating combined delta heatmap (all groups)...")
+        all_masks = {}
+        all_baselines = {}  # mask_name -> its correct baseline
+        for group in groups:
+            for mask_name, accs in group["masks"].items():
+                all_masks[mask_name] = accs
+                all_baselines[mask_name] = group["baseline"]
+        _plot_combined_delta(all_masks, all_baselines, properties,
+                             os.path.join(output_dir, "combined_delta_heatmap.png"))
 
     print(f"\n[summary] All plots saved to: {output_dir}/")
+
+
+def _plot_combined_delta(masks, mask_baselines, properties, output_path):
+    """Delta heatmap where each mask uses its own correct baseline."""
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+
+    mask_names = list(masks.keys())
+    n_masks = len(mask_names)
+    n_props = len(properties)
+
+    mat = np.full((n_masks, n_props), np.nan)
+    for mi, m in enumerate(mask_names):
+        bl = mask_baselines[m]
+        for pi, prop in enumerate(properties):
+            mat[mi, pi] = masks[m].get(prop, 0.5) - bl.get(prop, 0.5)
+
+    abs_max = max(0.05, np.nanmax(np.abs(mat)))
+    cmap = plt.cm.RdBu
+    norm = mcolors.TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
+
+    fig, ax = plt.subplots(figsize=(8, max(6, n_masks * 0.5 + 2)))
+    im = ax.imshow(mat, cmap=cmap, norm=norm, aspect="auto")
+
+    ax.set_xticks(range(n_props))
+    ax.set_xticklabels([p.capitalize() for p in properties], fontsize=12, fontweight="bold")
+    ax.set_yticks(range(n_masks))
+    ax.set_yticklabels(mask_names, fontsize=9)
+
+    for mi in range(n_masks):
+        for pi in range(n_props):
+            val = mat[mi, pi]
+            if np.isnan(val):
+                continue
+            sign = "+" if val > 0 else ""
+            txt_color = "white" if abs(val) > abs_max * 0.6 else "black"
+            ax.text(pi, mi, f"{sign}{val:.3f}", ha="center", va="center",
+                    fontsize=9, color=txt_color, fontweight="bold")
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label("Δ accuracy (mask − own baseline)", fontsize=11)
+
+    ax.set_title("Knowledge Retention: Δ from Baseline (per-group corrected)\n"
+                 "(Llama 3.1 8B, 97.5% Sparsity)",
+                 fontsize=14, fontweight="bold", pad=15)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    print(f"[summary] Saved combined delta heatmap → {output_path}")
+    plt.close()
 
 
 if __name__ == "__main__":
