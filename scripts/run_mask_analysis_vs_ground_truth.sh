@@ -2,11 +2,9 @@
 # Full mask analysis suite vs a single ground-truth mask: Jaccard, CKA, per-layer CSV
 # (sparsity + effective rank when enabled), JSON→CSV rollup, and plot_layer_metrics PNGs.
 #
-# Random "null" baselines on the charts come from plot_layer_metrics_csv.py:
-#   - closed-form E[Jaccard] for independent Bernoulli masks at each layer's marginals (always)
-#   - optional Monte Carlo band only if PLOT_RANDOM_TRIALS >= 2 (default here: 1 = theory only, faster)
-# The CKA subplot overlays the same Jaccard null as a comparable vertical scale
-# (explicitly not E[CKA] under a random activation null — see plot titles).
+# Plot baselines (plot_layer_metrics_csv.py): theoretical only — no Monte Carlo.
+#   Jaccard: E[J] and ±1σ from closed-form mean and Var (ρ = keep density, N = tensor length).
+#   CKA null: E = 1/(N−1), σ² = 2/(N−1)² with N = total masked params (sum of n_params) unless overridden.
 #
 # Default paths match the Northeastern scratch layout; override with env vars.
 #
@@ -56,7 +54,6 @@ export PIPELINE_SKIP_SPARSE_LAUNCH="${PIPELINE_SKIP_SPARSE_LAUNCH:-1}"
 export RUN_MASK_CKA="${RUN_MASK_CKA:-1}"
 export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK="${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-0}"
 
-# 0 or 1 = closed-form E[Jaccard] only (no MC loop per layer). Use >=2 to draw the orange band.
 export PLOT_RANDOM_TRIALS="${PLOT_RANDOM_TRIALS:-1}"
 
 # Skip complement / inverse masks when scanning (set to 1 to include them).
@@ -220,11 +217,10 @@ run_one_cmp_step "plot_layer_metrics_csv" \
   "$TRAIN_PY" src/cold_start/plot_layer_metrics_csv.py \
     --input-dir "$COMP_DIR" --recursive --pattern "layer_metrics_*.csv" \
     --output-dir "$PLOT_DIR" \
-    --random-trials "${PLOT_RANDOM_TRIALS}" \
+    --random-trials 1 \
     --random-seed 42 \
     --y-scale "${PLOT_Y_SCALE:-log}" \
-    --cka-n-samples "${CKA_N_SAMPLES:-64}" \
-    --cka-null-mode "${CKA_NULL_MODE:-inv_sq}" \
+    ${CKA_TOTAL_N:+--cka-total-n "${CKA_TOTAL_N}"} \
     --log-y-floor "${PLOT_LOG_Y_FLOOR:-1e-12}" \
     || cmp_failures=$((cmp_failures + 1))
 

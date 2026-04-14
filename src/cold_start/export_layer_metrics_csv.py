@@ -23,6 +23,38 @@ import torch
 
 
 LAYER_RE = re.compile(r"model\.layers\.(\d+)\.")
+DECODER_BLOCK_RE = re.compile(r"^(model\.layers\.\d+)")
+
+
+def resolve_cka_for_canonical_layer(
+    canonical: str,
+    per_layer_cka: Dict[str, float],
+) -> float:
+    """Map a mask tensor name to CKA from ``mask_to_cka`` JSON.
+
+    CKA hooks attach to ``*.mlp.down_proj`` modules (one scalar per decoder layer).
+    Mask CSV rows use per-weight names (``...q_proj``, ``...down_proj``, ...). We
+    broadcast the down_proj CKA to every tensor in the same ``model.layers.L`` block.
+    """
+    if canonical in per_layer_cka:
+        return float(per_layer_cka[canonical])
+
+    m = DECODER_BLOCK_RE.match(canonical)
+    if not m:
+        return float("nan")
+    block = m.group(1)
+    down_key = f"{block}.mlp.down_proj"
+    if down_key in per_layer_cka:
+        return float(per_layer_cka[down_key])
+    # Any activation key under this decoder block (e.g. alternate hook naming)
+    prefix = block + "."
+    for k, v in per_layer_cka.items():
+        if k.startswith(prefix) and v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+    return float("nan")
 
 
 def load_masks(path: str) -> Tuple[Dict[str, torch.Tensor], Optional[dict]]:
@@ -114,13 +146,24 @@ def compute_per_layer_jaccard(masks_a: Dict[str, torch.Tensor], masks_b: Dict[st
 
 
 def load_per_layer_json(path: Optional[str], key: str) -> Dict[str, float]:
-    """Load a per-layer metric dict from JSON and canonicalize names."""
+    """Load a per-layer metric dict from JSON; index by raw and canonical names."""
     if not path:
         return {}
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    raw = data.get(key, {})
-    return {canonical_name(k): float(v) for k, v in raw.items() if v is not None}
+    raw = data.get(key, {}) or data.get("per_layer", {})
+    out: Dict[str, float] = {}
+    for k, v in raw.items():
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        ks = str(k)
+        out[ks] = fv
+        out[canonical_name(ks)] = fv
+    return out
 
 
 def default_output_path(mask_a: str, mask_b: str) -> str:
@@ -177,7 +220,7 @@ def main():
             for k, v in compute_per_layer_jaccard(masks_a, masks_b).items()
         }
 
-    per_layer_cka = load_per_layer_json(args.cka_json, "per_layer_cka")
+    raw_cka = load_per_layer_json(args.cka_json, "per_layer_cka")
 
     if args.skip_effective_rank:
         er_out = None
@@ -229,7 +272,7 @@ def main():
                 "effective_rank_b": None if er_b is None else round(er_b, 8),
                 "effective_rank_b_norm": None if er_b_norm is None else round(er_b_norm, 8),
                 "jaccard": round(per_layer_jaccard.get(ca, float("nan")), 8),
-                "cka": round(per_layer_cka.get(ca, float("nan")), 8),
+                "cka": round(resolve_cka_for_canonical_layer(ca, raw_cka), 8),
             }
         )
 

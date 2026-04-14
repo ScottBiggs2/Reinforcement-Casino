@@ -12,7 +12,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import numpy as np
 
 
 def to_float(x):
@@ -49,40 +48,36 @@ def read_rows(path: Path):
         return list(csv.DictReader(f))
 
 
-def expected_random_jaccard(density_a: float, density_b: float) -> float:
-    """Closed-form expectation: Jaccard of two independent Bernoulli masks with given densities."""
+def theoretical_bernoulli_jaccard_mean(density_a: float, density_b: float) -> float:
+    """E[Jaccard] for independent Bernoulli masks with keep densities ρ_a, ρ_b (fraction of ones).
+
+    E[J] = ρ_a ρ_b / (ρ_a + ρ_b − ρ_a ρ_b). If ρ_a = ρ_b = ρ, this equals ρ / (2 − ρ).
+    """
     denom = density_a + density_b - density_a * density_b
     if denom <= 0:
         return 0.0
     return (density_a * density_b) / denom
 
 
-def expected_linear_cka_null_reference(
-    n_samples: int,
-    mode: str = "inv_sq",
-) -> float:
-    """Order-of-magnitude floor for linear CKA (`mask_to_cka.py`) under unrelated representations.
-
-    This is **not** the same object as mask-overlap Jaccard: CKA is computed on finite-sample
-    activations with the biased linear CKA estimator. For independent high-dimensional
-    activations, values are typically tiny; a common back-of-envelope visualization line is
-    O(1/n) or smaller in finite ``n`` (calibration batch size).
-
-    Modes (pick one; use ``--cka-null-value`` to override entirely):
-
-    - ``inv_sq``: ``1 / n**2`` — very small “vanishing” reference (default).
-    - ``inv_nm1``: ``1 / (n-1)`` — looser finite-``n`` reference (often still >> empirical CKA).
-
-    For calibrated nulls, use permutation over sequences or bootstrap; this line is only a chart aid.
-    """
-    n = int(n_samples)
-    if n < 2:
+def theoretical_jaccard_variance(rho: float, n_indices: int) -> float:
+    """Var(J) = 2(1 − ρ) / ( N · (2 − ρ²)³ ) with ρ = keep density, N = tensor length."""
+    if n_indices < 1 or not (0.0 <= rho <= 1.0):
         return float("nan")
-    if mode == "inv_sq":
-        return 1.0 / (float(n) * float(n))
-    if mode == "inv_nm1":
-        return 1.0 / float(n - 1)
-    raise ValueError(f"unknown cka null mode: {mode}")
+    den = (2.0 - rho * rho) ** 3
+    if den <= 0:
+        return float("nan")
+    return 2.0 * (1.0 - rho) / (float(n_indices) * den)
+
+
+def theoretical_cka_mean_and_std(total_indices: int) -> tuple:
+    """Reference null: E[CKA] = 1/(N−1), Var = 2/(N−1)² (user-specified large-N limit)."""
+    n = int(total_indices)
+    if n < 2:
+        return float("nan"), float("nan")
+    nm1 = float(n - 1)
+    e = 1.0 / nm1
+    var = 2.0 / (nm1 * nm1)
+    return e, math.sqrt(var)
 
 
 def _clamp_positive_log(y: float, eps: float = 1e-12) -> float:
@@ -112,76 +107,37 @@ def _apply_metric_y_scale(
     raise ValueError(f"unknown y_scale: {y_scale} (use linear or log)")
 
 
-def plot_mask_overlap_reference(
+def draw_jaccard_theory_reference(
     ax,
     x,
-    expected_baseline,
-    mc_mean,
-    mc_lo,
-    mc_hi,
-    random_trials: int,
+    e_mean: list,
+    e_lo: list,
+    e_hi: list,
 ) -> None:
-    """Draw closed-form E[Jaccard] and optionally an MC band for indep. Bernoulli masks.
-
-    Used on the **Jaccard** panel only. CKA uses `expected_linear_cka_null_reference`, not overlap.
-    """
-    if has_valid(expected_baseline):
+    """Draw theoretical E[Jaccard] and ±1σ band from closed-form mean and variance (no MC)."""
+    if has_valid(e_mean):
         ax.plot(
             x,
-            expected_baseline,
+            e_mean,
             linestyle=":",
-            linewidth=1.2,
+            linewidth=1.25,
             color="gray",
-            alpha=0.9,
-            label="Jaccard null: E[overlap] (indep. Bernoulli, closed form)",
+            alpha=0.95,
+            label="E[J] null (indep. Bernoulli, theory)",
         )
     if (
-        random_trials >= 2
-        and has_valid(mc_mean)
-        and has_valid(mc_lo)
-        and has_valid(mc_hi)
+        has_valid(e_lo)
+        and has_valid(e_hi)
+        and has_valid(e_mean)
     ):
         ax.fill_between(
             x,
-            mc_lo,
-            mc_hi,
-            alpha=0.28,
+            e_lo,
+            e_hi,
+            alpha=0.22,
             color="tab:orange",
-            label=f"Jaccard null: MC band (n={random_trials} indep. mask pairs/layer)",
+            label="Jaccard null: E ± 1σ (theory)",
         )
-        ax.plot(
-            x,
-            mc_mean,
-            linestyle="--",
-            linewidth=1.1,
-            color="tab:orange",
-            alpha=0.9,
-        )
-
-
-def monte_carlo_jaccard_row(
-    n_params: int,
-    density_a: float,
-    density_b: float,
-    n_trials: int,
-    rng: np.random.Generator,
-) -> tuple:
-    """Per layer: draw n_trials independent random mask pairs; return (mean, min, max) Jaccard."""
-    if n_trials < 2:
-        return None, None, None
-    if n_params is None or n_params < 1:
-        return None, None, None
-    if not (0.0 <= density_a <= 1.0 and 0.0 <= density_b <= 1.0):
-        return None, None, None
-    n = int(n_params)
-    trials = np.empty(n_trials, dtype=np.float64)
-    for t in range(n_trials):
-        a = rng.random(n) < density_a
-        b = rng.random(n) < density_b
-        inter = np.logical_and(a, b).sum()
-        union = np.logical_or(a, b).sum()
-        trials[t] = float(inter) / float(union) if union > 0 else 0.0
-    return float(trials.mean()), float(trials.min()), float(trials.max())
 
 
 def plot_one(
@@ -191,12 +147,12 @@ def plot_one(
     random_seed: int,
     *,
     y_scale: str = "linear",
-    cka_n_samples: int = 64,
-    cka_null_mode: str = "inv_sq",
+    cka_total_n: Optional[int] = None,
     cka_null_scale: float = 1.0,
     cka_null_value: Optional[float] = None,
     log_y_floor: float = 1e-12,
 ):
+    """random_trials / random_seed are ignored (kept for CLI compatibility)."""
     rows = read_rows(csv_path)
     if not rows:
         return False
@@ -212,72 +168,63 @@ def plot_one(
     erank_b = [to_float(r.get("effective_rank_b_norm")) for r in rows]
     n_params_col = [to_int_params(r.get("n_params")) for r in rows]
 
-    # Closed-form E[Jaccard] under independent random masks with matched marginals
-    expected_baseline = []
-    for sa, sb in zip(sparsity_a, sparsity_b):
-        if math.isnan(sa) or math.isnan(sb):
-            s = sa if not math.isnan(sa) else sb
-            d = (1.0 - s) if not math.isnan(s) else float("nan")
-            if math.isnan(d):
-                expected_baseline.append(float("nan"))
-            else:
-                expected_baseline.append(expected_random_jaccard(d, d))
-        else:
-            expected_baseline.append(expected_random_jaccard(1.0 - sa, 1.0 - sb))
+    da_list: list = []
+    db_list: list = []
+    for r in rows:
+        da = to_float(r.get("density_a"))
+        db = to_float(r.get("density_b"))
+        if math.isnan(da):
+            sa = to_float(r.get("sparsity_a"))
+            da = 1.0 - sa if not math.isnan(sa) else float("nan")
+        if math.isnan(db):
+            sb = to_float(r.get("sparsity_b"))
+            db = 1.0 - sb if not math.isnan(sb) else float("nan")
+        da_list.append(da)
+        db_list.append(db)
 
-    # Optional Monte Carlo band (only if random_trials >= 2). Otherwise use closed-form E[J] only.
-    mc_mean = []
-    mc_lo = []
-    mc_hi = []
-    if random_trials >= 2:
-        rng = np.random.default_rng(random_seed)
-        for i, row in enumerate(rows):
-            n_p = n_params_col[i]
-            sa, sb = sparsity_a[i], sparsity_b[i]
-            if math.isnan(sa) or math.isnan(sb):
-                s = sa if not math.isnan(sa) else sb
-                da = (1.0 - s) if not math.isnan(s) else float("nan")
-                db = da
-            else:
-                da, db = 1.0 - sa, 1.0 - sb
-            if math.isnan(da) or math.isnan(db):
-                mc_mean.append(float("nan"))
-                mc_lo.append(float("nan"))
-                mc_hi.append(float("nan"))
-                continue
-            m, lo, hi = monte_carlo_jaccard_row(n_p, da, db, random_trials, rng)
-            mc_mean.append(m if m is not None else float("nan"))
-            mc_lo.append(lo if lo is not None else float("nan"))
-            mc_hi.append(hi if hi is not None else float("nan"))
+    # Theory: E[J], Var(J) with ρ = keep density; band E ± 1σ (σ = sqrt(Var)).
+    e_mean: list = []
+    e_lo: list = []
+    e_hi: list = []
+    for i in range(len(rows)):
+        da, db = da_list[i], db_list[i]
+        n_p = n_params_col[i] or 0
+        if math.isnan(da) or math.isnan(db) or n_p < 1:
+            e_mean.append(float("nan"))
+            e_lo.append(float("nan"))
+            e_hi.append(float("nan"))
+            continue
+        em = theoretical_bernoulli_jaccard_mean(da, db)
+        rho_m = 0.5 * (da + db)
+        var = theoretical_jaccard_variance(rho_m, n_p)
+        sig = math.sqrt(max(0.0, var)) if not math.isnan(var) else 0.0
+        e_mean.append(em)
+        e_lo.append(max(0.0, em - sig))
+        e_hi.append(min(1.0, em + sig))
+
+    n_tot = int(cka_total_n) if cka_total_n is not None and cka_total_n > 0 else sum(
+        n for n in n_params_col if n is not None and n > 0
+    )
+    if cka_null_value is not None and not math.isnan(cka_null_value) and cka_null_value > 0:
+        cka_e = float(cka_null_value) * float(cka_null_scale)
+        cka_sig = 0.0
     else:
-        for _ in rows:
-            mc_mean.append(float("nan"))
-            mc_lo.append(float("nan"))
-            mc_hi.append(float("nan"))
+        cka_e, cka_sig = theoretical_cka_mean_and_std(n_tot)
+        cka_e *= float(cka_null_scale)
+        cka_sig *= float(cka_null_scale)
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle(csv_path.name, fontsize=12)
 
-    # Jaccard + random reference (closed-form E[J]; optional MC band if random_trials >= 2)
+    # Jaccard + theoretical null (E and ±1σ)
     ax = axes[0, 0]
     if has_valid(jaccard):
         jac_plot = _series_for_log_scale(jaccard, log_y_floor) if y_scale == "log" else jaccard
-        eb_plot = (
-            _series_for_log_scale(expected_baseline, log_y_floor) if y_scale == "log" else expected_baseline
-        )
-        mc_m_plot = (
-            _series_for_log_scale(mc_mean, log_y_floor) if y_scale == "log" else mc_mean
-        )
-        mc_lo_plot = (
-            _series_for_log_scale(mc_lo, log_y_floor) if y_scale == "log" else mc_lo
-        )
-        mc_hi_plot = (
-            _series_for_log_scale(mc_hi, log_y_floor) if y_scale == "log" else mc_hi
-        )
+        eb_plot = _series_for_log_scale(e_mean, log_y_floor) if y_scale == "log" else e_mean
+        lo_plot = _series_for_log_scale(e_lo, log_y_floor) if y_scale == "log" else e_lo
+        hi_plot = _series_for_log_scale(e_hi, log_y_floor) if y_scale == "log" else e_hi
         ax.plot(x, jac_plot, marker="o", linewidth=1.3, markersize=3, label="observed Jaccard", color="tab:blue")
-        plot_mask_overlap_reference(
-            ax, x, eb_plot, mc_m_plot, mc_lo_plot, mc_hi_plot, random_trials
-        )
+        draw_jaccard_theory_reference(ax, x, eb_plot, lo_plot, hi_plot)
         if y_scale == "log":
             _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
         else:
@@ -289,49 +236,53 @@ def plot_one(
                 ),
             )
         ax.legend(fontsize=7, loc="best")
-        ax.set_title("Per-layer Jaccard vs random (Bernoulli) null")
+        ax.set_title("Per-layer Jaccard vs Bernoulli null (theory)")
     else:
         ax.text(0.5, 0.5, "No Jaccard data", ha="center", va="center")
         ax.set_title("Per-layer Jaccard")
     ax.grid(alpha=0.3)
 
-    # CKA: observed activations similarity + theoretical CKA null (not mask-overlap Jaccard)
+    # CKA: activations + theory null E=1/(N−1) on total index count N
     ax = axes[0, 1]
-    if has_valid(cka):
+    show_cka_obs = has_valid(cka)
+    if show_cka_obs:
         cka_plot = _series_for_log_scale(cka, log_y_floor) if y_scale == "log" else cka
-        ax.plot(x, cka_plot, marker="o", linewidth=1.3, markersize=3, color="tab:purple", label="linear CKA (activations)")
-        if cka_null_value is not None and not math.isnan(cka_null_value):
-            if cka_null_value <= 0:
-                y_cka_null = float("nan")
-            else:
-                y_cka_null = max(cka_null_value * cka_null_scale, log_y_floor * 0.1)
-            mode_lbl = "fixed"
-        else:
-            raw = expected_linear_cka_null_reference(cka_n_samples, cka_null_mode)
-            y_cka_null = max(float(raw) * float(cka_null_scale), log_y_floor * 0.1)
-            mode_lbl = cka_null_mode
-        if not math.isnan(y_cka_null) and y_cka_null > 0:
-            ax.axhline(
-                y=y_cka_null,
-                color="forestgreen",
-                linestyle=":",
-                linewidth=1.35,
-                alpha=0.95,
-                zorder=1,
-                label=f"CKA null ref (~{y_cka_null:.3e}, {mode_lbl}; n={cka_n_samples})",
-            )
-        if y_scale == "log":
-            _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
-        else:
-            ax.set_ylim(0, 1)
-        ax.legend(fontsize=6, loc="best")
-        ax.set_title(
-            "Per-layer linear CKA (mask_to_cka) vs CKA null ref\n"
-            "(green ≈ vanishing unrelated-activation floor; not Jaccard overlap)"
+        ax.plot(
+            x,
+            cka_plot,
+            marker="o",
+            linewidth=1.3,
+            markersize=3,
+            color="tab:purple",
+            label="linear CKA (activations)",
         )
+    if n_tot >= 2 and not math.isnan(cka_e) and cka_e > 0:
+        y0 = max(cka_e, log_y_floor * 0.1)
+        ax.axhline(
+            y=y0,
+            color="forestgreen",
+            linestyle=":",
+            linewidth=1.35,
+            alpha=0.95,
+            zorder=1,
+            label=f"E[CKA] null = 1/(N−1) ≈ {y0:.3e} (N={n_tot})",
+        )
+        if cka_sig > 0:
+            y_lo = max(y0 - cka_sig, log_y_floor * 0.1)
+            y_hi = y0 + cka_sig
+            ax.axhspan(y_lo, y_hi, color="forestgreen", alpha=0.12, label="CKA null ±1σ (theory)")
+    drew_cka_theory = n_tot >= 2 and not math.isnan(cka_e) and cka_e > 0
+    if not show_cka_obs and not drew_cka_theory:
+        ax.text(0.5, 0.5, "No CKA in CSV (re-export with CKA JSON)", ha="center", va="center", fontsize=9)
+    if y_scale == "log":
+        _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
     else:
-        ax.text(0.5, 0.5, "No CKA data", ha="center", va="center")
-        ax.set_title("Per-layer CKA")
+        ax.set_ylim(0, 1)
+    ax.legend(fontsize=6, loc="best")
+    ax.set_title(
+        "Per-layer linear CKA vs theory null\n"
+        f"(E=1/(N−1), σ²=2/(N−1)²; N=total masked indices ≈ {n_tot})"
+    )
     ax.grid(alpha=0.3)
 
     # Sparsity A/B
@@ -403,8 +354,7 @@ def plot_compare(
     out_path: Path,
     *,
     y_scale: str = "linear",
-    cka_n_samples: int = 64,
-    cka_null_mode: str = "inv_sq",
+    cka_total_n: Optional[int] = None,
     cka_null_scale: float = 1.0,
     log_y_floor: float = 1e-12,
 ):
@@ -447,13 +397,21 @@ def plot_compare(
     era_b    = col(pairs_b, "effective_rank_a_norm")
     erb_b    = col(pairs_b, "effective_rank_b_norm")
 
-    # Random Jaccard baseline using label_a sparsity (both should be ~same target)
+    # Theoretical E[J] for label_a rows (same as plot_one)
     rand_bl = []
-    for sa, sb in zip(spa_a, spb_a):
-        if math.isnan(sa) or math.isnan(sb):
+    for ra in pairs_a:
+        da = to_float(ra.get("density_a"))
+        db = to_float(ra.get("density_b"))
+        if math.isnan(da):
+            sa = to_float(ra.get("sparsity_a"))
+            da = 1.0 - sa if not math.isnan(sa) else float("nan")
+        if math.isnan(db):
+            sb = to_float(ra.get("sparsity_b"))
+            db = 1.0 - sb if not math.isnan(sb) else float("nan")
+        if math.isnan(da) or math.isnan(db):
             rand_bl.append(float("nan"))
         else:
-            rand_bl.append(expected_random_jaccard(1.0 - sa, 1.0 - sb))
+            rand_bl.append(theoretical_bernoulli_jaccard_mean(da, db))
 
     # Color scheme: blue=label_a, orange=label_b; solid=GRPO, dashed=DPO
     CA_G = "tab:blue";   CA_D = "tab:blue"
@@ -504,10 +462,12 @@ def plot_compare(
         ax.plot(x, cka_b_p, color=CB_G, label=f"{label_b}", **kw)
     else:
         ax.text(0.5, 0.45, f"No CKA data for {label_b}", ha="center", va="center", fontsize=9)
-    y_cka_null = max(
-        float(cka_null_scale) * expected_linear_cka_null_reference(cka_n_samples, cka_null_mode),
-        log_y_floor * 0.1,
+    n_tot = int(cka_total_n) if cka_total_n is not None and cka_total_n > 0 else sum(
+        to_int_params(r.get("n_params")) or 0 for r in pairs_a
     )
+    ce, _sig_cka = theoretical_cka_mean_and_std(n_tot)
+    ce *= float(cka_null_scale)
+    y_cka_null = max(ce, log_y_floor * 0.1) if n_tot >= 2 and not math.isnan(ce) else float("nan")
     if not math.isnan(y_cka_null) and y_cka_null > 0:
         ax.axhline(
             y=y_cka_null,
@@ -515,7 +475,7 @@ def plot_compare(
             linestyle=":",
             linewidth=1.25,
             alpha=0.95,
-            label=f"CKA null ref (~{y_cka_null:.3e}; n={cka_n_samples})",
+            label=f"E[CKA] null ≈ {y_cka_null:.3e} (N={n_tot})",
         )
     if y_scale == "log":
         _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
@@ -579,13 +539,15 @@ def main():
     parser.add_argument(
         "--random-trials",
         type=int,
-        default=3,
-        help=(
-            "Monte Carlo trials per layer for optional Jaccard null band (min–max shading). "
-            "Use 0 or 1 to skip MC and plot only the closed-form E[Jaccard] (indep. Bernoulli) curve."
-        ),
+        default=1,
+        help="Ignored (kept for backward compatibility). Jaccard null uses closed-form E and Var only.",
     )
-    parser.add_argument("--random-seed", type=int, default=42, help="RNG seed for Monte Carlo baselines.")
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=42,
+        help="Ignored (kept for backward compatibility).",
+    )
     parser.add_argument(
         "--y-scale",
         type=str,
@@ -600,17 +562,13 @@ def main():
         help="Minimum positive value when using --y-scale log (avoids log(0)).",
     )
     parser.add_argument(
-        "--cka-n-samples",
+        "--cka-total-n",
         type=int,
-        default=64,
-        help="Calibration batch size n used for CKA null reference (match mask_to_cka --n_samples).",
-    )
-    parser.add_argument(
-        "--cka-null-mode",
-        type=str,
-        default="inv_sq",
-        choices=["inv_sq", "inv_nm1"],
-        help="CKA null reference: 1/n**2 (vanishing) or 1/(n-1) (looser).",
+        default=None,
+        help=(
+            "Total index count N for CKA theory null E=1/(N−1), σ²=2/(N−1)². "
+            "Default: sum of n_params in the CSV (total masked parameters)."
+        ),
     )
     parser.add_argument(
         "--cka-null-scale",
@@ -622,7 +580,7 @@ def main():
         "--cka-null-value",
         type=float,
         default=None,
-        help="If set, horizontal CKA null at this value (overrides --cka-null-mode).",
+        help="If set, overrides theoretical E[CKA] null (still scaled by --cka-null-scale).",
     )
 
     # Compare mode: overlay two CSVs on one 4-panel figure
@@ -651,9 +609,8 @@ def main():
             args.label_b,
             out,
             y_scale=args.y_scale,
-            cka_n_samples=args.cka_n_samples,
-            cka_null_mode=args.cka_null_mode,
-            cka_null_scale=args.cka_null_scale,
+            cka_total_n=args.cka_total_n,
+            cka_null_scale=float(args.cka_null_scale),
             log_y_floor=args.log_y_floor,
         )
         return
@@ -686,8 +643,7 @@ def main():
             args.random_trials,
             args.random_seed,
             y_scale=args.y_scale,
-            cka_n_samples=args.cka_n_samples,
-            cka_null_mode=args.cka_null_mode,
+            cka_total_n=args.cka_total_n,
             cka_null_scale=args.cka_null_scale,
             cka_null_value=args.cka_null_value,
             log_y_floor=args.log_y_floor,
