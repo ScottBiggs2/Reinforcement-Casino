@@ -5,6 +5,7 @@ import argparse
 import csv
 import math
 from pathlib import Path
+from typing import Optional
 
 import matplotlib
 
@@ -55,6 +56,61 @@ def expected_random_jaccard(density_a: float, density_b: float) -> float:
     return (density_a * density_b) / denom
 
 
+def expected_linear_cka_null_reference(
+    n_samples: int,
+    mode: str = "inv_sq",
+) -> float:
+    """Order-of-magnitude floor for linear CKA (`mask_to_cka.py`) under unrelated representations.
+
+    This is **not** the same object as mask-overlap Jaccard: CKA is computed on finite-sample
+    activations with the biased linear CKA estimator. For independent high-dimensional
+    activations, values are typically tiny; a common back-of-envelope visualization line is
+    O(1/n) or smaller in finite ``n`` (calibration batch size).
+
+    Modes (pick one; use ``--cka-null-value`` to override entirely):
+
+    - ``inv_sq``: ``1 / n**2`` — very small “vanishing” reference (default).
+    - ``inv_nm1``: ``1 / (n-1)`` — looser finite-``n`` reference (often still >> empirical CKA).
+
+    For calibrated nulls, use permutation over sequences or bootstrap; this line is only a chart aid.
+    """
+    n = int(n_samples)
+    if n < 2:
+        return float("nan")
+    if mode == "inv_sq":
+        return 1.0 / (float(n) * float(n))
+    if mode == "inv_nm1":
+        return 1.0 / float(n - 1)
+    raise ValueError(f"unknown cka null mode: {mode}")
+
+
+def _clamp_positive_log(y: float, eps: float = 1e-12) -> float:
+    if math.isnan(y):
+        return y
+    return max(eps, min(1.0, y))
+
+
+def _series_for_log_scale(vals: list, eps: float = 1e-12) -> list:
+    return [_clamp_positive_log(v, eps) if not math.isnan(v) else float("nan") for v in vals]
+
+
+def _apply_metric_y_scale(
+    ax,
+    y_scale: str,
+    *,
+    ymin_floor: float = 1e-12,
+    ymax: float = 1.05,
+) -> None:
+    ys = y_scale.lower().strip()
+    if ys == "linear":
+        return
+    if ys == "log":
+        ax.set_yscale("log")
+        ax.set_ylim(bottom=max(ymin_floor, 1e-30), top=ymax)
+        return
+    raise ValueError(f"unknown y_scale: {y_scale} (use linear or log)")
+
+
 def plot_mask_overlap_reference(
     ax,
     x,
@@ -64,21 +120,19 @@ def plot_mask_overlap_reference(
     mc_hi,
     random_trials: int,
 ) -> None:
-    """Draw closed-form E[Jaccard] + MC band for indep. Bernoulli masks (mask-overlap reference).
+    """Draw closed-form E[Jaccard] and optionally an MC band for indep. Bernoulli masks.
 
-    On the CKA axes this is the **same** overlap reference as the Jaccard panel (comparable
-    vertical scale), not the expectation of CKA under a random-activation null—that would
-    require model forward passes or a separate derivation.
+    Used on the **Jaccard** panel only. CKA uses `expected_linear_cka_null_reference`, not overlap.
     """
     if has_valid(expected_baseline):
         ax.plot(
             x,
             expected_baseline,
             linestyle=":",
-            linewidth=1.0,
+            linewidth=1.2,
             color="gray",
-            alpha=0.85,
-            label="E[Jaccard] (indep. Bernoulli, closed form)",
+            alpha=0.9,
+            label="Jaccard null: E[overlap] (indep. Bernoulli, closed form)",
         )
     if (
         random_trials >= 2
@@ -90,17 +144,17 @@ def plot_mask_overlap_reference(
             x,
             mc_lo,
             mc_hi,
-            alpha=0.25,
+            alpha=0.28,
             color="tab:orange",
-            label=f"random mask MC (n={random_trials} trials/layer)",
+            label=f"Jaccard null: MC band (n={random_trials} indep. mask pairs/layer)",
         )
         ax.plot(
             x,
             mc_mean,
             linestyle="--",
-            linewidth=1.0,
+            linewidth=1.1,
             color="tab:orange",
-            alpha=0.85,
+            alpha=0.9,
         )
 
 
@@ -112,6 +166,8 @@ def monte_carlo_jaccard_row(
     rng: np.random.Generator,
 ) -> tuple:
     """Per layer: draw n_trials independent random mask pairs; return (mean, min, max) Jaccard."""
+    if n_trials < 2:
+        return None, None, None
     if n_params is None or n_params < 1:
         return None, None, None
     if not (0.0 <= density_a <= 1.0 and 0.0 <= density_b <= 1.0):
@@ -127,12 +183,22 @@ def monte_carlo_jaccard_row(
     return float(trials.mean()), float(trials.min()), float(trials.max())
 
 
-def plot_one(csv_path: Path, out_path: Path, random_trials: int, random_seed: int):
+def plot_one(
+    csv_path: Path,
+    out_path: Path,
+    random_trials: int,
+    random_seed: int,
+    *,
+    y_scale: str = "linear",
+    cka_n_samples: int = 64,
+    cka_null_mode: str = "inv_sq",
+    cka_null_scale: float = 1.0,
+    cka_null_value: Optional[float] = None,
+    log_y_floor: float = 1e-12,
+):
     rows = read_rows(csv_path)
     if not rows:
         return False
-
-    rng = np.random.default_rng(random_seed)
 
     x = list(range(len(rows)))
     layer_labels = [r.get("layer", str(i)) for i, r in enumerate(rows)]
@@ -158,71 +224,109 @@ def plot_one(csv_path: Path, out_path: Path, random_trials: int, random_seed: in
         else:
             expected_baseline.append(expected_random_jaccard(1.0 - sa, 1.0 - sb))
 
-    # Monte Carlo: n_trials independent random mask pairs per layer (shows spread, not a single draw)
+    # Optional Monte Carlo band (only if random_trials >= 2). Otherwise use closed-form E[J] only.
     mc_mean = []
     mc_lo = []
     mc_hi = []
-    for i, row in enumerate(rows):
-        n_p = n_params_col[i]
-        sa, sb = sparsity_a[i], sparsity_b[i]
-        if math.isnan(sa) or math.isnan(sb):
-            s = sa if not math.isnan(sa) else sb
-            da = (1.0 - s) if not math.isnan(s) else float("nan")
-            db = da
-        else:
-            da, db = 1.0 - sa, 1.0 - sb
-        if math.isnan(da) or math.isnan(db):
+    if random_trials >= 2:
+        rng = np.random.default_rng(random_seed)
+        for i, row in enumerate(rows):
+            n_p = n_params_col[i]
+            sa, sb = sparsity_a[i], sparsity_b[i]
+            if math.isnan(sa) or math.isnan(sb):
+                s = sa if not math.isnan(sa) else sb
+                da = (1.0 - s) if not math.isnan(s) else float("nan")
+                db = da
+            else:
+                da, db = 1.0 - sa, 1.0 - sb
+            if math.isnan(da) or math.isnan(db):
+                mc_mean.append(float("nan"))
+                mc_lo.append(float("nan"))
+                mc_hi.append(float("nan"))
+                continue
+            m, lo, hi = monte_carlo_jaccard_row(n_p, da, db, random_trials, rng)
+            mc_mean.append(m if m is not None else float("nan"))
+            mc_lo.append(lo if lo is not None else float("nan"))
+            mc_hi.append(hi if hi is not None else float("nan"))
+    else:
+        for _ in rows:
             mc_mean.append(float("nan"))
             mc_lo.append(float("nan"))
             mc_hi.append(float("nan"))
-            continue
-        m, lo, hi = monte_carlo_jaccard_row(n_p, da, db, random_trials, rng)
-        mc_mean.append(m if m is not None else float("nan"))
-        mc_lo.append(lo if lo is not None else float("nan"))
-        mc_hi.append(hi if hi is not None else float("nan"))
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle(csv_path.name, fontsize=12)
 
-    # Jaccard + random reference (closed-form + MC band)
+    # Jaccard + random reference (closed-form E[J]; optional MC band if random_trials >= 2)
     ax = axes[0, 0]
     if has_valid(jaccard):
-        ax.plot(x, jaccard, marker="o", linewidth=1.3, markersize=3, label="observed Jaccard", color="tab:blue")
+        jac_plot = _series_for_log_scale(jaccard, log_y_floor) if y_scale == "log" else jaccard
+        eb_plot = (
+            _series_for_log_scale(expected_baseline, log_y_floor) if y_scale == "log" else expected_baseline
+        )
+        mc_m_plot = (
+            _series_for_log_scale(mc_mean, log_y_floor) if y_scale == "log" else mc_mean
+        )
+        mc_lo_plot = (
+            _series_for_log_scale(mc_lo, log_y_floor) if y_scale == "log" else mc_lo
+        )
+        mc_hi_plot = (
+            _series_for_log_scale(mc_hi, log_y_floor) if y_scale == "log" else mc_hi
+        )
+        ax.plot(x, jac_plot, marker="o", linewidth=1.3, markersize=3, label="observed Jaccard", color="tab:blue")
         plot_mask_overlap_reference(
-            ax, x, expected_baseline, mc_mean, mc_lo, mc_hi, random_trials
+            ax, x, eb_plot, mc_m_plot, mc_lo_plot, mc_hi_plot, random_trials
         )
-        ax.set_ylim(
-            0,
-            max(
-                1.0,
-                max((v for v in jaccard if not math.isnan(v)), default=1.0) * 1.05,
-            ),
-        )
+        if y_scale == "log":
+            _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
+        else:
+            ax.set_ylim(
+                0,
+                max(
+                    1.0,
+                    max((v for v in jaccard if not math.isnan(v)), default=1.0) * 1.05,
+                ),
+            )
         ax.legend(fontsize=7, loc="best")
-        ax.set_title("Per-layer Jaccard vs random baseline")
+        ax.set_title("Per-layer Jaccard vs random (Bernoulli) null")
     else:
         ax.text(0.5, 0.5, "No Jaccard data", ha="center", va="center")
         ax.set_title("Per-layer Jaccard")
     ax.grid(alpha=0.3)
 
-    # CKA + same mask-overlap reference (E[J] + MC band) for side-by-side context
+    # CKA: observed activations similarity + theoretical CKA null (not mask-overlap Jaccard)
     ax = axes[0, 1]
     if has_valid(cka):
-        ax.plot(x, cka, marker="o", linewidth=1.3, markersize=3, color="tab:purple", label="CKA")
-        show_overlap_ref = has_valid(expected_baseline) or (
-            random_trials >= 2
-            and has_valid(mc_mean)
-            and has_valid(mc_lo)
-            and has_valid(mc_hi)
-        )
-        if show_overlap_ref:
-            plot_mask_overlap_reference(
-                ax, x, expected_baseline, mc_mean, mc_lo, mc_hi, random_trials
+        cka_plot = _series_for_log_scale(cka, log_y_floor) if y_scale == "log" else cka
+        ax.plot(x, cka_plot, marker="o", linewidth=1.3, markersize=3, color="tab:purple", label="linear CKA (activations)")
+        if cka_null_value is not None and not math.isnan(cka_null_value):
+            if cka_null_value <= 0:
+                y_cka_null = float("nan")
+            else:
+                y_cka_null = max(cka_null_value * cka_null_scale, log_y_floor * 0.1)
+            mode_lbl = "fixed"
+        else:
+            raw = expected_linear_cka_null_reference(cka_n_samples, cka_null_mode)
+            y_cka_null = max(float(raw) * float(cka_null_scale), log_y_floor * 0.1)
+            mode_lbl = cka_null_mode
+        if not math.isnan(y_cka_null) and y_cka_null > 0:
+            ax.axhline(
+                y=y_cka_null,
+                color="forestgreen",
+                linestyle=":",
+                linewidth=1.35,
+                alpha=0.95,
+                zorder=1,
+                label=f"CKA null ref (~{y_cka_null:.3e}, {mode_lbl}; n={cka_n_samples})",
             )
-        ax.set_ylim(0, 1)
+        if y_scale == "log":
+            _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
+        else:
+            ax.set_ylim(0, 1)
         ax.legend(fontsize=6, loc="best")
         ax.set_title(
-            "Per-layer CKA\n(gray/orange = indep. random mask overlap ref; not E[CKA] null)"
+            "Per-layer linear CKA (mask_to_cka) vs CKA null ref\n"
+            "(green ≈ vanishing unrelated-activation floor; not Jaccard overlap)"
         )
     else:
         ax.text(0.5, 0.5, "No CKA data", ha="center", va="center")
@@ -290,12 +394,24 @@ def _merge_rows(rows_a, rows_b):
     return merged
 
 
-def plot_compare(csv_a: Path, csv_b: Path, label_a: str, label_b: str, out_path: Path):
+def plot_compare(
+    csv_a: Path,
+    csv_b: Path,
+    label_a: str,
+    label_b: str,
+    out_path: Path,
+    *,
+    y_scale: str = "linear",
+    cka_n_samples: int = 64,
+    cka_null_mode: str = "inv_sq",
+    cka_null_scale: float = 1.0,
+    log_y_floor: float = 1e-12,
+):
     """4-panel comparison figure: two CSVs (e.g. SNIP vs CAV) overlaid on the same axes.
 
     Panel layout:
-      [0,0] Per-layer Jaccard        — label_a line, label_b line, random baseline
-      [0,1] Per-layer CKA            — same
+      [0,0] Per-layer Jaccard        — label_a line, label_b line, E[Jaccard] null
+      [0,1] Per-layer CKA            — label_a, label_b, CKA null ref (not Jaccard)
       [1,0] Per-layer Sparsity       — 4 lines: A-GRPO, A-DPO, B-GRPO, B-DPO
       [1,1] Per-layer Eff. Rank norm — same 4 lines
     """
@@ -351,30 +467,60 @@ def plot_compare(csv_a: Path, csv_b: Path, label_a: str, label_b: str, out_path:
     # ── Panel 0,0 : Jaccard ────────────────────────────────────────────
     ax = axes[0, 0]
     kw = dict(linewidth=1.4, markersize=3, marker="o")
+    ja_p = _series_for_log_scale(jac_a, log_y_floor) if y_scale == "log" else jac_a
+    jb_p = _series_for_log_scale(jac_b, log_y_floor) if y_scale == "log" else jac_b
+    rb_p = _series_for_log_scale(rand_bl, log_y_floor) if y_scale == "log" else rand_bl
     if has_valid(jac_a):
-        ax.plot(x, jac_a, color=CA_G, label=f"{label_a}", **kw)
+        ax.plot(x, ja_p, color=CA_G, label=f"{label_a}", **kw)
     if has_valid(jac_b):
-        ax.plot(x, jac_b, color=CB_G, label=f"{label_b}", **kw)
+        ax.plot(x, jb_p, color=CB_G, label=f"{label_b}", **kw)
     if has_valid(rand_bl):
-        ax.plot(x, rand_bl, linestyle="--", linewidth=1.0, color="gray", alpha=0.6, label="random baseline")
-    ax.set_ylim(0, 1.05)
+        ax.plot(
+            x,
+            rb_p,
+            linestyle="--",
+            linewidth=1.0,
+            color="gray",
+            alpha=0.6,
+            label="E[Jaccard] null (indep. Bernoulli)",
+        )
+    if y_scale == "log":
+        _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
+    else:
+        ax.set_ylim(0, 1.05)
     ax.set_title("Per-layer Jaccard  (GRPO ∩ DPO mask overlap)")
     ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
     # ── Panel 0,1 : CKA ───────────────────────────────────────────────
     ax = axes[0, 1]
+    cka_a_p = _series_for_log_scale(cka_a, log_y_floor) if y_scale == "log" else cka_a
+    cka_b_p = _series_for_log_scale(cka_b, log_y_floor) if y_scale == "log" else cka_b
     if has_valid(cka_a):
-        ax.plot(x, cka_a, color=CA_G, label=f"{label_a}", **kw)
+        ax.plot(x, cka_a_p, color=CA_G, label=f"{label_a}", **kw)
     else:
         ax.text(0.5, 0.5, f"No CKA data for {label_a}", ha="center", va="center", fontsize=9)
     if has_valid(cka_b):
-        ax.plot(x, cka_b, color=CB_G, label=f"{label_b}", **kw)
+        ax.plot(x, cka_b_p, color=CB_G, label=f"{label_b}", **kw)
     else:
         ax.text(0.5, 0.45, f"No CKA data for {label_b}", ha="center", va="center", fontsize=9)
-    if has_valid(rand_bl):
-        ax.plot(x, rand_bl, linestyle="--", linewidth=1.0, color="gray", alpha=0.6, label="random baseline")
-    ax.set_ylim(0, 1.05)
-    ax.set_title("Per-layer CKA  (GRPO vs DPO representation similarity)")
+    y_cka_null = max(
+        float(cka_null_scale) * expected_linear_cka_null_reference(cka_n_samples, cka_null_mode),
+        log_y_floor * 0.1,
+    )
+    if not math.isnan(y_cka_null) and y_cka_null > 0:
+        ax.axhline(
+            y=y_cka_null,
+            color="forestgreen",
+            linestyle=":",
+            linewidth=1.25,
+            alpha=0.95,
+            label=f"CKA null ref (~{y_cka_null:.3e}; n={cka_n_samples})",
+        )
+    if y_scale == "log":
+        _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
+    else:
+        ax.set_ylim(0, 1.05)
+    ax.set_title("Per-layer CKA  (activations; green = vanishing null, not Jaccard)")
     ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
     # ── Panel 1,0 : Sparsity ──────────────────────────────────────────
@@ -433,9 +579,50 @@ def main():
         "--random-trials",
         type=int,
         default=3,
-        help="Monte Carlo trials per layer for random-mask Jaccard band (min–max shading).",
+        help=(
+            "Monte Carlo trials per layer for optional Jaccard null band (min–max shading). "
+            "Use 0 or 1 to skip MC and plot only the closed-form E[Jaccard] (indep. Bernoulli) curve."
+        ),
     )
     parser.add_argument("--random-seed", type=int, default=42, help="RNG seed for Monte Carlo baselines.")
+    parser.add_argument(
+        "--y-scale",
+        type=str,
+        default="linear",
+        choices=["linear", "log"],
+        help="Y-axis for Jaccard + CKA panels: linear [0,1] or log (clamps zeros for display).",
+    )
+    parser.add_argument(
+        "--log-y-floor",
+        type=float,
+        default=1e-12,
+        help="Minimum positive value when using --y-scale log (avoids log(0)).",
+    )
+    parser.add_argument(
+        "--cka-n-samples",
+        type=int,
+        default=64,
+        help="Calibration batch size n used for CKA null reference (match mask_to_cka --n_samples).",
+    )
+    parser.add_argument(
+        "--cka-null-mode",
+        type=str,
+        default="inv_sq",
+        choices=["inv_sq", "inv_nm1"],
+        help="CKA null reference: 1/n**2 (vanishing) or 1/(n-1) (looser).",
+    )
+    parser.add_argument(
+        "--cka-null-scale",
+        type=float,
+        default=1.0,
+        help="Multiplies the CKA null reference line.",
+    )
+    parser.add_argument(
+        "--cka-null-value",
+        type=float,
+        default=None,
+        help="If set, horizontal CKA null at this value (overrides --cka-null-mode).",
+    )
 
     # Compare mode: overlay two CSVs on one 4-panel figure
     parser.add_argument(
@@ -456,7 +643,18 @@ def main():
         ca = Path(args.csv_a)
         cb = Path(args.csv_b)
         out = Path(args.output) if args.output else ca.parent / f"compare_{args.label_a}_vs_{args.label_b}.png"
-        plot_compare(ca, cb, args.label_a, args.label_b, out)
+        plot_compare(
+            ca,
+            cb,
+            args.label_a,
+            args.label_b,
+            out,
+            y_scale=args.y_scale,
+            cka_n_samples=args.cka_n_samples,
+            cka_null_mode=args.cka_null_mode,
+            cka_null_scale=args.cka_null_scale,
+            log_y_floor=args.log_y_floor,
+        )
         return
 
     input_dir = Path(args.input_dir).resolve()
@@ -471,7 +669,18 @@ def main():
     made = 0
     for p in csv_files:
         out = output_dir / f"{p.stem}_plots.png"
-        if plot_one(p, out, args.random_trials, args.random_seed):
+        if plot_one(
+            p,
+            out,
+            args.random_trials,
+            args.random_seed,
+            y_scale=args.y_scale,
+            cka_n_samples=args.cka_n_samples,
+            cka_null_mode=args.cka_null_mode,
+            cka_null_scale=args.cka_null_scale,
+            cka_null_value=args.cka_null_value,
+            log_y_floor=args.log_y_floor,
+        ):
             made += 1
             print(f"✓ {out}")
 
