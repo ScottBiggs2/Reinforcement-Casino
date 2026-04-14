@@ -4,6 +4,7 @@
 import argparse
 import csv
 import math
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -658,13 +659,23 @@ def main():
         return
 
     input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir)
+    output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    pattern = f"**/{args.pattern}" if args.recursive else args.pattern
-    csv_files = sorted(input_dir.glob(pattern))
+    # Use rglob for --recursive: pathlib glob("**/pat") is filesystem-dependent for matches
+    # at the root of input_dir; rglob always includes the directory itself.
+    if args.recursive:
+        csv_files = sorted(input_dir.rglob(args.pattern))
+    else:
+        csv_files = sorted(input_dir.glob(args.pattern))
 
     # Ignore summary CSV artifacts.
     csv_files = [p for p in csv_files if not p.name.endswith("_summary.csv")]
+
+    print(
+        f"plot_layer_metrics_csv: input_dir={input_dir}  pattern={args.pattern!r}  "
+        f"recursive={args.recursive}  matched_csv={len(csv_files)}",
+        flush=True,
+    )
 
     made = 0
     for p in csv_files:
@@ -684,7 +695,19 @@ def main():
             made += 1
             print(f"✓ {out}")
 
-    print(f"Generated plot files: {made}")
+    print(f"Generated plot files: {made}", flush=True)
+    if len(csv_files) > 0 and made == 0:
+        print(
+            "ERROR: matched one or more layer_metrics CSVs but wrote zero PNGs "
+            "(empty CSVs or plot_one failed silently).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if len(csv_files) == 0:
+        print(
+            "WARNING: no layer_metrics CSVs matched; no PNGs written.",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

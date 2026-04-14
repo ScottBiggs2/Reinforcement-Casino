@@ -215,6 +215,7 @@ run_one_cmp_step "convert_json_reports_to_csv" \
   "$TRAIN_PY" src/cold_start/convert_json_reports_to_csv.py \
     --input-dir "$COMP_DIR" --recursive || cmp_failures=$((cmp_failures + 1))
 
+mkdir -p "$PLOT_DIR"
 run_one_cmp_step "plot_layer_metrics_csv" \
   "$TRAIN_PY" src/cold_start/plot_layer_metrics_csv.py \
     --input-dir "$COMP_DIR" --recursive --pattern "layer_metrics_*.csv" \
@@ -226,6 +227,14 @@ run_one_cmp_step "plot_layer_metrics_csv" \
     --cka-null-mode "${CKA_NULL_MODE:-inv_sq}" \
     --log-y-floor "${PLOT_LOG_Y_FLOOR:-1e-12}" \
     || cmp_failures=$((cmp_failures + 1))
+
+shopt -s nullglob
+_pngs=( "${PLOT_DIR}"/*.png )
+shopt -u nullglob
+if [ "${#_pngs[@]}" -eq 0 ]; then
+  echo "ERROR: no PNGs under ${PLOT_DIR} after plot step (see plot_layer_metrics_csv output above)." | tee -a "$LOG_FILE" >&2
+  cmp_failures=$((cmp_failures + 1))
+fi
 
 echo "Artifacts: JSON/CSV under ${COMP_DIR}; PNGs under ${PLOT_DIR}" | tee -a "$LOG_FILE"
 if [ "${cmp_failures}" -gt 0 ]; then
