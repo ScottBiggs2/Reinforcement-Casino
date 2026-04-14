@@ -15,6 +15,7 @@ import csv
 import json
 import math
 import os
+import sys
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, Tuple
@@ -211,6 +212,21 @@ def main():
     common = sorted(set(masks_a.keys()) & set(masks_b.keys()))
     if not common:
         raise ValueError("The two masks share no common layer names.")
+
+    if args.jaccard_json and not os.path.isfile(args.jaccard_json):
+        print(
+            f"WARNING: --jaccard-json not found ({args.jaccard_json}); computing Jaccard from masks.",
+            file=sys.stderr,
+        )
+        args.jaccard_json = None
+
+    if args.cka_json and not os.path.isfile(args.cka_json):
+        print(
+            f"WARNING: --cka-json not found ({args.cka_json}); CKA column will be NaN. "
+            "Run mask_to_cka for this pair or omit --cka-json.",
+            file=sys.stderr,
+        )
+        args.cka_json = None
 
     if args.jaccard_json:
         per_layer_jaccard = load_per_layer_json(args.jaccard_json, "per_layer_jaccard")
