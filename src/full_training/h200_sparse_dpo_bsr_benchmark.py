@@ -100,6 +100,8 @@ def main():
     p.add_argument("--run_label", type=str, default="h200_bsr_bench")
     args = p.parse_args()
 
+    print(f"Benchmark config: n_steps per phase={args.n_steps}, batch={args.batch_size}, grad_accum={args.grad_accum}")
+
     os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir or os.environ.get(
         "HF_DATASETS_CACHE", os.path.expanduser("~/.cache/huggingface/datasets")
     )
@@ -210,6 +212,10 @@ def main():
                 benchmark_optimizer_label=opt,
             )
         finally:
+            try:
+                sink.flush()
+            except OSError as e:
+                print(f"WARNING: could not flush benchmark CSV (disk/NFS issue): {e}", file=sys.stderr)
             if tmp_mask and os.path.isfile(tmp_mask):
                 try:
                     os.unlink(tmp_mask)
@@ -219,6 +225,10 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    try:
+        sink.close()
+    except OSError as e:
+        print(f"WARNING: final CSV flush failed: {e}", file=sys.stderr)
     print(f"\n✓ Benchmark complete. CSV: {csv_path}")
 
 

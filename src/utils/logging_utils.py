@@ -7,7 +7,7 @@ import torch
 import wandb
 import pandas as pd
 from transformers import TrainerCallback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 class FlexibleCheckpointCallback(TrainerCallback):
     """
@@ -137,16 +137,17 @@ class CSVLoggerCallback(TrainerCallback):
 
 class BenchmarkRunLogSink:
     """
-    Append one row at a time to a benchmark CSV; merges columns safely when Trainer keys vary.
+    Buffer benchmark rows in RAM, flush to CSV on demand.
+
+    Avoids re-reading/rewriting the whole CSV on every Trainer log (slow and can trigger
+    NFS errno 116 stale file handle under heavy scratch churn).
     """
 
     def __init__(self, filepath: str):
         self.filepath = filepath
+        self._rows: List[Dict[str, Any]] = []
 
     def write_row(self, row: Dict[str, Any]) -> None:
-        d = os.path.dirname(os.path.abspath(self.filepath))
-        if d:
-            os.makedirs(d, exist_ok=True)
         flat: Dict[str, Any] = {}
         for k, v in row.items():
             if v is None:
@@ -155,14 +156,22 @@ class BenchmarkRunLogSink:
                 flat[k] = v
             else:
                 flat[k] = str(v)
+        self._rows.append(flat)
 
-        new_df = pd.DataFrame([flat])
-        if os.path.isfile(self.filepath):
-            old = pd.read_csv(self.filepath)
-            combined = pd.concat([old, new_df], ignore_index=True, sort=False)
-            combined.to_csv(self.filepath, index=False)
-        else:
-            new_df.to_csv(self.filepath, index=False)
+    def flush(self) -> None:
+        """Write all buffered rows to disk (atomic replace). Safe to call after each phase."""
+        if not self._rows:
+            return
+        d = os.path.dirname(os.path.abspath(self.filepath)) or "."
+        os.makedirs(d, exist_ok=True)
+        df = pd.DataFrame(self._rows)
+        base = os.path.basename(self.filepath)
+        tmp = os.path.join(d, f".{base}.{os.getpid()}.tmp")
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, self.filepath)
+
+    def close(self) -> None:
+        self.flush()
 
 
 class BenchmarkThroughputCallback(TrainerCallback):

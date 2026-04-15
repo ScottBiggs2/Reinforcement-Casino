@@ -164,12 +164,14 @@ This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.
 
 - **Dataset / tokenizer** are loaded **once**; each phase **reloads the base model** from the Hub so timings are not chained across phases.
 - **No W&B** (set `WANDB_MODE=disabled` in the batch script). **No delta checkpoints** and **no final model save** in the benchmark driver.
-- **CSV log:** `<output_dir>/benchmark_training_log.csv` — per-step metrics plus `phase`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, and Trainer fields (loss, etc.). Temporary mask `.pt` files are written under `$TMPDIR` and deleted after each sparse phase (bool masks via `save_masks`).
+- **CSV log:** `<output_dir>/benchmark_training_log.csv` — per-step metrics plus `phase`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, and Trainer fields (loss, etc.). Rows are **buffered in RAM** and flushed to disk **after each phase** (atomic replace), so logging does not re-read/rewrite the whole CSV every step (which was slow and could trigger **NFS `errno 116` stale file handle** on busy scratch). Temporary mask `.pt` files are written under `$TMPDIR` and deleted after each sparse phase (bool masks via `save_masks`).
 
 **Entry point:** [`src/full_training/h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py)  
-**Slurm wrapper:** [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) (defaults: `gpu` partition, `gres=gpu:h200:1`, 128G RAM, 4h wall — adjust `#SBATCH` to match your site).
+**Slurm wrapper:** [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) (defaults: `gpu` partition, `gres=gpu:h200:1`, 128G RAM, 8h wall in-repo — adjust `#SBATCH` to match your site).
 
-Default training knobs align with the **1024-seq Tulu3-style** block at the end of this file (`NUM_STEPS_DPO=100` per phase in the script env, `DPO_LEARNING_RATE=5e-7`, batch `2` × grad-accum `64`, warmup ratio `0.1`, max prompt/response length `1024`). Override with the same variable names the shell script exports.
+**Steps per phase (`tqdm` total):** the Slurm script passes `--n_steps` from **`H200_BSR_STEPS_PER_PHASE` only** (default **100**). It does **not** read `NUM_STEPS_DPO`. That avoids accidentally running **500 steps per phase** when your shell already has `export NUM_STEPS_DPO=500` from another README snippet. Override length explicitly: `export H200_BSR_STEPS_PER_PHASE=500` if you really want that. The job log prints `H200_BSR_STEPS_PER_PHASE=...` at start; the Python driver prints `n_steps per phase=...`. The tqdm bar `161/500` means **`max_steps=500`** for that phase (not a bug in epoch reporting).
+
+Default LR/batch/seq knobs align with the **1024-seq** reference block at the end of this file (`DPO_LEARNING_RATE=5e-7`, batch `2` × grad-accum `64`, warmup ratio `0.1`, max prompt/response length `1024`). The shell exports those as `DPO_*` vars passed into the Python CLI.
 
 ### Submit (copy/paste, login node)
 
@@ -185,6 +187,9 @@ export SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
 
 # Optional: where to write CSV + Slurm log context (default uses SLURM_JOB_ID when scheduled)
 export H200_BSR_OUT="${SCRATCH_USER_ROOT}/rl_casino_h200_bsr/run_${SLURM_JOB_ID:-manual}"
+
+# Optional: steps per phase (default 100). Do not rely on NUM_STEPS_DPO for this job.
+# export H200_BSR_STEPS_PER_PHASE=100
 
 sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 ```
@@ -219,6 +224,7 @@ export HF_TOKEN="hf_xxxxxxxx"
 export PYTHONPATH=/path/to/rl_casino
 "$TRAIN_ENV/bin/python" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --model_name meta-llama/Llama-3.1-8B-Instruct \
+  --n_steps 100 \
   --output_dir /scratch/${USER}/h200_bsr_manual \
   --dataset_cache_dir /scratch/${USER}/hf_cache/datasets \
   --device_map none
@@ -375,4 +381,4 @@ export DPO_GRADIENT_ACCUMULATION_STEPS=64
 export DPO_GRADIENT_CHECKPOINTING=1
 ```
 
-The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) section uses the same style of exports via `h200_sparse_dpo_bsr_benchmark.sh` (default `NUM_STEPS_DPO=100` per phase for quick throughput measurement).
+The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) uses `H200_BSR_STEPS_PER_PHASE` (default **100**) for `--n_steps`, not `NUM_STEPS_DPO`.

@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=h200_bsr_bench
 #SBATCH --output=logs/h200_bsr_bench_%j.out
 #SBATCH --error=logs/h200_bsr_bench_%j.err
@@ -45,8 +45,10 @@ export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 export HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_DATASETS_CACHE_ROOT}"
 
-# README-style DPO knobs (100 steps / phase in benchmark script)
-export NUM_STEPS_DPO="${NUM_STEPS_DPO:-100}"
+# Steps **per phase** (default 100). Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read
+# NUM_STEPS_DPO here, so a leftover export NUM_STEPS_DPO=500 from other README snippets
+# cannot silently turn this into a 500-step-per-phase run.
+export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-100}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
@@ -60,11 +62,12 @@ mkdir -p "$OUT_BASE"
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "OUT_BASE=${OUT_BASE}"
 echo "MODEL=${MODEL}"
+echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per dense/sparse phase)"
 
 exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --model_name "$MODEL" \
   --dataset tulu3 \
-  --n_steps "$NUM_STEPS_DPO" \
+  --n_steps "$H200_BSR_STEPS_PER_PHASE" \
   --batch_size "$DPO_PER_DEVICE_TRAIN_BATCH_SIZE" \
   --grad_accum "$DPO_GRADIENT_ACCUMULATION_STEPS" \
   --lr "$DPO_LEARNING_RATE" \
