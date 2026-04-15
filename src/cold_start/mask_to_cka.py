@@ -80,14 +80,29 @@ def load_masks(path):
     raise ValueError(f"Unrecognized mask format: {path}")
 
 
+def _mask_for_param_mul(param: torch.Tensor, mask_cpu: torch.Tensor) -> torch.Tensor:
+    """Binary 0/1 mask, same device and dtype as `param` (no fp32 upcast).
+
+    Previously we used `.float()`, which doubled mask memory vs bf16 weights and contributed
+    to CUDA OOM on ~40GB GPUs with 8B models.
+    """
+    if mask_cpu.dtype != torch.bool:
+        mask_cpu = mask_cpu != 0
+    return mask_cpu.to(device=param.device, dtype=param.dtype, non_blocking=True)
+
+
 def apply_mask(model, masks):
-    """Apply a mask in-place and return a snapshot for later restore."""
+    """Apply a mask in-place and return a snapshot for later restore.
+
+    Snapshots are stored on **CPU** to avoid ~2× GPU memory (model + full-weight clones),
+    which otherwise peaks near device capacity on 8B models.
+    """
     original = {}
     with torch.no_grad():
         for name, param in model.named_parameters():
             if name in masks:
-                original[name] = param.data.clone()
-                param.data.mul_(masks[name].to(param.device).float())
+                original[name] = param.data.detach().cpu().clone()
+                param.data.mul_(_mask_for_param_mul(param, masks[name]))
     return original
 
 
@@ -96,7 +111,13 @@ def restore_weights(model, original):
     with torch.no_grad():
         for name, param in model.named_parameters():
             if name in original:
-                param.data.copy_(original[name])
+                param.data.copy_(
+                    original[name].to(
+                        device=param.device, dtype=param.dtype, non_blocking=True
+                    )
+                )
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 def _hsic(Kc: torch.Tensor, Lc: torch.Tensor, n: int) -> torch.Tensor:
     """Biased HSIC estimator on pre-centered Gram matrices."""
@@ -315,12 +336,14 @@ def main():
         acts_a = collect_activations(model, extractor, tokenizer, chosen_texts,
                                      input_device, args.max_length, args.batch_size)
         restore_weights(model, orig_a)
+        del orig_a
 
         print("[CKA] Collecting activations for subnetwork B...")
         orig_b = apply_mask(model, masks_b)
         acts_b = collect_activations(model, extractor, tokenizer, chosen_texts,
                                      input_device, args.max_length, args.batch_size)
         restore_weights(model, orig_b)
+        del orig_b
         label_a, label_b = "mask_a_subnetwork", "mask_b_subnetwork"
 
     elif compare == "original_vs_a":
@@ -333,6 +356,7 @@ def main():
         acts_b = collect_activations(model, extractor, tokenizer, chosen_texts,
                                      input_device, args.max_length, args.batch_size)
         restore_weights(model, orig_a)
+        del orig_a
         label_a, label_b = "original", "mask_a_subnetwork"
 
     elif compare == "original_vs_b":
@@ -345,6 +369,7 @@ def main():
         acts_b = collect_activations(model, extractor, tokenizer, chosen_texts,
                                      input_device, args.max_length, args.batch_size)
         restore_weights(model, orig_b)
+        del orig_b
         label_a, label_b = "original", "mask_b_subnetwork"
 
     elif compare == "chosen_vs_rejected":
@@ -358,6 +383,7 @@ def main():
         acts_b = collect_activations(model, extractor, tokenizer, rejected_texts,
                                      input_device, args.max_length, args.batch_size)
         restore_weights(model, orig_a)
+        del orig_a
         label_a, label_b = "chosen", "rejected"
 
     else:

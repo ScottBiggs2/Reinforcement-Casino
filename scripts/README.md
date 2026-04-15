@@ -30,6 +30,8 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `submit_pipeline_chain.sh` + `pipeline_stage_01_dense.sh` … `pipeline_stage_05_evals.sh` - **chained jobs** (`afterok`) so each stage respects a typical **8h max** wall. GPU-heavy stages default to **7h45** Slurm time with **7h30** soft `timeout`s. **Stage 2** is **split**: [`pipeline_stage_02a_masks_warm.sh`](pipeline_stage_02a_masks_warm.sh) (**GPU**, warm delta masks — **delta streaming accumulation uses CUDA** when `RL_CASINO_WARM_MASK_SCORE_DEVICE=cuda` (default in `pipeline_setup`). A **GPU preflight** matmul runs at job start so allocations are not “idle.” For models with huge parameter counts, `mask_utils.create_mask_from_scores_gpu_efficient` may print that the **chunked global selector** moved scores to **CPU** for the final top-k; most wall time is still typically GPU-bound during delta passes. Set `RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu` only if you must avoid GPU or hit OOM. **→** [`pipeline_stage_02b_masks_cold.sh`](pipeline_stage_02b_masks_cold.sh) (GPU, Fisher+CAV) → [`pipeline_stage_02c_masks_post.sh`](pipeline_stage_02c_masks_post.sh) (CPU, random+inverses). [`pipeline_stage_02_masks.sh`](pipeline_stage_02_masks.sh) is a **short launcher** (~30m) that only `sbatch`-submits 02a (inherits 02a’s GPU `#SBATCH`; do not override `--partition` to a CPU queue unless you also set `RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu`). **Stage 4** (sparse launcher) is submitted at the **start** of stage 3 so sparse GPU jobs overlap mask comparisons; stage **4**’s launcher and **5** (eval fan-out) use the **cpu** partition with small mem. Shared logic lives in `pipeline_common.sh`.
 - `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **7h45** per mask; override `SPARSE_SLURM_MEM` if needed).
 - `multigpu_pipeline/` - **parallel multi-GPU entrypoints** (keeps the single-GPU pipeline unchanged). Currently provides a multi-GPU dense DPO stage 1 launcher.
+- `h200_sparse_dpo_bsr_benchmark.sh` - **single H200 GPU** Slurm job: multi-phase BSR DPO throughput benchmark (dense AdamW + random-mask sparse phases). See [H200 BSR DPO benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) below.
+- `plot_h200_bsr_benchmark.py` - **plots** `benchmark_training_log.csv` from that benchmark (throughput, loss, summary bars). Run locally or on a login node with pandas/matplotlib.
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
 
@@ -155,6 +157,72 @@ sbatch scripts/run_full_pipeline.sh
 ```
 
 This allocation runs dense DPO, masks, then **submits** parallel sparse GPU jobs (`pipeline_stage_04_sparse.sh`) and runs mask comparisons in the same job (overlap). Evals are queued by the stage 4 launcher when sparse jobs finish. Nested `sbatch` must be allowed. For the **chained** multi-job pipeline (recommended for long runs), use `submit_pipeline_chain.sh` instead.
+
+## H200 BSR DPO benchmark (throughput and random masks)
+
+This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.py` stage-4 jobs. It exercises [`src/full_training/sparse_dpo_bsr.py`](../src/full_training/sparse_dpo_bsr.py) (BSR sparse backward + `SparseAdamW`) for **timing comparisons**: one **dense** phase (standard `nn.Linear`, dense AdamW, no BSR injection) and several **sparse** phases with **random global masks** at fixed target sparsities (90%, 95%, 97.5%, 99%, 99.75% by default).
+
+- **Dataset / tokenizer** are loaded **once**; each phase **reloads the base model** from the Hub so timings are not chained across phases.
+- **No W&B** (set `WANDB_MODE=disabled` in the batch script). **No delta checkpoints** and **no final model save** in the benchmark driver.
+- **CSV log:** `<output_dir>/benchmark_training_log.csv` — per-step metrics plus `phase`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, and Trainer fields (loss, etc.). Temporary mask `.pt` files are written under `$TMPDIR` and deleted after each sparse phase (bool masks via `save_masks`).
+
+**Entry point:** [`src/full_training/h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py)  
+**Slurm wrapper:** [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) (defaults: `gpu` partition, `gres=gpu:h200:1`, 128G RAM, 4h wall — adjust `#SBATCH` to match your site).
+
+Default training knobs align with the **1024-seq Tulu3-style** block at the end of this file (`NUM_STEPS_DPO=100` per phase in the script env, `DPO_LEARNING_RATE=5e-7`, batch `2` × grad-accum `64`, warmup ratio `0.1`, max prompt/response length `1024`). Override with the same variable names the shell script exports.
+
+### Submit (copy/paste, login node)
+
+Run from the **repository root**. Set `HF_TOKEN` if the model is gated (Llama 3.1 8B Instruct).
+
+```bash
+cd /path/to/rl_casino
+mkdir -p logs
+
+export HF_TOKEN="hf_xxxxxxxx"   # required for meta-llama/Llama-3.1-8B-Instruct
+export TRAIN_ENV="${TRAIN_ENV:-/scratch/${USER}/conda_envs/rl_casino}"
+export SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
+
+# Optional: where to write CSV + Slurm log context (default uses SLURM_JOB_ID when scheduled)
+export H200_BSR_OUT="${SCRATCH_USER_ROOT}/rl_casino_h200_bsr/run_${SLURM_JOB_ID:-manual}"
+
+sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
+```
+
+Monitor:
+
+```bash
+squeue -u "$USER"
+tail -f logs/h200_bsr_bench_<JOBID>.out
+```
+
+**Outputs:** CSV at `$H200_BSR_OUT/benchmark_training_log.csv` (or the path printed in the job log). Per-phase HF run folders also appear under `$H200_BSR_OUT/` with names like `h200_bsr_<jobid>_phase_dense/` (checkpoints disabled; mostly empty dirs).
+
+### Plots from the CSV
+
+After the job finishes (or download the CSV to your laptop):
+
+```bash
+cd /path/to/rl_casino
+python scripts/plot_h200_bsr_benchmark.py \
+  --csv /scratch/${USER}/rl_casino_h200_bsr/run_<JOBID>/benchmark_training_log.csv \
+  --out_dir /scratch/${USER}/rl_casino_h200_bsr/run_<JOBID>/plots
+```
+
+Writes PNGs: `h200_bsr_benchmark_throughput_samples.png`, `h200_bsr_benchmark_throughput_steps.png`, `h200_bsr_benchmark_loss.png`, `h200_bsr_benchmark_summary_bars.png`. Requires **pandas** and **matplotlib** (see repo `requirements.txt`).
+
+### Manual run (no Slurm)
+
+```bash
+cd /path/to/rl_casino
+export HF_TOKEN="hf_xxxxxxxx"
+export PYTHONPATH=/path/to/rl_casino
+"$TRAIN_ENV/bin/python" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
+  --model_name meta-llama/Llama-3.1-8B-Instruct \
+  --output_dir /scratch/${USER}/h200_bsr_manual \
+  --dataset_cache_dir /scratch/${USER}/hf_cache/datasets \
+  --device_map none
+```
 
 ## Notes
 
@@ -293,3 +361,18 @@ export MULTIGPU_NGPUS=4
     --use_wandb \
     --run_name "manual_multigpu_dpo_${SLURM_JOB_ID:-local}"
 ```
+
+### Reference: DPO hyperparameters (1024 context, global batch 128 on one GPU)
+
+```bash
+export NUM_STEPS_DPO=500
+export DPO_LEARNING_RATE=5e-7
+export DPO_WARMUP_RATIO=0.1
+export DPO_MAX_LENGTH=1024
+export DPO_MAX_PROMPT_LENGTH=1024
+export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=2
+export DPO_GRADIENT_ACCUMULATION_STEPS=64
+export DPO_GRADIENT_CHECKPOINTING=1
+```
+
+The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) section uses the same style of exports via `h200_sparse_dpo_bsr_benchmark.sh` (default `NUM_STEPS_DPO=100` per phase for quick throughput measurement).

@@ -75,6 +75,9 @@ export MASK_ANALYSIS_ENSURE_RANDOM_BASELINE="${MASK_ANALYSIS_ENSURE_RANDOM_BASEL
 
 pipeline_setup
 
+# Reduce CUDA fragmentation during repeated CKA runs (optional; harmless if unset).
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 GT_PATH="${MASK_ANALYSIS_DIR}/${GROUND_TRUTH_BASENAME}"
 COMP_DIR="${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth"
 PLOT_DIR="${COMP_DIR}/plots"
