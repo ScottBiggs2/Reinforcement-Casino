@@ -117,6 +117,11 @@ def _series_for_log_scale(vals: list, eps: float = 1e-12) -> list:
     return [_clamp_positive_log(v, eps) if not math.isnan(v) else float("nan") for v in vals]
 
 
+def _jaccard_display_floor(log_y_floor: float, jaccard_log_floor: float) -> float:
+    """Floor for Jaccard panel in log mode (default 1e-4 so tiny nulls stay visible)."""
+    return max(float(log_y_floor), float(jaccard_log_floor))
+
+
 def _apply_metric_y_scale(
     ax,
     y_scale: str,
@@ -134,37 +139,57 @@ def _apply_metric_y_scale(
     raise ValueError(f"unknown y_scale: {y_scale} (use linear or log)")
 
 
-def draw_jaccard_theory_reference(
+def draw_jaccard_null_horizontal(
     ax,
-    x,
-    e_mean: list,
-    e_lo: list,
-    e_hi: list,
+    *,
+    em_g: float,
+    j_lo: float,
+    j_hi: float,
+    sig_g: float,
+    n_tot: int,
+    rho_m: float,
+    y_scale: str,
+    display_floor: float,
 ) -> None:
-    """Draw theoretical E[Jaccard] and ±1σ band from closed-form mean and variance (no MC)."""
-    if has_valid(e_mean):
-        ax.plot(
-            x,
-            e_mean,
-            linestyle=":",
-            linewidth=1.25,
-            color="gray",
-            alpha=0.95,
-            label="E[J] null (indep. Bernoulli, theory)",
-        )
+    """Horizontal E[J] and ±1σ band — same layout as CKA theory panel (axhline + axhspan).
+
+    Uses global E[J] from size-weighted ρ_a, ρ_b; Var(J) = 2(1−ρ̄)/(N(2−ρ̄²)³) with
+    ρ̄ = (ρ_a+ρ_b)/2 and N = sum of n_params (total indices), matching one scalar σ for the band.
+    """
+    if math.isnan(em_g) or n_tot < 1:
+        return
+    if y_scale == "log":
+        em_d = _clamp_positive_log(em_g, display_floor)
+        lo_d = _clamp_positive_log(j_lo, display_floor)
+        hi_d = _clamp_positive_log(j_hi, display_floor)
+        if lo_d > hi_d:
+            lo_d, hi_d = hi_d, lo_d
+    else:
+        em_d, lo_d, hi_d = em_g, j_lo, j_hi
+
     if (
-        has_valid(e_lo)
-        and has_valid(e_hi)
-        and has_valid(e_mean)
+        sig_g > 0
+        and not math.isnan(j_lo)
+        and not math.isnan(j_hi)
+        and (j_hi - j_lo) > 1e-15
     ):
-        ax.fill_between(
-            x,
-            e_lo,
-            e_hi,
-            alpha=0.22,
+        ax.axhspan(
+            lo_d,
+            hi_d,
             color="tab:orange",
+            alpha=0.2,
+            zorder=0,
             label="Jaccard null: E ± 1σ (theory)",
         )
+    ax.axhline(
+        y=em_d,
+        color="gray",
+        linestyle=":",
+        linewidth=1.35,
+        alpha=0.95,
+        zorder=1,
+        label=f"E[J] null ≈ {em_g:.3e} (N={n_tot}, ρ̄={rho_m:.4f})",
+    )
 
 
 def plot_one(
@@ -178,6 +203,7 @@ def plot_one(
     cka_null_scale: float = 1.0,
     cka_null_value: Optional[float] = None,
     log_y_floor: float = 1e-12,
+    jaccard_log_floor: float = 1e-4,
 ):
     """random_trials / random_seed are ignored (kept for CLI compatibility)."""
     rows = read_rows(csv_path)
@@ -203,31 +229,27 @@ def plot_one(
     da_g = global_density_from_rows(rows, "a")
     db_g = global_density_from_rows(rows, "b")
 
-    e_mean: list = []
-    e_lo: list = []
-    e_hi: list = []
     em_g = (
         theoretical_bernoulli_jaccard_mean(da_g, db_g)
         if not math.isnan(da_g) and not math.isnan(db_g)
         else float("nan")
     )
     rho_m_g = 0.5 * (da_g + db_g) if not math.isnan(da_g) and not math.isnan(db_g) else float("nan")
-    for i in range(len(rows)):
-        n_p = n_params_col[i] or 0
-        if math.isnan(em_g) or math.isnan(rho_m_g) or n_p < 1:
-            e_mean.append(float("nan"))
-            e_lo.append(float("nan"))
-            e_hi.append(float("nan"))
-            continue
-        var = theoretical_jaccard_variance(rho_m_g, n_p)
-        sig = math.sqrt(max(0.0, var)) if not math.isnan(var) else 0.0
-        e_mean.append(em_g)
-        e_lo.append(max(0.0, em_g - sig))
-        e_hi.append(min(1.0, em_g + sig))
 
     n_tot = int(cka_total_n) if cka_total_n is not None and cka_total_n > 0 else sum(
         n for n in n_params_col if n is not None and n > 0
     )
+    # Horizontal null band: same closed-form Var as CKA-style total-N baseline (one σ for all layers).
+    var_j = (
+        theoretical_jaccard_variance(rho_m_g, n_tot)
+        if not math.isnan(rho_m_g) and n_tot >= 1
+        else float("nan")
+    )
+    sig_j = math.sqrt(max(0.0, var_j)) if not math.isnan(var_j) else 0.0
+    j_lo = max(0.0, em_g - sig_j) if not math.isnan(em_g) else float("nan")
+    j_hi = min(1.0, em_g + sig_j) if not math.isnan(em_g) else float("nan")
+
+    jac_floor = _jaccard_display_floor(log_y_floor, jaccard_log_floor)
     if cka_null_value is not None and not math.isnan(cka_null_value) and cka_null_value > 0:
         cka_e = float(cka_null_value) * float(cka_null_scale)
         cka_sig = 0.0
@@ -239,17 +261,38 @@ def plot_one(
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
     fig.suptitle(csv_path.name, fontsize=12)
 
-    # Jaccard + theoretical null (E and ±1σ)
+    # Jaccard + theoretical null (horizontal E[J] and ±1σ, same style as CKA panel)
     ax = axes[0, 0]
     if has_valid(jaccard):
-        jac_plot = _series_for_log_scale(jaccard, log_y_floor) if y_scale == "log" else jaccard
-        eb_plot = _series_for_log_scale(e_mean, log_y_floor) if y_scale == "log" else e_mean
-        lo_plot = _series_for_log_scale(e_lo, log_y_floor) if y_scale == "log" else e_lo
-        hi_plot = _series_for_log_scale(e_hi, log_y_floor) if y_scale == "log" else e_hi
-        ax.plot(x, jac_plot, marker="o", linewidth=1.3, markersize=3, label="observed Jaccard", color="tab:blue")
-        draw_jaccard_theory_reference(ax, x, eb_plot, lo_plot, hi_plot)
+        jac_plot = _series_for_log_scale(jaccard, jac_floor) if y_scale == "log" else jaccard
+        if (
+            not math.isnan(em_g)
+            and n_tot >= 1
+            and not math.isnan(rho_m_g)
+        ):
+            draw_jaccard_null_horizontal(
+                ax,
+                em_g=em_g,
+                j_lo=j_lo,
+                j_hi=j_hi,
+                sig_g=sig_j,
+                n_tot=n_tot,
+                rho_m=rho_m_g,
+                y_scale=y_scale,
+                display_floor=jac_floor,
+            )
+        ax.plot(
+            x,
+            jac_plot,
+            marker="o",
+            linewidth=1.3,
+            markersize=3,
+            label="observed Jaccard",
+            color="tab:blue",
+            zorder=2,
+        )
         if y_scale == "log":
-            _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
+            _apply_metric_y_scale(ax, y_scale, ymin_floor=jac_floor)
         else:
             ax.set_ylim(
                 0,
@@ -259,7 +302,10 @@ def plot_one(
                 ),
             )
         ax.legend(fontsize=7, loc="best")
-        ax.set_title("Per-layer Jaccard vs Bernoulli null (theory)")
+        ax.set_title(
+            "Per-layer Jaccard vs Bernoulli null (theory)\n"
+            f"(E[J] from global ρ_a,ρ_b; Var = 2(1−ρ̄)/(N(2−ρ̄²)³), N≈{n_tot})"
+        )
     else:
         ax.text(0.5, 0.5, "No Jaccard data", ha="center", va="center")
         ax.set_title("Per-layer Jaccard")
@@ -387,6 +433,7 @@ def plot_compare(
     cka_total_n: Optional[int] = None,
     cka_null_scale: float = 1.0,
     log_y_floor: float = 1e-12,
+    jaccard_log_floor: float = 1e-4,
 ):
     """4-panel comparison figure: two CSVs (e.g. SNIP vs CAV) overlaid on the same axes.
 
@@ -435,7 +482,21 @@ def plot_compare(
         if not math.isnan(da_g) and not math.isnan(db_g)
         else float("nan")
     )
-    rand_bl = [em_g for _ in pairs_a]
+    rho_m_g = 0.5 * (da_g + db_g) if not math.isnan(da_g) and not math.isnan(db_g) else float("nan")
+    n_tot_j = (
+        int(cka_total_n)
+        if cka_total_n is not None and cka_total_n > 0
+        else sum(to_int_params(r.get("n_params")) or 0 for r in pairs_a)
+    )
+    var_j = (
+        theoretical_jaccard_variance(rho_m_g, n_tot_j)
+        if not math.isnan(rho_m_g) and n_tot_j >= 1
+        else float("nan")
+    )
+    sig_j = math.sqrt(max(0.0, var_j)) if not math.isnan(var_j) else 0.0
+    j_lo = max(0.0, em_g - sig_j) if not math.isnan(em_g) else float("nan")
+    j_hi = min(1.0, em_g + sig_j) if not math.isnan(em_g) else float("nan")
+    jac_floor = _jaccard_display_floor(log_y_floor, jaccard_log_floor)
 
     # Color scheme: blue=label_a, orange=label_b; solid=GRPO, dashed=DPO
     CA_G = "tab:blue";   CA_D = "tab:blue"
@@ -450,28 +511,36 @@ def plot_compare(
     # ── Panel 0,0 : Jaccard ────────────────────────────────────────────
     ax = axes[0, 0]
     kw = dict(linewidth=1.4, markersize=3, marker="o")
-    ja_p = _series_for_log_scale(jac_a, log_y_floor) if y_scale == "log" else jac_a
-    jb_p = _series_for_log_scale(jac_b, log_y_floor) if y_scale == "log" else jac_b
-    rb_p = _series_for_log_scale(rand_bl, log_y_floor) if y_scale == "log" else rand_bl
-    if has_valid(jac_a):
-        ax.plot(x, ja_p, color=CA_G, label=f"{label_a}", **kw)
-    if has_valid(jac_b):
-        ax.plot(x, jb_p, color=CB_G, label=f"{label_b}", **kw)
-    if has_valid(rand_bl):
-        ax.plot(
-            x,
-            rb_p,
-            linestyle="--",
-            linewidth=1.0,
-            color="gray",
-            alpha=0.6,
-            label="E[Jaccard] null (indep. Bernoulli)",
+    ja_p = _series_for_log_scale(jac_a, jac_floor) if y_scale == "log" else jac_a
+    jb_p = _series_for_log_scale(jac_b, jac_floor) if y_scale == "log" else jac_b
+    if (
+        not math.isnan(em_g)
+        and n_tot_j >= 1
+        and not math.isnan(rho_m_g)
+    ):
+        draw_jaccard_null_horizontal(
+            ax,
+            em_g=em_g,
+            j_lo=j_lo,
+            j_hi=j_hi,
+            sig_g=sig_j,
+            n_tot=n_tot_j,
+            rho_m=rho_m_g,
+            y_scale=y_scale,
+            display_floor=jac_floor,
         )
+    if has_valid(jac_a):
+        ax.plot(x, ja_p, color=CA_G, label=f"{label_a}", **kw, zorder=2)
+    if has_valid(jac_b):
+        ax.plot(x, jb_p, color=CB_G, label=f"{label_b}", **kw, zorder=2)
     if y_scale == "log":
-        _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
+        _apply_metric_y_scale(ax, y_scale, ymin_floor=jac_floor)
     else:
         ax.set_ylim(0, 1.05)
-    ax.set_title("Per-layer Jaccard  (GRPO ∩ DPO mask overlap)")
+    ax.set_title(
+        "Per-layer Jaccard  (GRPO ∩ DPO mask overlap)\n"
+        f"(theory null: horizontal E±σ, N≈{n_tot_j})"
+    )
     ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
     # ── Panel 0,1 : CKA ───────────────────────────────────────────────
@@ -586,6 +655,12 @@ def main():
         help="Minimum positive value when using --y-scale log (avoids log(0)).",
     )
     parser.add_argument(
+        "--jaccard-log-floor",
+        type=float,
+        default=1e-4,
+        help="Minimum y for Jaccard panel in log mode (floors observed + null; default 1e-4).",
+    )
+    parser.add_argument(
         "--cka-total-n",
         type=int,
         default=None,
@@ -636,6 +711,7 @@ def main():
             cka_total_n=args.cka_total_n,
             cka_null_scale=float(args.cka_null_scale),
             log_y_floor=args.log_y_floor,
+            jaccard_log_floor=float(args.jaccard_log_floor),
         )
         return
 
@@ -676,6 +752,7 @@ def main():
             cka_null_scale=args.cka_null_scale,
             cka_null_value=args.cka_null_value,
             log_y_floor=args.log_y_floor,
+            jaccard_log_floor=float(args.jaccard_log_floor),
         ):
             made += 1
             print(f"✓ {out}")
