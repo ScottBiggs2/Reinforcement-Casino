@@ -15,10 +15,21 @@
 #   sbatch --export=ALL,MASK_ANALYSIS_DIR=/path/to/masks,GROUND_TRUTH_BASENAME=checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt \
 #     scripts/run_mask_analysis_vs_ground_truth.sh
 #
+# Artifacts (all under MASK_ANALYSIS_DIR; override with env):
+#   comparisons_vs_ground_truth/          — jaccard_*.json, cka_*.json, layer_metrics_*.csv, rollup CSVs
+#   comparisons_vs_ground_truth/plots/    — *_plots.png
+# Repo logs (submit cwd = REPO_ROOT):
+#   logs/mask_gt_analysis_${SLURM_JOB_ID}.out|.err
+#   logs/mask_gt_analysis_${RUN_ID}.log
+#
+# CKA vs effective rank (both enabled by default):
+#   - CKA: GPU forward passes (mask_to_cka.py) → cka_*.json; not reused elsewhere.
+#   - Effective rank: CPU linear-algebra on binary mask tensors (export_layer_metrics_csv.py); independent of CKA.
+#
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:1
-#SBATCH --time=08:00:00
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=03:00:00
 #SBATCH --job-name=mask_gt_suite
 #SBATCH --mem=128G
 #SBATCH --ntasks=1
@@ -68,6 +79,9 @@ GT_PATH="${MASK_ANALYSIS_DIR}/${GROUND_TRUTH_BASENAME}"
 COMP_DIR="${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth"
 PLOT_DIR="${COMP_DIR}/plots"
 LOG_FILE="${REPO_ROOT}/logs/mask_gt_analysis_${RUN_ID}.log"
+# Absolute paths for logs / provenance (Slurm .out/.err are relative to submit cwd = REPO_ROOT).
+SLURM_OUT_ABS="${REPO_ROOT}/logs/mask_gt_analysis_${SLURM_JOB_ID:-local}.out"
+SLURM_ERR_ABS="${REPO_ROOT}/logs/mask_gt_analysis_${SLURM_JOB_ID:-local}.err"
 
 mkdir -p "$COMP_DIR" "$PLOT_DIR" logs
 
@@ -81,10 +95,16 @@ if [ ! -f "$GT_PATH" ]; then
 fi
 
 echo "===== Mask analysis vs ground truth =====" | tee -a "$LOG_FILE"
+echo "  REPO_ROOT=${REPO_ROOT}" | tee -a "$LOG_FILE"
+echo "  SLURM_JOB_ID=${SLURM_JOB_ID:-}" | tee -a "$LOG_FILE"
 echo "  RUN_ID=${RUN_ID}" | tee -a "$LOG_FILE"
 echo "  MASK_ANALYSIS_DIR=${MASK_ANALYSIS_DIR}" | tee -a "$LOG_FILE"
 echo "  GROUND_TRUTH=${GT_PATH}" | tee -a "$LOG_FILE"
 echo "  COMP_DIR=${COMP_DIR}" | tee -a "$LOG_FILE"
+echo "  PLOT_DIR=${PLOT_DIR}" | tee -a "$LOG_FILE"
+echo "  LOG_FILE=${LOG_FILE}" | tee -a "$LOG_FILE"
+echo "  SLURM_STDOUT=${SLURM_OUT_ABS}" | tee -a "$LOG_FILE"
+echo "  SLURM_STDERR=${SLURM_ERR_ABS}" | tee -a "$LOG_FILE"
 echo "  RUN_MASK_CKA=${RUN_MASK_CKA}  EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK}" | tee -a "$LOG_FILE"
 
 cmp_failures=0
@@ -233,6 +253,26 @@ if [ "${#_pngs[@]}" -eq 0 ]; then
 fi
 
 echo "Artifacts: JSON/CSV under ${COMP_DIR}; PNGs under ${PLOT_DIR}" | tee -a "$LOG_FILE"
+
+manifest="${COMP_DIR}/RUN_MANIFEST_${RUN_ID}.txt"
+{
+  echo "mask_gt_suite run manifest"
+  echo "generated_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "SLURM_JOB_ID=${SLURM_JOB_ID:-}"
+  echo "RUN_ID=${RUN_ID}"
+  echo "REPO_ROOT=${REPO_ROOT}"
+  echo "MASK_ANALYSIS_DIR=${MASK_ANALYSIS_DIR}"
+  echo "GROUND_TRUTH=${GT_PATH}"
+  echo "COMP_DIR=${COMP_DIR}"
+  echo "PLOT_DIR=${PLOT_DIR}"
+  echo "LOG_FILE=${LOG_FILE}"
+  echo "SLURM_STDOUT=${SLURM_OUT_ABS}"
+  echo "SLURM_STDERR=${SLURM_ERR_ABS}"
+  echo "RUN_MASK_CKA=${RUN_MASK_CKA}"
+  echo "EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK}"
+} > "$manifest"
+echo "Wrote manifest: ${manifest}" | tee -a "$LOG_FILE"
+
 if [ "${cmp_failures}" -gt 0 ]; then
   echo "WARNING: ${cmp_failures} step(s) reported failures. See ${LOG_FILE}" | tee -a "$LOG_FILE" >&2
   exit 1

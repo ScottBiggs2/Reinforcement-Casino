@@ -107,13 +107,29 @@ def effective_rank(mask_tensor: torch.Tensor, eps: float = 1e-12) -> Tuple[Optio
     if mask_tensor.ndim < 2:
         return None, None
 
-    W = mask_tensor.float().reshape(mask_tensor.shape[0], -1)
+    # Reshape to 2D: treat first dim as "rows", rest flattened.
+    # For large layers, full SVD can be prohibitively expensive / memory-heavy. We instead compute
+    # eigenvalues of the smaller Gram matrix (WᵀW or WWᵀ) and derive singular values.
+    W = mask_tensor.to(dtype=torch.float32, device="cpu").reshape(mask_tensor.shape[0], -1)
     m, n = W.shape
     max_rank = min(m, n)
     if max_rank == 0:
         return 0.0, 0.0
 
-    s = torch.linalg.svdvals(W)
+    # Guardrail: if the smaller Gram matrix is enormous, skip rather than OOM.
+    # (This keeps the pipeline robust on huge embeddings / unusual tensor shapes.)
+    small = max_rank
+    if small > 16384:
+        return None, None
+
+    if n <= m:
+        G = W.T @ W  # (n,n)
+    else:
+        G = W @ W.T  # (m,m)
+    # G is PSD; eigvalsh is stable and cheaper than full SVD.
+    evals = torch.linalg.eigvalsh(G)
+    evals = torch.clamp(evals, min=0.0)
+    s = torch.sqrt(evals)
     s = s[s > eps]
     if s.numel() == 0:
         return 0.0, 0.0
@@ -272,6 +288,8 @@ def main():
 
         rows.append(
             {
+                "mask_a_name": os.path.basename(args.mask_a),
+                "mask_b_name": os.path.basename(args.mask_b),
                 "layer": ca,
                 "layer_index": parse_layer_index(ca),
                 "shape_a": str(tuple(t_a.shape)),
@@ -303,6 +321,8 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(output_path)) or ".", exist_ok=True)
 
     fieldnames = [
+        "mask_a_name",
+        "mask_b_name",
         "layer",
         "layer_index",
         "shape_a",

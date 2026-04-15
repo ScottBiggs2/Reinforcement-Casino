@@ -59,6 +59,33 @@ def theoretical_bernoulli_jaccard_mean(density_a: float, density_b: float) -> fl
     return (density_a * density_b) / denom
 
 
+def global_density_from_rows(rows: list, which: str) -> float:
+    """Compute a single global keep-density across all layers.
+
+    This is the constant Bernoulli baseline the user expects: a *single* density per mask
+    (weighted by layer size), not per-layer densities that vary with layer sparsity.
+    """
+    key_d = f"density_{which}"
+    key_s = f"sparsity_{which}"
+    num = 0.0
+    den = 0.0
+    for r in rows:
+        n_p = to_int_params(r.get("n_params")) or 0
+        if n_p <= 0:
+            continue
+        d = to_float(r.get(key_d))
+        if math.isnan(d):
+            s = to_float(r.get(key_s))
+            d = 1.0 - s if not math.isnan(s) else float("nan")
+        if math.isnan(d):
+            continue
+        num += float(n_p) * float(d)
+        den += float(n_p)
+    if den <= 0:
+        return float("nan")
+    return num / den
+
+
 def theoretical_jaccard_variance(rho: float, n_indices: int) -> float:
     """Var(J) = 2(1 − ρ) / ( N · (2 − ρ²)³ ) with ρ = keep density, N = tensor length."""
     if n_indices < 1 or not (0.0 <= rho <= 1.0):
@@ -168,39 +195,35 @@ def plot_one(
     erank_b = [to_float(r.get("effective_rank_b_norm")) for r in rows]
     n_params_col = [to_int_params(r.get("n_params")) for r in rows]
 
-    da_list: list = []
-    db_list: list = []
-    for r in rows:
-        da = to_float(r.get("density_a"))
-        db = to_float(r.get("density_b"))
-        if math.isnan(da):
-            sa = to_float(r.get("sparsity_a"))
-            da = 1.0 - sa if not math.isnan(sa) else float("nan")
-        if math.isnan(db):
-            sb = to_float(r.get("sparsity_b"))
-            db = 1.0 - sb if not math.isnan(sb) else float("nan")
-        da_list.append(da)
-        db_list.append(db)
+    mask_a_name = rows[0].get("mask_a_name") or "mask_a"
+    mask_b_name = rows[0].get("mask_b_name") or "mask_b"
 
-    # Theory: E[J], Var(J) with ρ = keep density; band E ± 1σ (σ = sqrt(Var)).
+    # Theory baseline: a *single* global Bernoulli baseline (constant across layers).
+    # Compute global densities (size-weighted) so the baseline does not vary by layer index.
+    da_g = global_density_from_rows(rows, "a")
+    db_g = global_density_from_rows(rows, "b")
+
     e_mean: list = []
     e_lo: list = []
     e_hi: list = []
+    em_g = (
+        theoretical_bernoulli_jaccard_mean(da_g, db_g)
+        if not math.isnan(da_g) and not math.isnan(db_g)
+        else float("nan")
+    )
+    rho_m_g = 0.5 * (da_g + db_g) if not math.isnan(da_g) and not math.isnan(db_g) else float("nan")
     for i in range(len(rows)):
-        da, db = da_list[i], db_list[i]
         n_p = n_params_col[i] or 0
-        if math.isnan(da) or math.isnan(db) or n_p < 1:
+        if math.isnan(em_g) or math.isnan(rho_m_g) or n_p < 1:
             e_mean.append(float("nan"))
             e_lo.append(float("nan"))
             e_hi.append(float("nan"))
             continue
-        em = theoretical_bernoulli_jaccard_mean(da, db)
-        rho_m = 0.5 * (da + db)
-        var = theoretical_jaccard_variance(rho_m, n_p)
+        var = theoretical_jaccard_variance(rho_m_g, n_p)
         sig = math.sqrt(max(0.0, var)) if not math.isnan(var) else 0.0
-        e_mean.append(em)
-        e_lo.append(max(0.0, em - sig))
-        e_hi.append(min(1.0, em + sig))
+        e_mean.append(em_g)
+        e_lo.append(max(0.0, em_g - sig))
+        e_hi.append(min(1.0, em_g + sig))
 
     n_tot = int(cka_total_n) if cka_total_n is not None and cka_total_n > 0 else sum(
         n for n in n_params_col if n is not None and n > 0
@@ -272,8 +295,15 @@ def plot_one(
             y_hi = y0 + cka_sig
             ax.axhspan(y_lo, y_hi, color="forestgreen", alpha=0.12, label="CKA null ±1σ (theory)")
     drew_cka_theory = n_tot >= 2 and not math.isnan(cka_e) and cka_e > 0
-    if not show_cka_obs and not drew_cka_theory:
-        ax.text(0.5, 0.5, "No CKA in CSV (re-export with CKA JSON)", ha="center", va="center", fontsize=9)
+    if not show_cka_obs:
+        ax.text(
+            0.5,
+            0.5,
+            "No observed CKA values in CSV\n(re-export with --cka-json from mask_to_cka output)",
+            ha="center",
+            va="center",
+            fontsize=9,
+        )
     if y_scale == "log":
         _apply_metric_y_scale(ax, y_scale, ymin_floor=log_y_floor)
     else:
@@ -289,10 +319,10 @@ def plot_one(
     ax = axes[1, 0]
     drawn = False
     if has_valid(sparsity_a):
-        ax.plot(x, sparsity_a, marker="o", linewidth=1.3, markersize=3, label="sparsity_a")
+        ax.plot(x, sparsity_a, marker="o", linewidth=1.3, markersize=3, label=f"sparsity: {mask_a_name}")
         drawn = True
     if has_valid(sparsity_b):
-        ax.plot(x, sparsity_b, marker="o", linewidth=1.3, markersize=3, label="sparsity_b")
+        ax.plot(x, sparsity_b, marker="o", linewidth=1.3, markersize=3, label=f"sparsity: {mask_b_name}")
         drawn = True
     if drawn:
         ax.set_ylim(0, 1)
@@ -307,10 +337,10 @@ def plot_one(
     ax = axes[1, 1]
     drawn = False
     if has_valid(erank_a):
-        ax.plot(x, erank_a, marker="o", linewidth=1.3, markersize=3, label="erank_a_norm")
+        ax.plot(x, erank_a, marker="o", linewidth=1.3, markersize=3, label=f"erank_norm: {mask_a_name}")
         drawn = True
     if has_valid(erank_b):
-        ax.plot(x, erank_b, marker="o", linewidth=1.3, markersize=3, label="erank_b_norm")
+        ax.plot(x, erank_b, marker="o", linewidth=1.3, markersize=3, label=f"erank_norm: {mask_b_name}")
         drawn = True
     if drawn:
         ax.set_ylim(0, 1)
@@ -397,21 +427,15 @@ def plot_compare(
     era_b    = col(pairs_b, "effective_rank_a_norm")
     erb_b    = col(pairs_b, "effective_rank_b_norm")
 
-    # Theoretical E[J] for label_a rows (same as plot_one)
-    rand_bl = []
-    for ra in pairs_a:
-        da = to_float(ra.get("density_a"))
-        db = to_float(ra.get("density_b"))
-        if math.isnan(da):
-            sa = to_float(ra.get("sparsity_a"))
-            da = 1.0 - sa if not math.isnan(sa) else float("nan")
-        if math.isnan(db):
-            sb = to_float(ra.get("sparsity_b"))
-            db = 1.0 - sb if not math.isnan(sb) else float("nan")
-        if math.isnan(da) or math.isnan(db):
-            rand_bl.append(float("nan"))
-        else:
-            rand_bl.append(theoretical_bernoulli_jaccard_mean(da, db))
+    # Theoretical E[J] as a constant global Bernoulli baseline (same across layers).
+    da_g = global_density_from_rows(list(pairs_a), "a")
+    db_g = global_density_from_rows(list(pairs_a), "b")
+    em_g = (
+        theoretical_bernoulli_jaccard_mean(da_g, db_g)
+        if not math.isnan(da_g) and not math.isnan(db_g)
+        else float("nan")
+    )
+    rand_bl = [em_g for _ in pairs_a]
 
     # Color scheme: blue=label_a, orange=label_b; solid=GRPO, dashed=DPO
     CA_G = "tab:blue";   CA_D = "tab:blue"
