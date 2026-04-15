@@ -2,9 +2,12 @@
 import os
 import json
 import csv
+import time
 import torch
 import wandb
+import pandas as pd
 from transformers import TrainerCallback
+from typing import Any, Dict, Optional
 
 class FlexibleCheckpointCallback(TrainerCallback):
     """
@@ -130,3 +133,81 @@ class CSVLoggerCallback(TrainerCallback):
         if self.file:
             self.file.close()
             print(f"✓ Training log saved to {self.filepath}")
+
+
+class BenchmarkRunLogSink:
+    """
+    Append one row at a time to a benchmark CSV; merges columns safely when Trainer keys vary.
+    """
+
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+
+    def write_row(self, row: Dict[str, Any]) -> None:
+        d = os.path.dirname(os.path.abspath(self.filepath))
+        if d:
+            os.makedirs(d, exist_ok=True)
+        flat: Dict[str, Any] = {}
+        for k, v in row.items():
+            if v is None:
+                flat[k] = ""
+            elif isinstance(v, (bool, int, float, str)):
+                flat[k] = v
+            else:
+                flat[k] = str(v)
+
+        new_df = pd.DataFrame([flat])
+        if os.path.isfile(self.filepath):
+            old = pd.read_csv(self.filepath)
+            combined = pd.concat([old, new_df], ignore_index=True, sort=False)
+            combined.to_csv(self.filepath, index=False)
+        else:
+            new_df.to_csv(self.filepath, index=False)
+
+
+class BenchmarkThroughputCallback(TrainerCallback):
+    """
+    Per-log throughput (cumulative since phase start) plus phase metadata for plotting.
+    """
+
+    def __init__(
+        self,
+        sink: BenchmarkRunLogSink,
+        phase: str,
+        sparsity_target_pct: Optional[float],
+        optimizer_label: str,
+    ):
+        self.sink = sink
+        self.phase = phase
+        self.sparsity_target_pct = sparsity_target_pct
+        self.optimizer_label = optimizer_label
+        self._t0: Optional[float] = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self._t0 = time.perf_counter()
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None or self._t0 is None:
+            return
+        wall = time.perf_counter() - self._t0
+        step = int(state.global_step)
+        world = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+        samples_per_step = (
+            args.per_device_train_batch_size * args.gradient_accumulation_steps * world
+        )
+        sps = step / wall if wall > 0 else 0.0
+        sms = (step * samples_per_step) / wall if wall > 0 else 0.0
+
+        row: Dict[str, Any] = {
+            "phase": self.phase,
+            "sparsity_target_pct": (
+                "" if self.sparsity_target_pct is None else float(self.sparsity_target_pct)
+            ),
+            "optimizer": self.optimizer_label,
+            "step": step,
+            "wall_time_s": round(wall, 6),
+            "cumulative_steps_per_s": round(sps, 8),
+            "cumulative_samples_per_s": round(sms, 6),
+        }
+        row.update(logs)
+        self.sink.write_row(row)

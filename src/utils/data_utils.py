@@ -184,6 +184,70 @@ def dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torc
     }
 
 
+def make_dpo_collator(
+    tokenizer,
+    max_prompt_length: int = 512,
+    max_chosen_rejected_length: int = 1024,
+):
+    """
+    Build a DPO batch collator with configurable truncation lengths (matches README / DPO_train knobs).
+    Default matches legacy dpo_collator_fn (512 / 1024).
+    """
+
+    def collate_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        if "prompt_input_ids" in examples[0]:
+            def pad_stack(key):
+                seqs = [torch.tensor(ex[key]) if not torch.is_tensor(ex[key]) else ex[key] for ex in examples]
+                lens = [s.size(-1) for s in seqs]
+                maxlen = max(lens)
+                out = torch.full((len(seqs), maxlen), fill_value=0, dtype=torch.long)
+                mask = torch.zeros((len(seqs), maxlen), dtype=torch.long)
+                for i, s in enumerate(seqs):
+                    out[i, : s.size(-1)] = s.to(torch.long)
+                    mask[i, : s.size(-1)] = 1
+                return out, mask
+
+            p_ids, p_mask = pad_stack("prompt_input_ids")
+            c_ids, c_mask = pad_stack("chosen_input_ids")
+            r_ids, r_mask = pad_stack("rejected_input_ids")
+            return {
+                "prompt_input_ids": p_ids,
+                "prompt_attention_mask": p_mask,
+                "chosen_input_ids": c_ids,
+                "chosen_attention_mask": c_mask,
+                "rejected_input_ids": r_ids,
+                "rejected_attention_mask": r_mask,
+            }
+
+        prompts = [ex.get("prompt", "") for ex in examples]
+        chosens = [ex.get("chosen", "") for ex in examples]
+        rejects = [ex.get("rejected", "") for ex in examples]
+
+        enc_prompt = [tokenizer(p, truncation=True, max_length=max_prompt_length) for p in prompts]
+        enc_chosen = [tokenizer(c, truncation=True, max_length=max_chosen_rejected_length) for c in chosens]
+        enc_reject = [tokenizer(r, truncation=True, max_length=max_chosen_rejected_length) for r in rejects]
+
+        batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+        batch_chosen = tokenizer.pad(enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+        batch_reject = tokenizer.pad(enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8)
+
+        for k in ("input_ids", "attention_mask"):
+            batch_prompt[k] = batch_prompt[k].to(torch.long)
+            batch_chosen[k] = batch_chosen[k].to(torch.long)
+            batch_reject[k] = batch_reject[k].to(torch.long)
+
+        return {
+            "prompt_input_ids": batch_prompt["input_ids"],
+            "prompt_attention_mask": batch_prompt["attention_mask"],
+            "chosen_input_ids": batch_chosen["input_ids"],
+            "chosen_attention_mask": batch_chosen["attention_mask"],
+            "rejected_input_ids": batch_reject["input_ids"],
+            "rejected_attention_mask": batch_reject["attention_mask"],
+        }
+
+    return collate_fn
+
+
 def concatenated_dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torch.Tensor]:
     """
     Collator that concatenates prompt + chosen and prompt + rejected.
