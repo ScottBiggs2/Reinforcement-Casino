@@ -24,7 +24,17 @@ import torch
 
 
 LAYER_RE = re.compile(r"model\.layers\.(\d+)\.")
-DECODER_BLOCK_RE = re.compile(r"^(model\.layers\.\d+)")
+# Decoder block anywhere in the name (mask keys may be prefixed e.g. base_model.model.layers...)
+DECODER_BLOCK_SEARCH = re.compile(r"(model\.layers\.\d+)")
+
+
+def _normalize_cka_module_key(name: str) -> str:
+    """Strip common PEFT / wrapper prefixes so hook names align with mask checkpoints."""
+    s = str(name)
+    for prefix in ("base_model.model.", "base_model.", "model.model."):
+        if s.startswith(prefix):
+            return s[len(prefix) :]
+    return s
 
 
 def resolve_cka_for_canonical_layer(
@@ -36,25 +46,49 @@ def resolve_cka_for_canonical_layer(
     CKA hooks attach to ``*.mlp.down_proj`` modules (one scalar per decoder layer).
     Mask CSV rows use per-weight names (``...q_proj``, ``...down_proj``, ...). We
     broadcast the down_proj CKA to every tensor in the same ``model.layers.L`` block.
-    """
-    if canonical in per_layer_cka:
-        return float(per_layer_cka[canonical])
 
-    m = DECODER_BLOCK_RE.match(canonical)
+    Module strings may differ between hooks and masks (e.g. ``base_model.model.layers`` vs
+    ``model.layers``); we match on ``model.layers.N`` anywhere in the canonical name.
+    """
+    if not per_layer_cka:
+        return float("nan")
+
+    def _coerce(v) -> float:
+        if v is None:
+            return float("nan")
+        try:
+            fv = float(v)
+            return fv
+        except (TypeError, ValueError):
+            return float("nan")
+
+    c_norm = _normalize_cka_module_key(canonical)
+    for key in (canonical, c_norm, canonical_name(canonical), canonical_name(c_norm)):
+        if key in per_layer_cka:
+            return _coerce(per_layer_cka[key])
+
+    m = DECODER_BLOCK_SEARCH.search(canonical) or DECODER_BLOCK_SEARCH.search(c_norm)
     if not m:
         return float("nan")
     block = m.group(1)
     down_key = f"{block}.mlp.down_proj"
-    if down_key in per_layer_cka:
-        return float(per_layer_cka[down_key])
-    # Any activation key under this decoder block (e.g. alternate hook naming)
+    for dk in (
+        down_key,
+        _normalize_cka_module_key(down_key),
+        canonical_name(down_key),
+        canonical_name(_normalize_cka_module_key(down_key)),
+    ):
+        if dk in per_layer_cka:
+            return _coerce(per_layer_cka[dk])
+
     prefix = block + "."
     for k, v in per_layer_cka.items():
-        if k.startswith(prefix) and v is not None:
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                continue
+        ks = str(k)
+        if not ks.startswith(prefix) and not _normalize_cka_module_key(ks).startswith(prefix):
+            continue
+        fv = _coerce(v)
+        if fv == fv:
+            return fv
     return float("nan")
 
 
@@ -163,23 +197,41 @@ def compute_per_layer_jaccard(masks_a: Dict[str, torch.Tensor], masks_b: Dict[st
 
 
 def load_per_layer_json(path: Optional[str], key: str) -> Dict[str, float]:
-    """Load a per-layer metric dict from JSON; index by raw and canonical names."""
+    """Load a per-layer metric dict from JSON; index by raw and canonical names.
+
+    - Keeps JSON ``null`` as NaN so keys remain addressable (export used to drop nulls).
+    - Merges nested layouts: ``per_layer_cka``, ``per_layer``, ``cka.per_layer``, etc.
+    - Registers normalized module prefixes for CKA (hooks vs mask naming).
+    """
     if not path:
         return {}
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    raw = data.get(key, {}) or data.get("per_layer", {})
+
+    raw = data.get(key)
+    if not isinstance(raw, dict):
+        raw = {}
+    # Alternate layouts (only when primary key missing or explicitly empty for CKA)
+    if not raw and key == "per_layer_cka":
+        cka_block = data.get("cka")
+        if isinstance(cka_block, dict):
+            nested = cka_block.get("per_layer_cka") or cka_block.get("per_layer")
+            if isinstance(nested, dict):
+                raw = nested
+
     out: Dict[str, float] = {}
     for k, v in raw.items():
-        if v is None:
-            continue
-        try:
-            fv = float(v)
-        except (TypeError, ValueError):
-            continue
         ks = str(k)
-        out[ks] = fv
-        out[canonical_name(ks)] = fv
+        if v is None:
+            fv = float("nan")
+        else:
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+        kn = _normalize_cka_module_key(ks)
+        for alias in (ks, canonical_name(ks), kn, canonical_name(kn)):
+            out[alias] = fv
     return out
 
 

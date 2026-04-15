@@ -642,10 +642,11 @@ def main():
     input_dir = Path(args.input_dir).resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    # Use rglob for --recursive: pathlib glob("**/pat") is filesystem-dependent for matches
-    # at the root of input_dir; rglob always includes the directory itself.
+    # Discover CSVs: when --recursive, union glob + rglob so root-level files are always
+    # included (some Python/pathlib versions are finicky about rglob-only discovery on
+    # certain filesystems; flat `comparisons_vs_ground_truth/layer_metrics_*.csv` must match).
     if args.recursive:
-        csv_files = sorted(input_dir.rglob(args.pattern))
+        csv_files = sorted({*input_dir.glob(args.pattern), *input_dir.rglob(args.pattern)})
     else:
         csv_files = sorted(input_dir.glob(args.pattern))
 
@@ -657,6 +658,10 @@ def main():
         f"recursive={args.recursive}  matched_csv={len(csv_files)}",
         flush=True,
     )
+    for p in csv_files[:12]:
+        print(f"  csv: {p}", flush=True)
+    if len(csv_files) > 12:
+        print(f"  ... and {len(csv_files) - 12} more", flush=True)
 
     made = 0
     for p in csv_files:
@@ -685,9 +690,11 @@ def main():
         sys.exit(1)
     if len(csv_files) == 0:
         print(
-            "WARNING: no layer_metrics CSVs matched; no PNGs written.",
+            "ERROR: no layer_metrics CSVs matched; no PNGs written. "
+            f"Check --input-dir and --pattern (input_dir={input_dir!s}).",
             file=sys.stderr,
         )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -125,9 +125,13 @@ def _hsic(Kc: torch.Tensor, Lc: torch.Tensor, n: int) -> torch.Tensor:
 
 
 def linear_cka(X: torch.Tensor, Y: torch.Tensor) -> float:
-    """Compute linear CKA between two activation matrices."""
-    X = X.double()
-    Y = Y.double()
+    """Compute linear CKA between two activation matrices.
+
+    Always runs the linear-algebra core on **CPU float64** so results are stable and we avoid
+    rare CUDA float64 / multi-device edge cases; n is at most batch×samples (small).
+    """
+    X = X.detach().cpu().double()
+    Y = Y.detach().cpu().double()
     n = X.shape[0]
 
     if n < 2:
@@ -161,18 +165,25 @@ def collect_activations(model, extractor, tokenizer, texts, device,
 
 
 def compute_layerwise_cka(acts_a: dict, acts_b: dict, device="cpu") -> dict:
-    """Compute linear CKA for each shared layer in two activation dicts."""
+    """Compute linear CKA for each shared layer in two activation dicts.
+
+    ``device`` is ignored; activations are moved to CPU inside ``linear_cka``.
+    """
     common = sorted(set(acts_a.keys()) & set(acts_b.keys()))
     if not common:
+        ka, kb = list(acts_a.keys())[:5], list(acts_b.keys())[:5]
         return {"mean_cka": 0.0, "min_cka": 0.0, "max_cka": 0.0,
                 "per_layer": {}, "n_layers": 0, "n_skipped": 0,
-                "note": "No common layer names between the two activation dicts."}
+                "note": (
+                    "No common layer names between the two activation dicts. "
+                    f"Example keys A={ka} B={kb}"
+                )}
 
     per_layer = {}
     n_skipped = 0
     for name in common:
-        X = acts_a[name].to(device)
-        Y = acts_b[name].to(device)
+        X = acts_a[name].detach().cpu()
+        Y = acts_b[name].detach().cpu()
 
         if X.shape[0] != Y.shape[0]:
             per_layer[name] = None
@@ -322,6 +333,19 @@ def main():
         seed=args.seed,
         dataset_name=args.dataset_name,
     )
+    if len(chosen_texts) < 2:
+        print(
+            f"[CKA] ERROR: need at least 2 calibration prompts for CKA (got {len(chosen_texts)}). "
+            "Increase --n_samples or fix --dataset_name.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if args.compare == "chosen_vs_rejected" and len(rejected_texts) < 2:
+        print(
+            f"[CKA] ERROR: chosen_vs_rejected needs >=2 rejected texts (got {len(rejected_texts)}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # ---- Collect activations for both conditions --------------------------
     extractor = FeatureExtractor()
