@@ -26,6 +26,14 @@ cd "$REPO_ROOT"
 mkdir -p logs
 
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+# If H200_BSR_OUT was exported before SCRATCH_USER_ROOT existed, it becomes
+# /rl_casino_h200_bsr/... (under filesystem root) → mkdir permission denied. Recompute.
+case "${H200_BSR_OUT:-}" in
+  /rl_casino_h200_bsr/*)
+    echo "WARNING: Ignoring invalid H200_BSR_OUT=${H200_BSR_OUT} (export SCRATCH_USER_ROOT before H200_BSR_OUT on the login node)." >&2
+    unset H200_BSR_OUT
+    ;;
+esac
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
 if [ ! -x "$TRAIN_PY" ]; then
