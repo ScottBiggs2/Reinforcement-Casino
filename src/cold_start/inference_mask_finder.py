@@ -34,9 +34,11 @@ from src.utils.mask_utils import (
 from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_input_device
 from src.cold_start.utils.cav_probes import CAVProbeScorer
 from src.cold_start.utils.snip_scorer import SNIPScorer
+from src.utils.dpo_text_normalize import normalize_dpo_record
+from src.utils.dataset_registry import resolve_hf_dataset_id
 
 # ── Default datasets ──────────────────────────────────────────
-DPO_DATASET_NAME = "qihoo360/Light-R1-DPOData"
+DPO_DATASET_NAME = "tulu3"
 GRPO_DATASET_NAME = "open-r1/OpenR1-Math-220k"
 
 
@@ -60,24 +62,18 @@ def sanitize_model_name(model_name: str) -> str:
     return sanitized.strip("_")
 
 
-def _msg_to_text(x):
-    if isinstance(x, str):
-        return x
-    if isinstance(x, dict):
-        return x.get("value", "")
-    if isinstance(x, list):
-        return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
-    return str(x)
-
-
 # ══════════════════════════════════════════════════════════════
 #  Data loading  (text-list based, shared by all methods)
 # ══════════════════════════════════════════════════════════════
 
 def load_calibration_samples_dpo(dataset_name, n_samples=64, seed=42):
-    """Load chosen/rejected pairs from a DPO-format dataset."""
-    print(f"[DPO mode] Loading {n_samples} calibration samples from {dataset_name}...")
-    raw = load_dataset(dataset_name, split="train")
+    """Load chosen/rejected pairs from a DPO-format dataset (same normalization as training)."""
+    hf_id = resolve_hf_dataset_id(dataset_name)
+    print(
+        f"[DPO mode] Loading {n_samples} calibration samples "
+        f"(dataset={dataset_name!r} → HF {hf_id!r})..."
+    )
+    raw = load_dataset(hf_id, split="train")
     raw = raw.shuffle(seed=seed)
 
     chosen_texts: List[str] = []
@@ -87,30 +83,10 @@ def load_calibration_samples_dpo(dataset_name, n_samples=64, seed=42):
         if len(chosen_texts) >= n_samples:
             break
 
-        prompt_raw = rec.get("prompt", "")
-        chosen_raw = rec.get("chosen", "")
-        rejected_raw = rec.get("rejected", "")
-
-        if not prompt_raw:
-            convs = rec.get("conversations", [])
-            if isinstance(convs, list):
-                human_parts = [
-                    m.get("value", "") for m in convs
-                    if isinstance(m, dict)
-                    and m.get("from", m.get("role", "")).lower() in ("human", "user", "system")
-                ]
-                prompt_raw = "\n".join(human_parts).strip()
-
-        if isinstance(prompt_raw, list):
-            prompt = "\n".join(
-                m.get("value", "") for m in prompt_raw
-                if isinstance(m, dict) and m.get("from", "").lower() != "assistant"
-            ).strip()
-        else:
-            prompt = _msg_to_text(prompt_raw).strip()
-
-        chosen = _msg_to_text(chosen_raw).strip()
-        rejected = _msg_to_text(rejected_raw).strip()
+        norm = normalize_dpo_record(rec)
+        prompt = norm["prompt"]
+        chosen = norm["chosen"]
+        rejected = norm["rejected"]
 
         if not chosen or not rejected:
             continue

@@ -108,6 +108,11 @@ def sanitize_dataset_name(key: str) -> str:
     return get_dataset_config(key)["sanitized_name"]
 
 
+def resolve_hf_dataset_id(key_or_hf_id: str) -> str:
+    """Registry key (e.g. ``tulu3``) or HuggingFace id → ``hf_id`` for ``datasets.load_dataset``."""
+    return get_dataset_config(key_or_hf_id)["hf_id"]
+
+
 def _apply_field_map(dataset, field_map: Dict[str, str]):
     """
     Rename columns in a HuggingFace dataset according to field_map.
@@ -166,61 +171,12 @@ def load_dpo_dataset(key_or_hf_id: str, subset_size: Optional[int] = None, split
 def _normalize_dataset(raw_ds, subset_size=None, label="dataset"):
     """
     Normalize a pre-loaded dataset to {prompt, chosen, rejected} format.
-    
-    Mirrors the logic in data_utils.load_dpo_dataset but works on an
-    already-loaded Dataset object.
+
+    Delegates to ``dpo_text_normalize.normalize_dpo_record`` so CKA / training / registry agree.
     """
-    def _msg_to_text(x):
-        if isinstance(x, str):
-            return x
-        if isinstance(x, dict):
-            for key in ("value", "content", "text", "message"):
-                if key in x:
-                    return str(x[key])
-            return " ".join(str(v) for v in x.values() if isinstance(v, str))
-        if isinstance(x, list):
-            parts = []
-            for m in x:
-                if isinstance(m, dict):
-                    for key in ("value", "content", "text", "message"):
-                        if key in m:
-                            parts.append(str(m[key]))
-                            break
-                elif isinstance(m, str):
-                    parts.append(m)
-            return "\n".join(parts)
-        return str(x)
+    from src.utils.dpo_text_normalize import normalize_dpo_record
 
-    def _extract_prompt(rec):
-        convs = rec.get("conversations", None)
-        if convs and isinstance(convs, list):
-            human_parts = [
-                m["value"] for m in convs
-                if isinstance(m, dict)
-                and m.get("from", m.get("role", "")).lower() in ("human", "user", "system")
-                and "value" in m
-            ]
-            if human_parts:
-                return "\n".join(human_parts).strip()
-        
-        prompt_raw = rec.get("prompt", "")
-        if isinstance(prompt_raw, list):
-            prompt_text = "\n".join(
-                m.get("value", "") for m in prompt_raw
-                if isinstance(m, dict) and m.get("from", "").lower() != "assistant"
-            ).strip()
-            if prompt_text:
-                return prompt_text
-        
-        return _msg_to_text(prompt_raw).strip()
-
-    def normalize_record(rec):
-        prompt_text = _extract_prompt(rec)
-        chosen_text = _msg_to_text(rec.get("chosen", "")).strip()
-        rejected_text = _msg_to_text(rec.get("rejected", "")).strip()
-        return {"prompt": prompt_text, "chosen": chosen_text, "rejected": rejected_text}
-
-    norm_ds = raw_ds.map(normalize_record, remove_columns=raw_ds.column_names)
+    norm_ds = raw_ds.map(normalize_dpo_record, remove_columns=raw_ds.column_names)
     
     if subset_size is not None:
         norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))

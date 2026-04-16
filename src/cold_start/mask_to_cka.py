@@ -15,8 +15,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_input_device
+from src.utils.dpo_text_normalize import normalize_dpo_record
+from src.utils.dataset_registry import resolve_hf_dataset_id
 
-DEFAULT_CALIBRATION_DATASET = "qihoo360/Light-R1-DPOData"
+# Registry key default (same as pipeline DPO_DATASETS[0]); resolves to allenai/... Tulu3 mixture.
+DEFAULT_CALIBRATION_DATASET = "tulu3"
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -26,40 +30,32 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
-def _msg_to_text(x):
-    if isinstance(x, str):
-        return x
-    if isinstance(x, dict):
-        return x.get("value", "")
-    if isinstance(x, list):
-        return "\n".join(m.get("value", "") for m in x if isinstance(m, dict))
-    return str(x)
-
-
 def load_calibration_samples(
     n_samples=64,
     seed=42,
     dataset_name: str = DEFAULT_CALIBRATION_DATASET,
 ):
-    """Return (chosen_texts, rejected_texts) lists of length n_samples."""
-    print(f"Loading {n_samples} calibration samples from {dataset_name}...")
-    raw = load_dataset(dataset_name, split="train").shuffle(seed=seed)
+    """Return (chosen_texts, rejected_texts) lists for CKA.
+
+    Uses the same DPO normalization as training (``normalize_dpo_record``) so Tulu3 and
+    other list-of-messages formats load correctly. ``dataset_name`` may be a registry key
+    (e.g. ``tulu3``) or a HuggingFace dataset id.
+    """
+    hf_id = resolve_hf_dataset_id(dataset_name)
+    print(
+        f"Loading {n_samples} calibration samples "
+        f"(dataset={dataset_name!r} → HF {hf_id!r})..."
+    )
+    raw = load_dataset(hf_id, split="train").shuffle(seed=seed)
 
     chosen_texts, rejected_texts = [], []
     for rec in raw:
         if len(chosen_texts) >= n_samples:
             break
-        prompt_raw = rec.get("prompt", "")
-        if isinstance(prompt_raw, list):
-            prompt = "\n".join(
-                m.get("value", "") for m in prompt_raw
-                if isinstance(m, dict) and m.get("from", "").lower() != "assistant"
-            ).strip()
-        else:
-            prompt = _msg_to_text(prompt_raw).strip()
-
-        chosen   = _msg_to_text(rec.get("chosen",   "")).strip()
-        rejected = _msg_to_text(rec.get("rejected", "")).strip()
+        norm = normalize_dpo_record(rec)
+        prompt = norm["prompt"]
+        chosen = norm["chosen"]
+        rejected = norm["rejected"]
         if not chosen or not rejected:
             continue
 
@@ -264,7 +260,10 @@ def main():
         "--dataset_name",
         type=str,
         default=DEFAULT_CALIBRATION_DATASET,
-        help="HF dataset id for calibration prompts (chosen/rejected).",
+        help=(
+            "DPO calibration data: registry key (e.g. tulu3) or HuggingFace id "
+            "(same normalization as DPO training)."
+        ),
     )
     parser.add_argument(
         "--compare", type=str, default="mask_vs_mask",
