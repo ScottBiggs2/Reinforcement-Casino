@@ -16,6 +16,9 @@ import os
 import sys
 import argparse
 import torch
+
+os.environ.setdefault("WANDB_CONSOLE", "off")
+
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
@@ -259,6 +262,7 @@ def train(
                 phase=benchmark_phase,
                 sparsity_target_pct=benchmark_sparsity_pct,
                 optimizer_label=label,
+                print_every=10,
             )
         )
     elif save_csv:

@@ -36,9 +36,10 @@ export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
-# Disable W&B / external experiment trackers
+# Disable W&B / external experiment trackers (must disable console capture — see errno 116 on Slurm)
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export WANDB_DISABLED="${WANDB_DISABLED:-true}"
+export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
 
 # --- Model / data (override before sbatch or via #SBATCH --export) ---
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"

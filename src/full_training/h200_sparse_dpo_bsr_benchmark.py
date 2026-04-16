@@ -6,10 +6,16 @@ Dataset and tokenizer are loaded once; each phase reloads the base model from HF
 CSV: <output_dir>/benchmark_training_log.csv (via BenchmarkRunLogSink + BenchmarkThroughputCallback).
 """
 
-import argparse
-import gc
 import os
 import sys
+
+# Before TRL/transformers/wandb: disable W&B console wrapping. On Slurm, wandb's stdout shim + NFS
+# job logs can raise OSError errno 116 (stale file handle) inside tqdm/print.
+os.environ.setdefault("WANDB_CONSOLE", "off")
+os.environ.setdefault("WANDB_MODE", "disabled")
+
+import argparse
+import gc
 import tempfile
 from typing import Optional
 

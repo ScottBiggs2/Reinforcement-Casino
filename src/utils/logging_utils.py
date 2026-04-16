@@ -1,5 +1,10 @@
 
 import os
+
+# Avoid wandb patching sys.stdout for console capture when only callbacks import wandb;
+# cluster stdouts (NFS-backed Slurm .out) can hit errno 116 on wrapped writes.
+os.environ.setdefault("WANDB_CONSOLE", "off")
+
 import json
 import csv
 import time
@@ -185,12 +190,14 @@ class BenchmarkThroughputCallback(TrainerCallback):
         phase: str,
         sparsity_target_pct: Optional[float],
         optimizer_label: str,
+        print_every: int = 10,
     ):
         self.sink = sink
         self.phase = phase
         self.sparsity_target_pct = sparsity_target_pct
         self.optimizer_label = optimizer_label
         self._t0: Optional[float] = None
+        self.print_every = int(print_every) if print_every and int(print_every) > 0 else 0
 
     def on_train_begin(self, args, state, control, **kwargs):
         self._t0 = time.perf_counter()
@@ -220,3 +227,11 @@ class BenchmarkThroughputCallback(TrainerCallback):
         }
         row.update(logs)
         self.sink.write_row(row)
+
+        # Live timing printouts for Slurm .out monitoring.
+        if self.print_every and step > 0 and (step % self.print_every == 0):
+            sp = "dense" if self.sparsity_target_pct is None else f"{float(self.sparsity_target_pct):g}%"
+            print(
+                f"[throughput] phase={self.phase} sparsity={sp} step={step} "
+                f"steps/s={sps:.4f} samples/s={sms:.2f} wall_s={wall:.1f}"
+            )
