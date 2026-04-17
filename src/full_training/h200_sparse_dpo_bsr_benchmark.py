@@ -2,7 +2,14 @@
 """
 H200-oriented multi-phase BSR DPO benchmark: one dense + several random-mask sparse runs.
 
-Dataset and tokenizer are loaded once; each phase reloads the base model from HF for fair timing.
+- **Tokenizer + DPO dataset:** loaded once and reused across phases.
+- **Training model:** each phase calls ``sparse_dpo_train``, which loads weights from the Hub/local
+  cache again. Dense vs sparse need different module graphs (BSR replaces ``nn.Linear``), so we do
+  not reuse one GPU model across those modes. Loads are from disk cache (fast) but still pay
+  shard read + GPU alloc each phase.
+- **Random masks:** built from parameter **shapes** only via ``device_map=\"meta\"`` (no full 8B CPU
+  materialization per sparse phase). Falls back to a full CPU load if meta init fails.
+
 CSV: <output_dir>/benchmark_training_log.csv (via BenchmarkRunLogSink + BenchmarkThroughputCallback).
 """
 
@@ -49,8 +56,33 @@ def _build_random_scores_for_masks(model: torch.nn.Module, mlp_only: bool) -> di
             continue
         if mlp_only and "mlp" not in name.lower():
             continue
-        scores[name] = torch.rand(p.shape, dtype=torch.float32)
+        # CPU float scores; model may be meta (no materialized weights).
+        scores[name] = torch.rand(tuple(p.shape), dtype=torch.float32, device="cpu")
     return scores
+
+
+def _model_for_mask_shapes(ckpt: str):
+    """
+    Parameter shapes only — avoid materializing ~8B weights on CPU for every sparse phase.
+    Prefer Hugging Face ``device_map='meta'`` (skeleton model). Fallback: one full CPU load.
+    """
+    try:
+        return AutoModelForCausalLM.from_pretrained(
+            ckpt,
+            torch_dtype=torch.bfloat16,
+            device_map="meta",
+            low_cpu_mem_usage=True,
+        )
+    except Exception as exc:
+        slurm_safe_print(
+            f"  WARNING: meta skeleton load failed ({exc}); using full CPU load for mask shapes (slow)."
+        )
+        return AutoModelForCausalLM.from_pretrained(
+            ckpt,
+            torch_dtype=torch.bfloat16,
+            device_map="cpu",
+            low_cpu_mem_usage=True,
+        )
 
 
 def generate_random_masks_cpu(
@@ -61,18 +93,13 @@ def generate_random_masks_cpu(
     mlp_only: bool,
     min_layer_keep_ratio: float,
 ) -> dict:
-    """Load model on CPU, build global random masks, delete model."""
+    """Build global random masks from weight shapes (meta model) + CPU mask selector."""
     ckpt = checkpoint_path if checkpoint_path and str(checkpoint_path).lower() != "none" else model_name
     torch.manual_seed(seed)
     slurm_safe_print(
         f"  Generating random mask (target sparsity {sparsity_percent}%, seed={seed}) on CPU..."
     )
-    m = AutoModelForCausalLM.from_pretrained(
-        ckpt,
-        torch_dtype=torch.bfloat16,
-        device_map="cpu",
-        low_cpu_mem_usage=True,
-    )
+    m = _model_for_mask_shapes(ckpt)
     scores = _build_random_scores_for_masks(m, mlp_only)
     del m
     gc.collect()
@@ -94,7 +121,7 @@ def main():
     p.add_argument("--checkpoint", type=str, default=None)
     p.add_argument("--dataset", type=str, default="tulu3")
     p.add_argument("--subset_size", type=int, default=None)
-    p.add_argument("--n_steps", type=int, default=100)
+    p.add_argument("--n_steps", type=int, default=50)
     p.add_argument("--batch_size", type=int, default=2)
     p.add_argument("--grad_accum", type=int, default=64)
     p.add_argument("--lr", type=float, default=5e-7)

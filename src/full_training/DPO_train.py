@@ -173,9 +173,11 @@ def dpo_collator_fn(examples: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
     chosens  = [ex.get("chosen", "")   for ex in examples]
     rejects  = [ex.get("rejected", "") for ex in examples]
 
-    enc_prompt = [tokenizer(p, truncation=True, max_length=512,  return_tensors="pt") for p in prompts]
-    enc_chosen = [tokenizer(c, truncation=True, max_length=1024, return_tensors="pt") for c in chosens]
-    enc_reject = [tokenizer(r, truncation=True, max_length=1024, return_tensors="pt") for r in rejects]
+    _mpl = args.max_prompt_length
+    _ml = args.max_length
+    enc_prompt = [tokenizer(p, truncation=True, max_length=_mpl, return_tensors="pt") for p in prompts]
+    enc_chosen = [tokenizer(c, truncation=True, max_length=_ml, return_tensors="pt") for c in chosens]
+    enc_reject = [tokenizer(r, truncation=True, max_length=_ml, return_tensors="pt") for r in rejects]
 
     batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
     batch_chosen = tokenizer.pad(enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8)

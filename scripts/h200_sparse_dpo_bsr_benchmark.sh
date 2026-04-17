@@ -44,6 +44,10 @@ export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
+# Triton: persistent compile cache on scratch (fewer recompiles across steps/phases than default TMP).
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${SCRATCH_USER_ROOT}/.triton_cache}"
+mkdir -p "${TRITON_CACHE_DIR}"
+
 # Disable W&B / external experiment trackers (must disable console capture — see errno 116 on Slurm).
 # Use fixed assignments so a stray login-node export cannot re-enable wandb stdout wrapping.
 export WANDB_MODE="disabled"
@@ -59,16 +63,22 @@ export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 export HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_DATASETS_CACHE_ROOT}"
 
-# Steps **per phase** (default 100). Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read
+# Steps **per phase** (default 50). Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read
 # NUM_STEPS_DPO here, so a leftover export NUM_STEPS_DPO=500 from other README snippets
 # cannot silently turn this into a 500-step-per-phase run.
-export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-100}"
+export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-50}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export DPO_MAX_PROMPT_LENGTH="${DPO_MAX_PROMPT_LENGTH:-1024}"
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE="${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-2}"
 export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
+
+# Match pipeline dense `DPO_train.py` default optimizer (`--optim adamw_8bit`) when bitsandbytes is installed.
+export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
+
+# Fewer Trainer log events than every step (override with RL_CASINO_LOGGING_STEPS=1 for parity with DPO_train).
+export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-25}"
 
 OUT_BASE="${H200_BSR_OUT:-${SCRATCH_USER_ROOT}/rl_casino_h200_bsr}/${RUN_ID:-${SLURM_JOB_ID:-local}}"
 mkdir -p "$OUT_BASE"
@@ -77,6 +87,12 @@ echo "REPO_ROOT=${REPO_ROOT}"
 echo "OUT_BASE=${OUT_BASE}"
 echo "MODEL=${MODEL}"
 echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per dense/sparse phase)"
+echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS:-}"
+
+GC_ARGS=()
+if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
+  GC_ARGS+=(--no_gradient_checkpointing)
+fi
 
 exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --model_name "$MODEL" \
@@ -91,4 +107,5 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --output_dir "$OUT_BASE" \
   --dataset_cache_dir "$HF_DATASETS_CACHE" \
   --device_map none \
-  --run_label "h200_bsr_${SLURM_JOB_ID:-local}"
+  --run_label "h200_bsr_${SLURM_JOB_ID:-local}" \
+  "${GC_ARGS[@]}"

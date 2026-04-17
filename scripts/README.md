@@ -169,9 +169,34 @@ This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.
 **Entry point:** [`src/full_training/h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py)  
 **Slurm wrapper:** [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) (defaults: `gpu` partition, `gres=gpu:h200:1`, 128G RAM, 8h wall in-repo — adjust `#SBATCH` to match your site).
 
-**Steps per phase (`tqdm` total):** the Slurm script passes `--n_steps` from **`H200_BSR_STEPS_PER_PHASE` only** (default **100**). It does **not** read `NUM_STEPS_DPO`. That avoids accidentally running **500 steps per phase** when your shell already has `export NUM_STEPS_DPO=500` from another README snippet. Override length explicitly: `export H200_BSR_STEPS_PER_PHASE=500` if you really want that. The job log prints `H200_BSR_STEPS_PER_PHASE=...` at start; the Python driver prints `n_steps per phase=...`. The tqdm bar `161/500` means **`max_steps=500`** for that phase (not a bug in epoch reporting).
+**Steps per phase (`tqdm` total):** the Slurm script passes `--n_steps` from **`H200_BSR_STEPS_PER_PHASE` only** (default **50**). It does **not** read `NUM_STEPS_DPO`. That avoids accidentally running **500 steps per phase** when your shell already has `export NUM_STEPS_DPO=500` from another README snippet. Override length explicitly: `export H200_BSR_STEPS_PER_PHASE=500` if you really want that. The job log prints `H200_BSR_STEPS_PER_PHASE=...` at start; the Python driver prints `n_steps per phase=...`. The tqdm bar `161/500` means **`max_steps=500`** for that phase (not a bug in epoch reporting).
 
 Default LR/batch/seq knobs align with the **1024-seq** reference block at the end of this file (`DPO_LEARNING_RATE=5e-7`, batch `2` × grad-accum `64`, warmup ratio `0.1`, max prompt/response length `1024`). The shell exports those as `DPO_*` vars passed into the Python CLI.
+
+### Wall time and what the driver does
+
+- **Pipeline stage 1** ([`pipeline_stage_01_dense.sh`](pipeline_stage_01_dense.sh) → [`DPO_train.py`](../src/full_training/DPO_train.py)) runs **dense DPO only**.
+- This benchmark runs **six phases** (one dense + five sparse sparsities). Per-phase step time varies (see `[throughput]` lines in the Slurm log); do not assume sparse vs dense ordering without measuring **your** run.
+- **Tokenizer + dataset** are loaded **once**. **Training** reloads model weights from the Hub/cache each phase (dense vs sparse need different module graphs). Random masks use a **meta skeleton** model for shapes only — not a full 8B CPU load per sparse phase.
+- **`TRITON_CACHE_DIR`** defaults to ``${SCRATCH_USER_ROOT}/.triton_cache`` in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) so Triton can reuse compiled kernels across steps/phases.
+
+Mitigations: **longer Slurm wall**, lower **`H200_BSR_STEPS_PER_PHASE`**, or **fewer phases** (edit [`h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py) `phases` list).
+
+### Parity: pipeline dense DPO vs this benchmark
+
+Use this checklist so “same hyperparameters as README” actually matches **both** code paths.
+
+| Knob | [`pipeline_common.sh`](pipeline_common.sh) / [`DPO_train.py`](../src/full_training/DPO_train.py) | H200 benchmark ([`sparse_dpo_bsr.py`](../src/full_training/sparse_dpo_bsr.py)) |
+|------|------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
+| **Steps** | `NUM_STEPS_DPO` (default **250** in `pipeline_common.sh`, not 500) | `H200_BSR_STEPS_PER_PHASE` only (default **50** per phase). **`NUM_STEPS_DPO` is ignored** by the Slurm script. |
+| **LR / warmup / weight decay / β** | Passed when `DPO_*` env vars set | Same `DPO_*` → CLI (`--lr`, `--warmup_ratio`, `--weight_decay`, `--dpo_beta`). |
+| **Batch** | `DPO_PER_DEVICE_TRAIN_BATCH_SIZE`, `DPO_GRADIENT_ACCUMULATION_STEPS` | Same env names → `--batch_size`, `--grad_accum`. |
+| **Seq lengths** | `DPO_MAX_LENGTH`, `DPO_MAX_PROMPT_LENGTH` — if **unset**, [`DPO_train.py`](../src/full_training/DPO_train.py) argparse defaults are **1024** / **512** respectively | Explicitly passes **`--max_length`** / **`--max_prompt_length`** from env (defaults **1024** / **1024** in the Slurm script). Set both sides the same for a fair comparison. |
+| **Gradient checkpointing** | `DPO_GRADIENT_CHECKPOINTING` (default **1**): adds `--gradient_checkpointing` | Same semantics: default on; set `DPO_GRADIENT_CHECKPOINTING=0` to pass `--no_gradient_checkpointing`. |
+| **Dense optimizer** | **`--optim adamw_8bit`** default in `DPO_train.py` (bitsandbytes) | Dense phase uses **`DPO_OPTIM`** (default **`adamw_8bit`** in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh)) via `bitsandbytes` when installed; falls back to full `torch.optim.AdamW` with a warning. Set `DPO_OPTIM=adamw` to force full AdamW. |
+| **Sparse phases** | N/A (stage 4 uses different entrypoints) | **Custom backward + `SparseAdamW`** — dominates wall time; not comparable to dense step time. |
+
+**Important:** [`DPO_train.py`](../src/full_training/DPO_train.py) now tokenizes prompts/chosen/rejected using **`--max_prompt_length` / `--max_length`** in the string collator path (same as README when you export `DPO_MAX_PROMPT_LENGTH` / `DPO_MAX_LENGTH` for the pipeline).
 
 ### Submit (copy/paste, login node)
 
@@ -188,8 +213,8 @@ export SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
 # Optional: where to write CSV + Slurm log context (default uses SLURM_JOB_ID when scheduled)
 export H200_BSR_OUT="${SCRATCH_USER_ROOT}/rl_casino_h200_bsr/run_${SLURM_JOB_ID:-manual}"
 
-# Optional: steps per phase (default 100). Do not rely on NUM_STEPS_DPO for this job.
-# export H200_BSR_STEPS_PER_PHASE=100
+# Optional: steps per phase (default 50). Do not rely on NUM_STEPS_DPO for this job.
+# export H200_BSR_STEPS_PER_PHASE=50
 
 sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 ```
@@ -224,7 +249,7 @@ export HF_TOKEN="hf_xxxxxxxx"
 export PYTHONPATH=/path/to/rl_casino
 "$TRAIN_ENV/bin/python" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --model_name meta-llama/Llama-3.1-8B-Instruct \
-  --n_steps 100 \
+  --n_steps 50 \
   --output_dir /scratch/${USER}/h200_bsr_manual \
   --dataset_cache_dir /scratch/${USER}/hf_cache/datasets \
   --device_map none
@@ -379,6 +404,8 @@ export DPO_MAX_PROMPT_LENGTH=1024
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=2
 export DPO_GRADIENT_ACCUMULATION_STEPS=64
 export DPO_GRADIENT_CHECKPOINTING=1
+# Pipeline dense DPO_train default; H200 benchmark dense phase also honors this via sparse_dpo_bsr:
+export DPO_OPTIM=adamw_8bit
 ```
 
-The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) uses `H200_BSR_STEPS_PER_PHASE` (default **100**) for `--n_steps`, not `NUM_STEPS_DPO`.
+The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) uses `H200_BSR_STEPS_PER_PHASE` (default **50**) for `--n_steps`, not `NUM_STEPS_DPO`. **`pipeline_common.sh` defaults `NUM_STEPS_DPO` to 250**, not 500 — override explicitly if you want 500-step pipeline runs.

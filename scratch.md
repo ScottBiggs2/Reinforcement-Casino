@@ -53,7 +53,8 @@ Job ID | Job Content | Date | Time | Status |
 5991892| GRPO verification script 1| 4/16 | 22:04 | failed |
 5995131| Sparse speed ablation | 4/16 | 22:40 | Running | 
 5998766| GRPO verification script 1 again | 23:20 | Running |
-5999931| Mask vs GT again^3 | 4/16 | 23:30 | Running |
+5999931| Mask vs GT again^3 | 4/16 | 23:30 | Failed |
+6053065| Mask vs GT again^4| 4/17| 8:45 | Running |
 
 ---
 

@@ -45,6 +45,47 @@ def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
     return "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized).strip("_")
 
+
+def _dense_optimizer_torch_or_8bit(
+    model: torch.nn.Module,
+    *,
+    learning_rate: float,
+    weight_decay: float,
+    adam_beta1: float,
+    adam_beta2: float,
+    adam_eps: float,
+    optim_preference: str,
+):
+    """
+    Dense baseline optimizer. Pipeline `DPO_train.py` defaults to `adamw_8bit` (bitsandbytes).
+    Set ``DPO_OPTIM=adamw_8bit`` to match; otherwise full ``torch.optim.AdamW``.
+    """
+    key = (optim_preference or "adamw").strip().lower().replace("-", "_")
+    if key in ("adamw_8bit", "adamw8bit", "8bit"):
+        try:
+            from bitsandbytes.optim import AdamW8bit
+
+            return AdamW8bit(
+                model.parameters(),
+                lr=learning_rate,
+                betas=(adam_beta1, adam_beta2),
+                eps=adam_eps,
+                weight_decay=weight_decay,
+            )
+        except ImportError:
+            slurm_safe_print(
+                "WARNING: DPO_OPTIM=adamw_8bit but bitsandbytes is not importable; "
+                "using torch.optim.AdamW (install bitsandbytes for parity with DPO_train.py)."
+            )
+    return torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        betas=(adam_beta1, adam_beta2),
+        eps=adam_eps,
+        weight_decay=weight_decay,
+    )
+
+
 def train(
     model_name,
     checkpoint_path,
@@ -201,12 +242,15 @@ def train(
     if eff_optimizer == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     elif eff_optimizer == "adamw":
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=learning_rate,
-            betas=(adam_beta1, adam_beta2),
-            eps=adam_eps,
+        dense_pref = os.environ.get("DPO_OPTIM", os.environ.get("DPO_DENSE_OPTIM", "adamw"))
+        optimizer = _dense_optimizer_torch_or_8bit(
+            model,
+            learning_rate=learning_rate,
             weight_decay=weight_decay,
+            adam_beta1=adam_beta1,
+            adam_beta2=adam_beta2,
+            adam_eps=adam_eps,
+            optim_preference=dense_pref,
         )
     elif eff_optimizer == "sparse_adamw":
         if mask_manager is None:
@@ -259,13 +303,15 @@ def train(
 
     if benchmark_log_sink is not None and benchmark_phase:
         label = benchmark_optimizer_label or eff_optimizer
+        _te = os.environ.get("RL_CASINO_THROUGHPUT_PRINT_EVERY", "").strip()
+        _print_every = int(_te) if _te else 25
         callbacks.append(
             BenchmarkThroughputCallback(
                 benchmark_log_sink,
                 phase=benchmark_phase,
                 sparsity_target_pct=benchmark_sparsity_pct,
                 optimizer_label=label,
-                print_every=10,
+                print_every=_print_every,
             )
         )
     elif save_csv:
