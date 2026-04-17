@@ -724,7 +724,13 @@ def save_masks(masks, output_file, metadata=None):
     """Saves masks with optional metadata."""
     if os.path.dirname(output_file):
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
+
+    # Enforce torch.bool on disk: binary masks, minimal storage, no spurious float dtype.
+    masks = {
+        k: (v if v.dtype == torch.bool else v.ne(0).to(dtype=torch.bool))
+        for k, v in masks.items()
+    }
+
     save_dict = {"masks": masks}
     if metadata:
         save_dict["metadata"] = metadata
@@ -774,6 +780,7 @@ def invert_mask_tensors(masks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tenso
     the result has 1 where the original had 0 and 0 where the original had 1 (same dtype/shape
     per tensor, on CPU like typical saved masks).
     """
+    inverted: Dict[str, torch.Tensor] = {}
     for name, m in masks.items():
         # bool mask inversion: use logical NOT
         if m.dtype == torch.bool:

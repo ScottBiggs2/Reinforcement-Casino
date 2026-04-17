@@ -280,6 +280,9 @@ def train(
     elif rt in (None, "", "none"):
         rt = "none"
 
+    _log_steps_env = os.environ.get("RL_CASINO_LOGGING_STEPS", "").strip()
+    logging_steps = int(_log_steps_env) if _log_steps_env else 1
+
     dpo_config = DPOConfig(
         output_dir=os.path.join(run_dir, "checkpoints"),
         per_device_train_batch_size=batch_size,
@@ -287,7 +290,7 @@ def train(
         learning_rate=learning_rate,
         max_steps=n_steps,
         num_train_epochs=num_train_epochs,
-        logging_steps=1,
+        logging_steps=logging_steps,
         report_to=rt,
         run_name=run_name,
         remove_unused_columns=False,

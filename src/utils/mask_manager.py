@@ -41,13 +41,16 @@ class SparseMaskManager:
         self.mask_stats = {}
         
         for name, mask in self.masks.items():
-            # Move mask to device FIRST
+            # Binary masks only: bool storage (no fp16/bf32 mask tensors).
+            if mask.dtype != torch.bool:
+                mask = mask.ne(0).to(dtype=torch.bool)
+            # Move mask to device
             mask = mask.to(device, non_blocking=True)
             self.masks[name] = mask
-            
-            # Compute statistics (handle both float and bool)
-            sparsity = (mask == 0).sum().item() / mask.numel()  # % of zeros
-            nonzero_count = (mask != 0).sum().item()
+
+            # Compute statistics (bool: True = active weight)
+            sparsity = (~mask).sum().item() / mask.numel()  # fraction False = pruned
+            nonzero_count = mask.sum().item()
             
             self.mask_stats[name] = {
                 'shape': tuple(mask.shape),

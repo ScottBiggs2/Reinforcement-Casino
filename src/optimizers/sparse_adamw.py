@@ -74,12 +74,14 @@ class SparseAdamW(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
-        
-        # Apply local gradient clipping to all parameters first to protect momentum
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is not None and self.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(p, self.max_grad_norm)
+
+        # Gradient clipping: do it once per param-group (not once per parameter).
+        # Per-parameter clipping is extremely slow at Llama-8B scale.
+        if self.max_grad_norm and self.max_grad_norm > 0:
+            for group in self.param_groups:
+                params = [p for p in group["params"] if p.grad is not None]
+                if params:
+                    torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
         
         for group in self.param_groups:
             for p in group['params']:
