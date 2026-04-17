@@ -53,9 +53,6 @@ VERIFY_OUT_DIR="/scratch/biggs.s/rl_casino_verify_outputs"
 VERIFY_CACHE_DIR="/scratch/biggs.s/hf_cache_verify"
 MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
-# Default mask to verify the sparse script's parameter injection
-DEFAULT_MASK="masks/top_10.0pct_momentum_w25_step25.pt"
-
 DATASETS=("math-220k")
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -72,6 +69,8 @@ for DS in "${DATASETS[@]}"; do
     echo "Testing DENSE GRPO on dataset: ${DS}"
     echo "============================================================"
 
+    RUN_SLUG=$(PYTHONPATH=. "$PYTHON_BIN" -c "from src.full_training.GRPO_train import sanitize_model_name; from src.utils.dataset_registry import get_dataset_config; print(sanitize_model_name('${MODEL}') + '_' + get_dataset_config('${DS}')['sanitized_name'] + '_grpo_dense')")
+
     "$PYTHON_BIN" src/full_training/GRPO_train.py \
         --model_name "$MODEL" \
         --dataset "$DS" \
@@ -81,6 +80,9 @@ for DS in "${DATASETS[@]}"; do
         --dataset_cache_dir "$VERIFY_CACHE_DIR" \
         --num_generations 4 \
         --generation_batch_size 4 \
+        --optim adamw_torch \
+        --delta_log_interval 5 \
+        --delta_log_end_step "$NUM_STEPS" \
         --use_wandb \
         --run_name "verify_grpo_dense_${DS}_$(date +%Y%m%d_%H%M%S)" 2>&1
 
@@ -96,11 +98,10 @@ for DS in "${DATASETS[@]}"; do
     echo "============================================================"
     echo "Building Warm Start Magnitude Mask for testing: "
     echo "============================================================"
-    SANITIZED_MODEL=$(echo "$MODEL" | tr '/-' '__' | tr '[:upper:]' '[:lower:]')
-    SANITIZED_DS=$(echo "$DS" | tr '-' '_')
-    DELTA_DIR="${VERIFY_OUT_DIR}/deltas/${SANITIZED_MODEL}_${SANITIZED_DS}_grpo_dense"
-    
-    GENERATED_MASK="masks/verify_${SANITIZED_MODEL}_${SANITIZED_DS}_step${NUM_STEPS}.pt"
+    DELTA_DIR="${VERIFY_OUT_DIR}/${RUN_SLUG}/deltas"
+
+    mkdir -p masks
+    GENERATED_MASK="masks/verify_${RUN_SLUG}_step${NUM_STEPS}.pt"
     
     "$PYTHON_BIN" src/warm_start/even_better_mask_finder.py \
         --delta_log_dir "$DELTA_DIR" \
@@ -150,12 +151,12 @@ echo ""
 # Check that output directories were created correctly on scratch
 echo "Checking output directories in ${VERIFY_OUT_DIR} for DENSE delta logs:"
 for DS in "${DATASETS[@]}"; do
-    SANITIZED=$(echo "$DS" | tr '-' '_')
-    DIR_PATTERN="${VERIFY_OUT_DIR}/deltas/*_${SANITIZED}_grpo_dense*"
-    if ls -d ${DIR_PATTERN} 2>/dev/null; then
-        echo "  ✓ Found: ${DIR_PATTERN}"
+    RS=$(PYTHONPATH=. "$PYTHON_BIN" -c "from src.full_training.GRPO_train import sanitize_model_name; from src.utils.dataset_registry import get_dataset_config; print(sanitize_model_name('${MODEL}') + '_' + get_dataset_config('${DS}')['sanitized_name'] + '_grpo_dense')")
+    DDELTA="${VERIFY_OUT_DIR}/${RS}/deltas"
+    if [ -d "$DDELTA" ]; then
+        echo "  ✓ Found: ${DDELTA}"
     else
-        echo "  ✗ Not found: ${DIR_PATTERN}"
+        echo "  ✗ Not found: ${DDELTA}"
     fi
 done
 

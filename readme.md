@@ -132,7 +132,7 @@ python src/full_training/GRPO_train.py
 python src/full_training/GRPO_train.py --model_name "Qwen/Qwen2.5-0.5B-Instruct"
 ```
 
-**Outputs:** Under `--output_base_dir` (default points at scratch in-script), checkpoints live in `checkpoints/{model_sanitized}_{dataset_sanitized}_grpo_dense/` and delta logs in `deltas/..._grpo_dense/`. Override `--output_base_dir` for local runs. Wandb run naming follows the script defaults.
+**Outputs:** Default `--output_base_dir` is `{RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense` (see `scratch_paths.py`). Each run uses `run_slug/` (default `{model}_{dataset}_grpo_dense`): HuggingFace checkpoints in `run_slug/checkpoints/`, optional deltas in `run_slug/deltas/` when `--delta_log_interval` is set, `run_manifest.json`, and `wandb_run_id.txt` for resumed W&B runs. Use `--resume_from_checkpoint auto` (or a path) to continue training. Slurm helper: `scripts/grpo_openr1_llama31_slurm.sh`.
 
 ### Sparse DPO (efficiency)
 

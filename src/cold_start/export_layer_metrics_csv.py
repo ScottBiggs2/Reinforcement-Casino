@@ -92,6 +92,26 @@ def resolve_cka_for_canonical_layer(
     return float("nan")
 
 
+def cka_value_for_layer_row(
+    canonical: str,
+    raw_cka: Dict[str, float],
+) -> float:
+    """CKA scalar for one CSV row: hook/broadcast resolution, then Irene-style direct lookup."""
+    v = resolve_cka_for_canonical_layer(canonical, raw_cka)
+    if v == v:  # not NaN
+        return v
+    for key in (canonical, canonical_name(canonical)):
+        if key in raw_cka:
+            x = raw_cka[key]
+            try:
+                fv = float(x)
+                if fv == fv:
+                    return fv
+            except (TypeError, ValueError):
+                pass
+    return float("nan")
+
+
 def load_masks(path: str) -> Tuple[Dict[str, torch.Tensor], Optional[dict]]:
     """Load a mask dict from a `.pt` file."""
     data = torch.load(path, map_location="cpu", weights_only=True)
@@ -141,29 +161,14 @@ def effective_rank(mask_tensor: torch.Tensor, eps: float = 1e-12) -> Tuple[Optio
     if mask_tensor.ndim < 2:
         return None, None
 
-    # Reshape to 2D: treat first dim as "rows", rest flattened.
-    # For large layers, full SVD can be prohibitively expensive / memory-heavy. We instead compute
-    # eigenvalues of the smaller Gram matrix (WᵀW or WWᵀ) and derive singular values.
-    W = mask_tensor.to(dtype=torch.float32, device="cpu").reshape(mask_tensor.shape[0], -1)
+    # Match RL-irene: full `svdvals` on the 2D mask slice (plots + behavior validated there).
+    W = mask_tensor.float().reshape(mask_tensor.shape[0], -1)
     m, n = W.shape
     max_rank = min(m, n)
     if max_rank == 0:
         return 0.0, 0.0
 
-    # Guardrail: if the smaller Gram matrix is enormous, skip rather than OOM.
-    # (This keeps the pipeline robust on huge embeddings / unusual tensor shapes.)
-    small = max_rank
-    if small > 16384:
-        return None, None
-
-    if n <= m:
-        G = W.T @ W  # (n,n)
-    else:
-        G = W @ W.T  # (m,m)
-    # G is PSD; eigvalsh is stable and cheaper than full SVD.
-    evals = torch.linalg.eigvalsh(G)
-    evals = torch.clamp(evals, min=0.0)
-    s = torch.sqrt(evals)
+    s = torch.linalg.svdvals(W)
     s = s[s > eps]
     if s.numel() == 0:
         return 0.0, 0.0
@@ -358,7 +363,7 @@ def main():
                 "effective_rank_b": None if er_b is None else round(er_b, 8),
                 "effective_rank_b_norm": None if er_b_norm is None else round(er_b_norm, 8),
                 "jaccard": round(per_layer_jaccard.get(ca, float("nan")), 8),
-                "cka": round(resolve_cka_for_canonical_layer(ca, raw_cka), 8),
+                "cka": round(cka_value_for_layer_row(ca, raw_cka), 8),
             }
         )
 

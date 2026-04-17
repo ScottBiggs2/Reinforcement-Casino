@@ -19,3 +19,13 @@ def default_rl_casino_outputs() -> str:
 
 def default_hf_datasets_cache() -> str:
     return os.path.join(scratch_root(), "hf_cache", "datasets")
+
+
+def default_grpo_dense_outputs() -> str:
+    """Default base directory for dense GRPO runs (per-run subdirs live underneath)."""
+    return os.path.join(scratch_root(), "rl_casino_grpo", "dense")
+
+
+def default_grpo_sparse_outputs() -> str:
+    """Default base directory for sparse GRPO runs."""
+    return os.path.join(scratch_root(), "rl_casino_grpo", "sparse")

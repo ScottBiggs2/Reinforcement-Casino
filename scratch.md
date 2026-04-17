@@ -34,3 +34,9 @@ export WANDB_DISABLED=true
 export WANDB_CONSOLE=off
 (base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 Submitted batch job XXXXXX
+
+
+Job ID | Job Content | Date | Time | Status |
+5988045| Sparse ablation | 4/16 | 20:30 | Running |
+5988077| Mask vs GT analysis Again| 4/16 | 20:30| CKA and ER Failed |
+
