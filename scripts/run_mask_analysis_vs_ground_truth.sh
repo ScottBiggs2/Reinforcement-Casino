@@ -8,12 +8,19 @@
 #
 # Default paths match the Northeastern scratch layout; override with env vars.
 #
+# pipeline_common.sh defaults EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=1 (skip SVD / effective rank).
+# This job resets that below so layer_metrics CSVs get effective_rank_* columns unless you opt out
+# (see MASK_GT_SKIP_EFFECTIVE_RANK).
+#
 # Example (submit from repo root):
 #   sbatch scripts/run_mask_analysis_vs_ground_truth.sh
 #
 # One-off overrides:
 #   sbatch --export=ALL,MASK_ANALYSIS_DIR=/path/to/masks,GROUND_TRUTH_BASENAME=checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt \
 #     scripts/run_mask_analysis_vs_ground_truth.sh
+#
+# Fast run (skip effective rank, smaller CPU time):
+#   sbatch --export=ALL,MASK_GT_SKIP_EFFECTIVE_RANK=1 scripts/run_mask_analysis_vs_ground_truth.sh
 #
 # Artifacts (all under MASK_ANALYSIS_DIR; override with env):
 #   comparisons_vs_ground_truth/          — jaccard_*.json, cka_*.json, layer_metrics_*.csv, rollup CSVs
@@ -50,6 +57,14 @@ cd "$REPO_ROOT"
 # shellcheck source=/dev/null
 source "${REPO_ROOT}/scripts/pipeline_common.sh"
 
+# pipeline_common sets EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=1 by default. Mask-GT needs per-layer
+# effective rank in CSVs for plots unless explicitly disabled (goes around that default).
+if [ "${MASK_GT_SKIP_EFFECTIVE_RANK:-0}" = "1" ]; then
+  export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=1
+else
+  export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=0
+fi
+
 # --- Analysis-specific defaults (override via sbatch --export or shell env) ---
 MASK_ANALYSIS_DIR="${MASK_ANALYSIS_DIR:-/scratch/biggs.s/rl_casino_masks/tulu3_500_h200_fresh_0409_again}"
 GROUND_TRUTH_BASENAME="${GROUND_TRUTH_BASENAME:-checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt}"
@@ -63,7 +78,7 @@ export PIPELINE_SKIP_SPARSE_LAUNCH="${PIPELINE_SKIP_SPARSE_LAUNCH:-1}"
 
 # CKA + effective rank are part of the "full suite" for this job.
 export RUN_MASK_CKA="${RUN_MASK_CKA:-1}"
-export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK="${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-0}"
+# EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK is set immediately after sourcing pipeline_common (see above).
 
 export PLOT_RANDOM_TRIALS="${PLOT_RANDOM_TRIALS:-1}"
 
@@ -146,6 +161,8 @@ run_jaccard_cka_export_pair() {
       "$TRAIN_PY" src/cold_start/mask_to_jaccard.py "$ma" "$mb" \
         -o "${COMP_DIR}/jaccard_${tag}.json" || cmp_failures=$((cmp_failures + 1))
 
+  # CKA JSON must exist for export_layer_metrics_csv to fill the `cka` column (plot_layer_metrics draws it).
+  # Requires repo code with Tulu/DPO calibration (mask_to_cka + dpo_text_normalize). Pull latest before submit.
   if [ "${RUN_MASK_CKA}" = "1" ]; then
     run_one_cmp_step "CKA ${tag}" \
       timeout --signal=TERM --kill-after=60 "${MASK_COMPARISON_TIMEOUT_CKA}" \
@@ -168,7 +185,7 @@ run_jaccard_cka_export_pair() {
     if [ -f "${COMP_DIR}/cka_${tag}.json" ]; then
       export_cmd+=( --cka-json "${COMP_DIR}/cka_${tag}.json" )
     fi
-    if [ "${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-1}" = "1" ]; then
+    if [ "${EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK:-0}" = "1" ]; then
       export_cmd+=( --skip_effective_rank )
     else
       export_cmd+=( --effective_rank_workers "${EXPORT_LAYER_METRICS_EFFECTIVE_RANK_WORKERS:-8}" )

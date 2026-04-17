@@ -49,5 +49,86 @@ Submitted batch job XXXXXX
 Job ID | Job Content | Date | Time | Status |
 5988045| Sparse ablation | 4/16 | 20:30 | Failed - Stale File Handle again |
 5988077| Mask vs GT analysis Again| 4/16 | 20:30| CKA and ER Failed |
-5991736| Mask vs GT analysis Again^2| 4/16 | 22:02| Running |
-5991892| GRPO verification script 1| 4/16 | 22:04 | Running |
+5991736| Mask vs GT analysis Again^2| 4/16 | 22:02| failed |
+5991892| GRPO verification script 1| 4/16 | 22:04 | failed |
+5995131| Sparse speed ablation | 4/16 | 22:40 | Running | 
+5998766| GRPO verification script 1 again | 23:20 | Running |
+5999931| Mask vs GT again^3 | 4/16 | 23:30 | Running |
+
+---
+
+### Mask-GT CSV sanity (finite CKA + effective rank before trusting PNGs)
+
+```bash
+CSV="/path/to/layer_metrics_gt_vs_....csv"
+python3 -c "
+import csv, math, sys
+def ok(x):
+    s = str(x).strip().lower()
+    if s in ('', 'nan', 'none'): return False
+    try: v=float(s); return math.isfinite(v)
+    except Exception: return False
+with open(sys.argv[1], newline='') as f: r=list(csv.DictReader(f))
+cka=sum(1 for row in r if ok(row.get('cka','')))
+er=sum(1 for row in r if ok(row.get('effective_rank_a_norm','')) or ok(row.get('effective_rank_b_norm','')))
+print('rows', len(r), 'finite_cka', cka, 'finite_er_norm', er)
+" "$CSV"
+```
+
+If `finite_cka` is 0: ensure `cka_gt_vs_*.json` exists and `mask_to_cka` succeeded; `git pull` then re-run mask-GT. If `finite_er_norm` is 0: job must not pass `--skip_effective_rank` — use current `run_mask_analysis_vs_ground_truth.sh` (forces ER on unless `MASK_GT_SKIP_EFFECTIVE_RANK=1`).
+
+---
+
+### Mask vs ground truth — full suite (Jaccard + CKA + effective rank + plots)
+
+Use this when **CKA and effective rank are the point** of the run. Submit from **repo root** so `logs/` and `scripts/` resolve. Do **not** set `MASK_GT_SKIP_EFFECTIVE_RANK=1`.
+
+```bash
+export REPO="${REPO:-$HOME/rl_casino}"
+cd "$REPO" || exit 1
+git pull   # ensure latest run_mask_analysis_vs_ground_truth.sh + mask_to_cka + dpo_text_normalize
+
+export MASK_ANALYSIS_DIR="/scratch/biggs.s/rl_casino_masks/tulu3_500_h200_fresh_0409_again"
+export GROUND_TRUTH_BASENAME="checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt"
+
+# Full suite (explicit — inherited by sbatch --export=ALL)
+export RUN_MASK_CKA=1
+export MASK_GT_SKIP_EFFECTIVE_RANK=0
+export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=0
+
+export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+# export HF_TOKEN="hf_..."   # required if Llama is gated on this cluster
+
+# Optional: more CKA calibration prompts / wider GPU batches (defaults usually fine)
+# export CKA_N_SAMPLES=64
+# export CKA_BATCH_SIZE=2
+
+# CUDA allocator (set in script too; harmless to export)
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+mkdir -p logs
+
+sbatch --export=ALL \
+  scripts/run_mask_analysis_vs_ground_truth.sh
+
+# Note job id from sbatch, then e.g.:
+#   tail -f logs/mask_gt_analysis_<JOBID>.out
+# Artifacts:
+#   ${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth/{jaccard_*,cka_*,layer_metrics_*}.csv/json
+#   ${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth/plots/*_plots.png
+# Tee log: logs/mask_gt_analysis_gt_analysis_<dir_basename>_<JOBID>.log
+```
+
+**Copy PNGs to home after success** (`PLOT_DIR` must be set — do not rely on an empty env):
+
+```bash
+export MASK_ANALYSIS_DIR="/scratch/biggs.s/rl_casino_masks/tulu3_500_h200_fresh_0409_again"
+export PLOT_DIR="${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth/plots"
+FIG_SNAP="${HOME}/figs/mask_gt_plots_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$FIG_SNAP"
+shopt -s nullglob
+PNG=( "$PLOT_DIR"/*.png )
+shopt -u nullglob
+echo "Found ${#PNG[@]} PNG(s) under $PLOT_DIR"
+[ "${#PNG[@]}" -gt 0 ] && cp -av "${PNG[@]}" "$FIG_SNAP"/ && echo "Copied to $FIG_SNAP"
+```
