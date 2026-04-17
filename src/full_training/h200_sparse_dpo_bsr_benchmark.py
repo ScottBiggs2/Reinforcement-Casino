@@ -9,10 +9,17 @@ CSV: <output_dir>/benchmark_training_log.csv (via BenchmarkRunLogSink + Benchmar
 import os
 import sys
 
-# Before TRL/transformers/wandb: disable W&B console wrapping. On Slurm, wandb's stdout shim + NFS
-# job logs can raise OSError errno 116 (stale file handle) inside tqdm/print.
-os.environ.setdefault("WANDB_CONSOLE", "off")
-os.environ.setdefault("WANDB_MODE", "disabled")
+# Before any library imports: force-disable W&B console wrapping (do not use setdefault — the login
+# shell may export other values). wandb's stdout shim + NFS-backed Slurm .out can OSError errno 116.
+def _force_wandb_inert_for_slurm_logs() -> None:
+    os.environ["WANDB_MODE"] = "disabled"
+    os.environ["WANDB_DISABLED"] = "true"
+    os.environ["WANDB_CONSOLE"] = "off"
+    # Newer wandb: suppress service noise; harmless if ignored.
+    os.environ.setdefault("WANDB_SILENT", "true")
+
+
+_force_wandb_inert_for_slurm_logs()
 
 import argparse
 import gc
@@ -24,6 +31,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
+from src.utils.slurm_safe_log import slurm_safe_print
 from src.full_training.sparse_dpo_bsr import train as sparse_dpo_train
 from src.utils.dataset_registry import load_dpo_dataset as registry_load_dpo
 from src.utils.logging_utils import BenchmarkRunLogSink
@@ -56,7 +64,9 @@ def generate_random_masks_cpu(
     """Load model on CPU, build global random masks, delete model."""
     ckpt = checkpoint_path if checkpoint_path and str(checkpoint_path).lower() != "none" else model_name
     torch.manual_seed(seed)
-    print(f"  Generating random mask (target sparsity {sparsity_percent}%, seed={seed}) on CPU...")
+    slurm_safe_print(
+        f"  Generating random mask (target sparsity {sparsity_percent}%, seed={seed}) on CPU..."
+    )
     m = AutoModelForCausalLM.from_pretrained(
         ckpt,
         torch_dtype=torch.bfloat16,
@@ -106,7 +116,9 @@ def main():
     p.add_argument("--run_label", type=str, default="h200_bsr_bench")
     args = p.parse_args()
 
-    print(f"Benchmark config: n_steps per phase={args.n_steps}, batch={args.batch_size}, grad_accum={args.grad_accum}")
+    slurm_safe_print(
+        f"Benchmark config: n_steps per phase={args.n_steps}, batch={args.batch_size}, grad_accum={args.grad_accum}"
+    )
 
     os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir or os.environ.get(
         "HF_DATASETS_CACHE", os.path.expanduser("~/.cache/huggingface/datasets")
@@ -119,7 +131,7 @@ def main():
 
     sink = BenchmarkRunLogSink(csv_path)
 
-    print("Loading tokenizer and dataset (once)...")
+    slurm_safe_print("Loading tokenizer and dataset (once)...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -140,7 +152,9 @@ def main():
         dm = "none"
 
     for idx, (phase_name, sparsity_pct, opt) in enumerate(phases):
-        print(f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt}\n{'#'*60}\n")
+        slurm_safe_print(
+            f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt}\n{'#'*60}\n"
+        )
         mask_path = None
         tmp_mask = None
         seed = 424200 + idx * 31 + (int(sparsity_pct * 10) if sparsity_pct is not None else 0)
@@ -235,7 +249,7 @@ def main():
         sink.close()
     except OSError as e:
         print(f"WARNING: final CSV flush failed: {e}", file=sys.stderr)
-    print(f"\n✓ Benchmark complete. CSV: {csv_path}")
+    slurm_safe_print(f"\n✓ Benchmark complete. CSV: {csv_path}")
 
 
 if __name__ == "__main__":

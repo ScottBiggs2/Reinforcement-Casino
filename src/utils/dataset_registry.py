@@ -15,6 +15,8 @@ Usage:
 from datasets import load_dataset
 from typing import Optional, Dict, Any, List
 
+from src.utils.slurm_safe_log import slurm_safe_print
+
 
 # =============================================================================
 # Registry Definition
@@ -147,11 +149,11 @@ def load_dpo_dataset(key_or_hf_id: str, subset_size: Optional[int] = None, split
     hf_id = config["hf_id"]
     field_map = config.get("field_map")
     
-    print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} (domain: {config['domain']})")
+    slurm_safe_print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} (domain: {config['domain']})")
     
     if field_map:
         # Load raw first, apply field remapping, then normalize
-        print(f"[dataset_registry] Applying field remapping: {field_map}")
+        slurm_safe_print(f"[dataset_registry] Applying field remapping: {field_map}")
         raw_ds = load_dataset(hf_id, split=split)
         raw_ds = _apply_field_map(raw_ds, field_map)
         
@@ -181,7 +183,7 @@ def _normalize_dataset(raw_ds, subset_size=None, label="dataset"):
     if subset_size is not None:
         norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
     
-    print(f"✓ Loaded {len(norm_ds)} examples from {label}")
+    slurm_safe_print(f"✓ Loaded {len(norm_ds)} examples from {label}")
     return norm_ds
 
 
@@ -195,10 +197,10 @@ def load_grpo_dataset(key_or_hf_id: str, subset_size: Optional[int] = None, spli
     hf_id = config["hf_id"]
     field_map = config.get("field_map")
     
-    print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} for GRPO (domain: {config['domain']})")
+    slurm_safe_print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} for GRPO (domain: {config['domain']})")
     
     if field_map:
-        print(f"[dataset_registry] Applying field remapping: {field_map}")
+        slurm_safe_print(f"[dataset_registry] Applying field remapping: {field_map}")
         raw_ds = load_dataset(hf_id, split=split)
         raw_ds = _apply_field_map(raw_ds, field_map)
         return _normalize_grpo_dataset(raw_ds, subset_size=subset_size, label=hf_id)
@@ -256,6 +258,6 @@ def _normalize_grpo_dataset(raw_ds, subset_size=None, label="dataset"):
     if subset_size is not None:
         norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
     
-    print(f"✓ Loaded {len(norm_ds)} GRPO examples from {label}")
+    slurm_safe_print(f"✓ Loaded {len(norm_ds)} GRPO examples from {label}")
     return norm_ds
 

@@ -17,7 +17,9 @@ import sys
 import argparse
 import torch
 
-os.environ.setdefault("WANDB_CONSOLE", "off")
+# Must override any inherited login-node exports before importing wandb (NFS Slurm logs + console_capture).
+os.environ["WANDB_CONSOLE"] = "off"
+os.environ.setdefault("WANDB_SILENT", "true")
 
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -27,6 +29,7 @@ from trl import DPOTrainer, DPOConfig
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_manager import SparseMaskManager
+from src.utils.slurm_safe_log import slurm_safe_print
 from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
 from src.utils.data_utils import make_dpo_collator
 from src.utils.dataset_registry import get_dataset_config, load_dpo_dataset as registry_load_dpo
@@ -130,14 +133,14 @@ def train(
     run_dir = os.path.join(output_base_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
     
-    print(f"\n{'='*60}")
-    print(f"SPARSE DPO BSR TRAINING")
-    print(f"{'='*60}")
-    print(f"Run Directory: {run_dir}")
-    print(f"Dataset: {dataset_key} ({dataset_name})")
-    print(f"Block Size BSR: {block_size_bsr}")
+    slurm_safe_print(f"\n{'='*60}")
+    slurm_safe_print(f"SPARSE DPO BSR TRAINING")
+    slurm_safe_print(f"{'='*60}")
+    slurm_safe_print(f"Run Directory: {run_dir}")
+    slurm_safe_print(f"Dataset: {dataset_key} ({dataset_name})")
+    slurm_safe_print(f"Block Size BSR: {block_size_bsr}")
     if dense_baseline:
-        print("Dense baseline: standard nn.Linear + dense AdamW (no BSR injection).")
+        slurm_safe_print("Dense baseline: standard nn.Linear + dense AdamW (no BSR injection).")
 
     if tokenizer_obj is not None:
         tokenizer = tokenizer_obj
@@ -185,16 +188,16 @@ def train(
             and mask_manager.has_mask(n)
         }
 
-        print(f"Injecting Sparse MLP BSR backward for {len(mask_dict)} layers...")
+        slurm_safe_print(f"Injecting Sparse MLP BSR backward for {len(mask_dict)} layers...")
         use_tf32_kernel = not disable_tf32
-        print(f"BSR Kernel TF32 Precision Enabled: {use_tf32_kernel}")
+        slurm_safe_print(f"BSR Kernel TF32 Precision Enabled: {use_tf32_kernel}")
         replace_linear_modules(model, mask_dict, block_size=block_size_bsr, use_tf32=use_tf32_kernel)
     else:
-        print("Skipping BSR layer injection (dense baseline).")
+        slurm_safe_print("Skipping BSR layer injection (dense baseline).")
 
     eff_optimizer = "adamw" if dense_baseline else optimizer_type
     
-    print(f"Initializing {eff_optimizer}...")
+    slurm_safe_print(f"Initializing {eff_optimizer}...")
     if eff_optimizer == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
     elif eff_optimizer == "adamw":
@@ -222,7 +225,7 @@ def train(
         raise ValueError(f"Unknown optimizer: {eff_optimizer}")
         
     if disable_tf32:
-        print("Disabling TF32 for strict fp32 accumulation precision.")
+        slurm_safe_print("Disabling TF32 for strict fp32 accumulation precision.")
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
         
@@ -282,6 +285,11 @@ def train(
 
     _log_steps_env = os.environ.get("RL_CASINO_LOGGING_STEPS", "").strip()
     logging_steps = int(_log_steps_env) if _log_steps_env else 1
+    _disable_tqdm = os.environ.get("RL_CASINO_DISABLE_TQDM", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
     dpo_config = DPOConfig(
         output_dir=os.path.join(run_dir, "checkpoints"),
@@ -291,6 +299,7 @@ def train(
         max_steps=n_steps,
         num_train_epochs=num_train_epochs,
         logging_steps=logging_steps,
+        disable_tqdm=_disable_tqdm,
         report_to=rt,
         run_name=run_name,
         remove_unused_columns=False,
@@ -321,7 +330,7 @@ def train(
 
     # Final Saving and Cleanup
     if save_model:
-        print(f"\nTraining complete. Saving final model to {run_dir}/final_model...")
+        slurm_safe_print(f"\nTraining complete. Saving final model to {run_dir}/final_model...")
         # For BSR, we must restore the linear modules to dense (preserving weights)
         # so that the checkpoint is a standard HF-compatible model.
         restore_linear_modules(model)
@@ -332,9 +341,9 @@ def train(
         # Save the model and tokenizer
         trainer.save_model(final_save_dir)
         tokenizer.save_pretrained(final_save_dir)
-        print(f"✓ Full checkpoint saved to {final_save_dir}")
+        slurm_safe_print(f"✓ Full checkpoint saved to {final_save_dir}")
     else:
-        print("\nTraining complete. Skipping final model saving as requested.")
+        slurm_safe_print("\nTraining complete. Skipping final model saving as requested.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

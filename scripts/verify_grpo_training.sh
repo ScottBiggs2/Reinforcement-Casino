@@ -31,6 +31,10 @@ ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
 PYTHON_BIN="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 
+# TRL imports optional vLLM when installed; a torch-ABI-mismatched vLLM breaks GRPO import entirely.
+# Our training uses HF generate (use_vllm=false). Default skip is also set in trl_vllm_import_guard.py.
+export TRL_SKIP_VLLM_IMPORT="${TRL_SKIP_VLLM_IMPORT:-1}"
+
 export PYTHONPATH=.
 echo "Installing/verifying training requirements..."
 if "$PYTHON_BIN" -c "import trl" 2>/dev/null; then
@@ -69,7 +73,7 @@ for DS in "${DATASETS[@]}"; do
     echo "Testing DENSE GRPO on dataset: ${DS}"
     echo "============================================================"
 
-    RUN_SLUG=$(PYTHONPATH=. "$PYTHON_BIN" -c "from src.full_training.GRPO_train import sanitize_model_name; from src.utils.dataset_registry import get_dataset_config; print(sanitize_model_name('${MODEL}') + '_' + get_dataset_config('${DS}')['sanitized_name'] + '_grpo_dense')")
+    RUN_SLUG=$(PYTHONPATH=. "$PYTHON_BIN" -c "from src.utils.model_slug import sanitize_model_name; from src.utils.dataset_registry import get_dataset_config; print(sanitize_model_name('${MODEL}') + '_' + get_dataset_config('${DS}')['sanitized_name'] + '_grpo_dense')")
 
     "$PYTHON_BIN" src/full_training/GRPO_train.py \
         --model_name "$MODEL" \
@@ -151,7 +155,7 @@ echo ""
 # Check that output directories were created correctly on scratch
 echo "Checking output directories in ${VERIFY_OUT_DIR} for DENSE delta logs:"
 for DS in "${DATASETS[@]}"; do
-    RS=$(PYTHONPATH=. "$PYTHON_BIN" -c "from src.full_training.GRPO_train import sanitize_model_name; from src.utils.dataset_registry import get_dataset_config; print(sanitize_model_name('${MODEL}') + '_' + get_dataset_config('${DS}')['sanitized_name'] + '_grpo_dense')")
+    RS=$(PYTHONPATH=. "$PYTHON_BIN" -c "from src.utils.model_slug import sanitize_model_name; from src.utils.dataset_registry import get_dataset_config; print(sanitize_model_name('${MODEL}') + '_' + get_dataset_config('${DS}')['sanitized_name'] + '_grpo_dense')")
     DDELTA="${VERIFY_OUT_DIR}/${RS}/deltas"
     if [ -d "$DDELTA" ]; then
         echo "  ✓ Found: ${DDELTA}"

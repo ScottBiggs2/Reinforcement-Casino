@@ -3,11 +3,12 @@ from datasets import load_dataset
 from typing import List, Dict, Any
 
 from src.utils.dpo_text_normalize import normalize_dpo_record
+from src.utils.slurm_safe_log import slurm_safe_print
 
 
 def load_dpo_dataset(dataset_name, subset_size=None, split="train"):
     """Load and normalize DPO dataset from HuggingFace."""
-    print(f"Loading dataset: {dataset_name}")
+    slurm_safe_print(f"Loading dataset: {dataset_name}")
     raw_ds = load_dataset(dataset_name, split=split)
 
     norm_ds = raw_ds.map(normalize_dpo_record, remove_columns=raw_ds.column_names)
@@ -15,13 +16,13 @@ def load_dpo_dataset(dataset_name, subset_size=None, split="train"):
     if subset_size is not None:
         norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
     
-    print(f"✓ Loaded {len(norm_ds)} examples")
+    slurm_safe_print(f"✓ Loaded {len(norm_ds)} examples")
     return norm_ds
 
 
 def load_grpo_dataset(dataset_name, subset_size=None, split="train"):
     """Load and normalize GRPO dataset from HuggingFace."""
-    print(f"Loading GRPO dataset: {dataset_name}")
+    slurm_safe_print(f"Loading GRPO dataset: {dataset_name}")
     raw_ds = load_dataset(dataset_name, split=split)
     
     def msg_to_text(x):
@@ -75,7 +76,7 @@ def load_grpo_dataset(dataset_name, subset_size=None, split="train"):
     if subset_size is not None:
         norm_ds = norm_ds.select(range(min(subset_size, len(norm_ds))))
     
-    print(f"✓ Loaded {len(norm_ds)} GRPO examples")
+    slurm_safe_print(f"✓ Loaded {len(norm_ds)} GRPO examples")
     return norm_ds
 
 

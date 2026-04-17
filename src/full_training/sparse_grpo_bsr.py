@@ -14,12 +14,18 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Set
 
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from src.utils.trl_vllm_import_guard import apply_trl_vllm_skip
+
+apply_trl_vllm_skip()
+
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import GRPOConfig, GRPOTrainer
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.mlps.bsr_sparse_mlp import replace_linear_modules, restore_linear_modules
 from src.optimizers.sparse_adamw import SparseAdamW
@@ -32,12 +38,8 @@ from src.utils.grpo_checkpoint_utils import (
 )
 from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
 from src.utils.mask_manager import SparseMaskManager
+from src.utils.model_slug import sanitize_model_name
 from src.utils.scratch_paths import default_grpo_sparse_outputs, default_hf_datasets_cache
-
-
-def sanitize_model_name(model_name: str) -> str:
-    sanitized = model_name.replace("/", "_").replace("-", "_").lower()
-    return "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized).strip("_")
 
 
 class SparseDeltaCheckpointCallback(TrainerCallback):

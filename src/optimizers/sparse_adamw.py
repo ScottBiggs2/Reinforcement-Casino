@@ -2,6 +2,7 @@
 import torch
 import time
 from src.utils.mask_manager import SparseMaskManager
+from src.utils.slurm_safe_log import slurm_safe_print
 from src.kernels.indexed_sparse_adam import triton_indexed_sparse_adamw_step
 
 class SparseAdamW(torch.optim.Optimizer):
@@ -48,7 +49,7 @@ class SparseAdamW(torch.optim.Optimizer):
         }
         
         # OPTIMIZATION: Pre-initialize all optimizer states upfront
-        print(f"\nPre-initializing optimizer states for all parameters...")
+        slurm_safe_print(f"\nPre-initializing optimizer states for all parameters...")
         init_start = time.time()
         with torch.no_grad():
             for group in self.param_groups:
@@ -59,13 +60,13 @@ class SparseAdamW(torch.optim.Optimizer):
                     state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
         
         init_time = time.time() - init_start
-        print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
-        print(f"✓ SparseAdamW optimizer ready")
-        print(f"  MLP-only: {mlp_only}")
-        print(f"  Block size: {block_size}")
-        print(f"  Using indexed sparse kernels: TRUE")
-        print(f"  Kernel recompilation fix: APPLIED")
-        print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
+        slurm_safe_print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
+        slurm_safe_print(f"✓ SparseAdamW optimizer ready")
+        slurm_safe_print(f"  MLP-only: {mlp_only}")
+        slurm_safe_print(f"  Block size: {block_size}")
+        slurm_safe_print(f"  Using indexed sparse kernels: TRUE")
+        slurm_safe_print(f"  Kernel recompilation fix: APPLIED")
+        slurm_safe_print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
     
     @torch.no_grad()
     def step(self, closure=None):
@@ -116,14 +117,14 @@ class SparseAdamW(torch.optim.Optimizer):
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
         
         if mask is None or nonzero_indices is None:
-            print(f"WARNING: Missing mask or indices for {param_name}, falling back to dense")
+            slurm_safe_print(f"WARNING: Missing mask or indices for {param_name}, falling back to dense")
             self._dense_step(param, group)
             return
         
         if mask.shape != param.shape:
-            print(f"WARNING: Shape mismatch for {param_name}")
-            print(f"  Param: {param.shape}, Mask: {mask.shape}")
-            print(f"  Falling back to dense update")
+            slurm_safe_print(f"WARNING: Shape mismatch for {param_name}")
+            slurm_safe_print(f"  Param: {param.shape}, Mask: {mask.shape}")
+            slurm_safe_print(f"  Falling back to dense update")
             self._dense_step(param, group)
             return
         
@@ -147,8 +148,8 @@ class SparseAdamW(torch.optim.Optimizer):
                 block_size=self.block_size,
             )
         except Exception as e:
-            print(f"ERROR in indexed Triton kernel for {param_name}: {e}")
-            print(f"  Falling back to dense update")
+            slurm_safe_print(f"ERROR in indexed Triton kernel for {param_name}: {e}")
+            slurm_safe_print(f"  Falling back to dense update")
             self._dense_step(param, group)
             return
         
@@ -190,15 +191,15 @@ class SparseAdamW(torch.optim.Optimizer):
                 nan_params.append((name, nan_count, inf_count))
         
         if nan_params:
-            print(f"\n{'='*60}")
-            print("WARNING: NaN/Inf DETECTED IN PARAMETERS")
-            print(f"{'='*60}")
+            slurm_safe_print(f"\n{'='*60}")
+            slurm_safe_print("WARNING: NaN/Inf DETECTED IN PARAMETERS")
+            slurm_safe_print(f"{'='*60}")
             for name, nan_count, inf_count in nan_params:
-                print(f"  {name}: NaN={nan_count}, Inf={inf_count}")
-            print(f"{'='*60}\n")
+                slurm_safe_print(f"  {name}: NaN={nan_count}, Inf={inf_count}")
+            slurm_safe_print(f"{'='*60}\n")
             self.stats['nan_warnings'] = nan_params
         else:
-            print("\n✓ No NaN/Inf detected in parameters\n")
+            slurm_safe_print("\n✓ No NaN/Inf detected in parameters\n")
     
     def print_stats(self):
         """Print optimizer statistics."""
@@ -206,10 +207,10 @@ class SparseAdamW(torch.optim.Optimizer):
         sparse = self.stats['sparse_steps']
         dense = self.stats['dense_steps']
         
-        print(f"\n{'='*60}")
-        print(f"SPARSE ADAMW OPTIMIZER STATISTICS")
-        print(f"{'='*60}")
-        print(f"Total steps:      {total:,}")
-        print(f"Sparse steps:     {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
-        print(f"Dense steps:      {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
-        print(f"{'='*60}\n")
+        slurm_safe_print(f"\n{'='*60}")
+        slurm_safe_print(f"SPARSE ADAMW OPTIMIZER STATISTICS")
+        slurm_safe_print(f"{'='*60}")
+        slurm_safe_print(f"Total steps:      {total:,}")
+        slurm_safe_print(f"Sparse steps:     {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
+        slurm_safe_print(f"Dense steps:      {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
+        slurm_safe_print(f"{'='*60}\n")

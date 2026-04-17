@@ -29,6 +29,7 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${RL_CASINO_SCRATCH_ROOT}/hf_cach
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export WANDB_DISABLED="${WANDB_DISABLED:-true}"
 export WANDB_CONSOLE=off
+export TRL_SKIP_VLLM_IMPORT="${TRL_SKIP_VLLM_IMPORT:-1}"
 
 BENCH_ROOT="${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/benchmarks/step_time_${SLURM_JOB_ID:-local}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BENCH_ROOT"

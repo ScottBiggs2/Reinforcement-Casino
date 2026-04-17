@@ -44,10 +44,15 @@ export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
-# Disable W&B / external experiment trackers (must disable console capture — see errno 116 on Slurm)
-export WANDB_MODE="${WANDB_MODE:-disabled}"
-export WANDB_DISABLED="${WANDB_DISABLED:-true}"
-export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+# Disable W&B / external experiment trackers (must disable console capture — see errno 116 on Slurm).
+# Use fixed assignments so a stray login-node export cannot re-enable wandb stdout wrapping.
+export WANDB_MODE="disabled"
+export WANDB_DISABLED="true"
+export WANDB_CONSOLE="off"
+export WANDB_SILENT="true"
+
+# HuggingFace Trainer tqdm → stdout; can still trip NFS errno 116. Default off for this job.
+export RL_CASINO_DISABLE_TQDM="${RL_CASINO_DISABLE_TQDM:-1}"
 
 # --- Model / data (override before sbatch or via #SBATCH --export) ---
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"

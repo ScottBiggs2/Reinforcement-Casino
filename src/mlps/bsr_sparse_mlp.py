@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from src.kernels.bsr_backward import sparse_weight_gradient_triton
+from src.utils.slurm_safe_log import slurm_safe_print
 
 # ============================================================================
 # AUTOGRAD FUNCTIONS
@@ -115,7 +116,7 @@ def replace_linear_modules(model, mask_dict, block_size=16, use_tf32=False, verb
                          
             if mask is not None:
                 if verbose:
-                    print(f"Replacing {name} with SparseLinearLayer (Mask active: {mask.shape})")
+                    slurm_safe_print(f"Replacing {name} with SparseLinearLayer (Mask active: {mask.shape})")
                 
                 # Create replacement
                 sparse_layer = SparseLinearLayer(
@@ -151,7 +152,7 @@ def restore_linear_modules(model, verbose=True):
     for name, module in model.named_modules():
         if isinstance(module, SparseLinearLayer):
             if verbose:
-                print(f"Restoring {name} to standard nn.Linear")
+                slurm_safe_print(f"Restoring {name} to standard nn.Linear")
             
             # Create replacement
             dense_layer = nn.Linear(

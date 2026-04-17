@@ -36,7 +36,18 @@ export WANDB_CONSOLE=off
 Submitted batch job XXXXXX
 
 
-Job ID | Job Content | Date | Time | Status |
-5988045| Sparse ablation | 4/16 | 20:30 | Running |
-5988077| Mask vs GT analysis Again| 4/16 | 20:30| CKA and ER Failed |
+(base) [biggs.s@explorer-01 rl_casino]$ squeue -u $USER
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           5991736       gpu mask_gt_  biggs.s PD       0:00      1 (Priority)
+           5991892       gpu verify_g  biggs.s PD       0:00      1 (Priority)
+           5988045       gpu h200_bsr  biggs.s  R    1:24:17      1 d4055
+(base) [biggs.s@explorer-01 rl_casino]$ squeue -u $USER
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           5991736       gpu mask_gt_  biggs.s  R       6:27      1 d1029
 
+
+Job ID | Job Content | Date | Time | Status |
+5988045| Sparse ablation | 4/16 | 20:30 | Failed - Stale File Handle again |
+5988077| Mask vs GT analysis Again| 4/16 | 20:30| CKA and ER Failed |
+5991736| Mask vs GT analysis Again^2| 4/16 | 22:02| Running |
+5991892| GRPO verification script 1| 4/16 | 22:04 | Running |

@@ -3,7 +3,8 @@ import os
 
 # Avoid wandb patching sys.stdout for console capture when only callbacks import wandb;
 # cluster stdouts (NFS-backed Slurm .out) can hit errno 116 on wrapped writes.
-os.environ.setdefault("WANDB_CONSOLE", "off")
+os.environ["WANDB_CONSOLE"] = "off"
+os.environ.setdefault("WANDB_SILENT", "true")
 
 import json
 import csv
@@ -13,6 +14,8 @@ import wandb
 import pandas as pd
 from transformers import TrainerCallback
 from typing import Any, Dict, List, Optional
+
+from src.utils.slurm_safe_log import slurm_safe_print
 
 class FlexibleCheckpointCallback(TrainerCallback):
     """
@@ -55,7 +58,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
         metadata_path = os.path.join(self.delta_log_dir, "run_metadata.json")
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
-        print(f"  ✓ Saved run metadata to {metadata_path}")
+        slurm_safe_print(f"  ✓ Saved run metadata to {metadata_path}")
         
         # Only init wandb if not already initialized (e.g. by Trainer)
         if self.use_wandb and not self.wandb_initialized and wandb.run is None:
@@ -92,7 +95,7 @@ class FlexibleCheckpointCallback(TrainerCallback):
 
             delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
             torch.save(full_deltas_to_save, delta_file)
-            print(f"  ✓ Saved weight deltas at step {step}")
+            slurm_safe_print(f"  ✓ Saved weight deltas at step {step}")
 
         return control
 
@@ -137,7 +140,7 @@ class CSVLoggerCallback(TrainerCallback):
     def on_train_end(self, args, state, control, **kwargs):
         if self.file:
             self.file.close()
-            print(f"✓ Training log saved to {self.filepath}")
+            slurm_safe_print(f"✓ Training log saved to {self.filepath}")
 
 
 class BenchmarkRunLogSink:
@@ -231,7 +234,7 @@ class BenchmarkThroughputCallback(TrainerCallback):
         # Live timing printouts for Slurm .out monitoring.
         if self.print_every and step > 0 and (step % self.print_every == 0):
             sp = "dense" if self.sparsity_target_pct is None else f"{float(self.sparsity_target_pct):g}%"
-            print(
+            slurm_safe_print(
                 f"[throughput] phase={self.phase} sparsity={sp} step={step} "
                 f"steps/s={sps:.4f} samples/s={sms:.2f} wall_s={wall:.1f}"
             )

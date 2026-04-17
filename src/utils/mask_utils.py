@@ -1,7 +1,14 @@
 import torch
 import os
+import sys
 import json
 from typing import Any, Dict, Optional, Tuple
+
+
+def _mask_log(*args, **kwargs) -> None:
+    """Diagnostics to stderr: avoids wandb ``console_capture`` on stdout (NFS errno 116 on Slurm)."""
+    kwargs.setdefault("file", sys.stderr)
+    print(*args, **kwargs)
 
 # Default masking mode:
 # - global ranking across all scored weights
@@ -62,7 +69,7 @@ def _topk_indices_safe(scores_1d: torch.Tensor, k: int, largest: bool = True) ->
     force_cpu = os.environ.get("RL_CASINO_MASK_TOPK_CPU", "").lower() in ("1", "true", "yes")
     use_cpu = scores_1d.is_cuda and (force_cpu or (n > _CUDA_TOPK_SAFE_NUMEL and not allow_gpu))
     if use_cpu:
-        print(
+        _mask_log(
             f"  Note: top-k on CPU ({n:,} scores, k={k:,}) — "
             "CUDA top-k can fail when the score vector is extremely large."
         )
@@ -74,7 +81,7 @@ def _topk_indices_safe(scores_1d: torch.Tensor, k: int, largest: bool = True) ->
 def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale):
     """Per-layer top-k: each weight matrix independently keeps keep_frac of its elements."""
     keep_frac = 1.0 - sparsity_percent / 100.0
-    print(f"\n=== Creating Per-layer Local Masks (target sparsity: {sparsity_percent}%) ===")
+    _mask_log(f"\n=== Creating Per-layer Local Masks (target sparsity: {sparsity_percent}%) ===")
 
     masks = {}
     total_params = 0
@@ -103,8 +110,8 @@ def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_nois
         total_kept += n_keep
 
     actual_sparsity = 100.0 - (total_kept / max(total_params, 1) * 100.0)
-    print(f"Total parameters: {total_params:,}")
-    print(f"Actual keep: {total_kept:,} | Actual sparsity: {actual_sparsity:.4f}%")
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Actual keep: {total_kept:,} | Actual sparsity: {actual_sparsity:.4f}%")
     return masks
 
 
@@ -144,7 +151,7 @@ def _apply_tie_break_noise_inplace(
     for name, score in valid_scores.items():
         noise = torch.randn_like(score) * scale
         valid_scores[name] = score + noise
-    print(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
+    _mask_log(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
 
 
 def _select_floor_indices(
@@ -169,7 +176,7 @@ def _select_floor_indices(
 
     requested_floor_total = sum(f for _, f, _ in layer_floors)
     if requested_floor_total > keep_count:
-        print(
+        _mask_log(
             f"⚠ Requested per-layer floor keeps {requested_floor_total:,} params, "
             f"but global keep budget is {keep_count:,}. Scaling floors down proportionally."
         )
@@ -188,7 +195,7 @@ def _select_floor_indices(
         floor_indices[name] = torch.sort(idx).values
         floor_selected += int(local_floor)
 
-    print(f"Per-layer floor selected: {floor_selected:,} parameters")
+    _mask_log(f"Per-layer floor selected: {floor_selected:,} parameters")
     return floor_indices, floor_selected
 
 
@@ -320,15 +327,15 @@ def _create_mask_global_chunked(
     tie_break_noise_scale: float,
     min_layer_keep_ratio: float,
 ):
-    print("Mask selection backend: exact chunked global selector")
+    _mask_log("Mask selection backend: exact chunked global selector")
     total_params = sum(score.numel() for score in valid_scores.values())
     keep_percent = 100.0 - sparsity_percent
     keep_count = max(1, min(total_params, int(keep_percent / 100.0 * total_params)))
 
-    print(f"Total parameters: {total_params:,}")
-    print(f"Target keep count: {keep_count:,} ({keep_percent:.2f}%)")
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Target keep count: {keep_count:,} ({keep_percent:.2f}%)")
     if min_layer_keep_ratio > 0:
-        print(f"Using hybrid global mask with per-layer keep floor ratio={min_layer_keep_ratio:.4f}")
+        _mask_log(f"Using hybrid global mask with per-layer keep floor ratio={min_layer_keep_ratio:.4f}")
 
     if add_tie_break_noise:
         _apply_tie_break_noise_inplace(valid_scores, tie_break_noise_scale)
@@ -429,19 +436,19 @@ def _create_mask_global_chunked(
 
     masks = {}
     total_kept = 0
-    print("Applying global mask to layers...")
+    _mask_log("Applying global mask to layers...")
     for idx, (name, mask) in enumerate(masks_bool.items()):
         if idx % 50 == 0:
-            print(f"  Processing layer {idx+1}/{len(masks_bool)}")
+            _mask_log(f"  Processing layer {idx+1}/{len(masks_bool)}")
         total_kept += int(mask.sum().item())
         masks[name] = mask.to(dtype=torch.bool)
 
     actual_sparsity = 100.0 - (total_kept / total_params * 100.0)
-    print("\nVerification:")
-    print(f"  Target keep: {keep_count:,} ({keep_percent:.2f}%)")
-    print(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.2f}%)")
-    print(f"  Actual sparsity: {actual_sparsity:.4f}% (target: {sparsity_percent}%)")
-    print(f"  Error: {abs(actual_sparsity - sparsity_percent):.6f}%")
+    _mask_log("\nVerification:")
+    _mask_log(f"  Target keep: {keep_count:,} ({keep_percent:.2f}%)")
+    _mask_log(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.2f}%)")
+    _mask_log(f"  Actual sparsity: {actual_sparsity:.4f}% (target: {sparsity_percent}%)")
+    _mask_log(f"  Error: {abs(actual_sparsity - sparsity_percent):.6f}%")
     return masks
 
 
@@ -457,10 +464,10 @@ def _create_mask_global_flat(
     keep_count = max(1, int(keep_percent / 100.0 * total_params))
     keep_count = min(keep_count, total_params)
 
-    print(f"Total parameters: {total_params:,}")
-    print(f"Target keep count: {keep_count:,} ({keep_percent:.2f}%)")
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Target keep count: {keep_count:,} ({keep_percent:.2f}%)")
     if min_layer_keep_ratio > 0:
-        print(f"Using hybrid global mask with per-layer keep floor ratio={min_layer_keep_ratio:.4f}")
+        _mask_log(f"Using hybrid global mask with per-layer keep floor ratio={min_layer_keep_ratio:.4f}")
 
     # Flatten all scores globally.
     offsets = []
@@ -479,7 +486,7 @@ def _create_mask_global_flat(
         scale = max(all_scores.abs().max().item() * tie_break_noise_scale, 1e-12)
         torch.manual_seed(42)
         all_scores = all_scores + torch.randn_like(all_scores) * scale
-        print(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
+        _mask_log(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
 
     global_mask_flat = torch.zeros_like(all_scores, dtype=torch.bool)
 
@@ -495,7 +502,7 @@ def _create_mask_global_flat(
 
         requested_floor_total = sum(f for _, _, _, f in layer_floors)
         if requested_floor_total > keep_count:
-            print(
+            _mask_log(
                 f"⚠ Requested per-layer floor keeps {requested_floor_total:,} params, "
                 f"but global keep budget is {keep_count:,}. Scaling floors down proportionally."
             )
@@ -516,7 +523,7 @@ def _create_mask_global_flat(
             global_mask_flat[start:end][local_idx] = True
             floor_selected += int(local_floor)
 
-        print(f"Per-layer floor selected: {floor_selected:,} parameters")
+        _mask_log(f"Per-layer floor selected: {floor_selected:,} parameters")
 
     remaining = keep_count - floor_selected
     if remaining > 0:
@@ -526,20 +533,20 @@ def _create_mask_global_flat(
 
     masks = {}
     total_kept = 0
-    print("Applying global mask to layers...")
+    _mask_log("Applying global mask to layers...")
     for idx, (name, start, end, shape) in enumerate(offsets):
         if idx % 50 == 0:
-            print(f"  Processing layer {idx+1}/{len(offsets)}")
+            _mask_log(f"  Processing layer {idx+1}/{len(offsets)}")
         m = global_mask_flat[start:end].reshape(shape)
         total_kept += int(m.sum().item())
         masks[name] = m.to(dtype=torch.bool).cpu()
 
     actual_sparsity = 100.0 - (total_kept / total_params * 100.0)
-    print("\nVerification:")
-    print(f"  Target keep: {keep_count:,} ({keep_percent:.2f}%)")
-    print(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.2f}%)")
-    print(f"  Actual sparsity: {actual_sparsity:.4f}% (target: {sparsity_percent}%)")
-    print(f"  Error: {abs(actual_sparsity - sparsity_percent):.6f}%")
+    _mask_log("\nVerification:")
+    _mask_log(f"  Target keep: {keep_count:,} ({keep_percent:.2f}%)")
+    _mask_log(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.2f}%)")
+    _mask_log(f"  Actual sparsity: {actual_sparsity:.4f}% (target: {sparsity_percent}%)")
+    _mask_log(f"  Error: {abs(actual_sparsity - sparsity_percent):.6f}%")
     return masks
 
 
@@ -569,18 +576,18 @@ def create_mask_from_scores_gpu_efficient(
             - Pass min_layer_keep_ratio=0.0 for pure global selection with no floor.
     """
     if local_pool:
-        print("Mask pooling: local (each weight matrix ranked independently; use --local_pool)")
+        _mask_log("Mask pooling: local (each weight matrix ranked independently; use --local_pool)")
         return _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale)
 
     if min_layer_keep_ratio > 0:
-        print(
+        _mask_log(
             "Mask pooling: global with per-layer keep floor "
             f"(min_layer_keep_ratio={min_layer_keep_ratio}; remaining budget is global top-k)"
         )
     else:
-        print("Mask pooling: global (single ranking across all scored weights)")
+        _mask_log("Mask pooling: global (single ranking across all scored weights)")
 
-    print(f"\n=== Creating Exact Global Masks (target sparsity: {sparsity_percent}%) ===")
+    _mask_log(f"\n=== Creating Exact Global Masks (target sparsity: {sparsity_percent}%) ===")
 
     if not scores_dict:
         raise ValueError(
@@ -603,7 +610,7 @@ def create_mask_from_scores_gpu_efficient(
     use_chunked = total_params >= chunked_min_numel
     selector_device = "cpu" if use_chunked else device
     if use_chunked:
-        print(
+        _mask_log(
             f"Chunked selector enabled for {total_params:,} parameters "
             f"(threshold: {chunked_min_numel:,}); moving scores to CPU for selection."
         )
@@ -656,7 +663,7 @@ def compute_jaccard_similarity(pred_masks, true_masks):
     Computes Jaccard similarity, spatial overlap, and cosine similarity
     between predicted and reference masks. Uses GPU for faster computation.
     """
-    print("\n=== Computing Similarity Metrics ===")
+    _mask_log("\n=== Computing Similarity Metrics ===")
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
@@ -700,11 +707,11 @@ def compute_jaccard_similarity(pred_masks, true_masks):
         min_jaccard = min(per_layer_jaccard.values())
         max_jaccard = max(per_layer_jaccard.values())
         
-        print(f"Aggregate Jaccard Similarity:     {aggregate_jaccard:.4f}")
-        print(f"Overlap (Intersect / Pred_Size):  {overlap_pred:.4f} ({overlap_pred*100:.1f}%)")
-        print(f"Overlap (Intersect / True_Size):  {overlap_true:.4f} ({overlap_true*100:.1f}%)")
-        print(f"Global Cosine Similarity:         {cosine_similarity:.4f}")
-        print(f"Mean per-layer Jaccard:           {mean_jaccard:.4f}")
+        _mask_log(f"Aggregate Jaccard Similarity:     {aggregate_jaccard:.4f}")
+        _mask_log(f"Overlap (Intersect / Pred_Size):  {overlap_pred:.4f} ({overlap_pred*100:.1f}%)")
+        _mask_log(f"Overlap (Intersect / True_Size):  {overlap_true:.4f} ({overlap_true*100:.1f}%)")
+        _mask_log(f"Global Cosine Similarity:         {cosine_similarity:.4f}")
+        _mask_log(f"Mean per-layer Jaccard:           {mean_jaccard:.4f}")
         
         return {
             "aggregate_jaccard": aggregate_jaccard,
@@ -717,7 +724,7 @@ def compute_jaccard_similarity(pred_masks, true_masks):
             "cosine_similarity": cosine_similarity
         }
     else:
-        print("No matching layers found for similarity computation.")
+        _mask_log("No matching layers found for similarity computation.")
         return None
 
 def save_masks(masks, output_file, metadata=None):
@@ -736,15 +743,15 @@ def save_masks(masks, output_file, metadata=None):
         save_dict["metadata"] = metadata
     
     torch.save(save_dict, output_file)
-    print(f"\nMasks saved to: {output_file}")
+    _mask_log(f"\nMasks saved to: {output_file}")
     
     total_params = sum(m.numel() for m in masks.values())
     kept_params = sum(m.sum().item() for m in masks.values())
     actual_sparsity = 100.0 - (kept_params / total_params * 100)
     
-    print(f"Total parameters: {total_params:,}")
-    print(f"Kept parameters: {int(kept_params):,}")
-    print(f"Final sparsity: {actual_sparsity:.2f}%")
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Kept parameters: {int(kept_params):,}")
+    _mask_log(f"Final sparsity: {actual_sparsity:.2f}%")
 
 
 def load_masks_file(path: str) -> Tuple[Dict[str, torch.Tensor], Optional[Dict[str, Any]], bool]:
@@ -830,6 +837,6 @@ def invert_mask_file(
         save_masks(inverted, output_path, metadata=new_meta)
     else:
         torch.save(inverted, output_path)
-        print(f"\nInverse masks saved to: {output_path}")
+        _mask_log(f"\nInverse masks saved to: {output_path}")
 
     return output_path

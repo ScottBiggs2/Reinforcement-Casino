@@ -43,6 +43,8 @@ export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+# Avoid importing a broken vLLM wheel (see src/utils/trl_vllm_import_guard.py). Set to 0 if you use trl[vllm].
+export TRL_SKIP_VLLM_IMPORT="${TRL_SKIP_VLLM_IMPORT:-1}"
 
 # --- Model / data (override before sbatch) ---
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"

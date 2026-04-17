@@ -2,6 +2,8 @@
 import os
 import torch
 
+from src.utils.slurm_safe_log import slurm_safe_print
+
 class SparseMaskManager:
     """
     Manages loading and applying sparse masks to model parameters.
@@ -11,7 +13,7 @@ class SparseMaskManager:
     """
     
     def __init__(self, mask_path, device='cuda'):
-        print(f"Loading masks from {mask_path}...")
+        slurm_safe_print(f"Loading masks from {mask_path}...")
         
         if not os.path.exists(mask_path):
             raise FileNotFoundError(f"Mask file not found: {mask_path}")
@@ -24,19 +26,19 @@ class SparseMaskManager:
             self.masks = torch.load(mask_path, map_location='cpu', weights_only=True)
         except Exception:
             # Fallback for older formats or complex dicts
-            print(f"Warning: safe load failed for {mask_path}, trying weights_only=False")
+            slurm_safe_print(f"Warning: safe load failed for {mask_path}, trying weights_only=False")
             self.masks = torch.load(mask_path, map_location='cpu', weights_only=False)
         self.device = device
         
         if isinstance(self.masks, dict) and 'masks' in self.masks:
             self.masks = self.masks['masks']
         
-        print(f"\nDEBUG - First 3 mask keys:")
+        slurm_safe_print(f"\nDEBUG - First 3 mask keys:")
         for i, key in enumerate(list(self.masks.keys())[:3]):
-            print(f"  {key}")
-        
+            slurm_safe_print(f"  {key}")
+
         # OPTIMIZATION: Pre-compute non-zero indices for each mask
-        print("\nPre-computing non-zero indices for sparse operations...")
+        slurm_safe_print("\nPre-computing non-zero indices for sparse operations...")
         self.nonzero_indices = {}
         self.mask_stats = {}
         
@@ -70,7 +72,7 @@ class SparseMaskManager:
                 # Edge case: completely sparse mask
                 self.nonzero_indices[name] = torch.empty(0, dtype=torch.long, device=device)
         
-        print(f"✓ Loaded {len(self.masks)} masks with pre-computed indices")
+        slurm_safe_print(f"✓ Loaded {len(self.masks)} masks with pre-computed indices")
         self._print_mask_summary()
     
     def _print_mask_summary(self):
@@ -84,10 +86,10 @@ class SparseMaskManager:
         # Calculate true sparsity (% of zeros)
         total_sparsity = 1.0 - (total_active / total_params) if total_params > 0 else 0
         
-        print(f"  Total parameters covered: {total_params:,}")
-        print(f"  Total active (non-zero) parameters: {total_active:,}")
-        print(f"  Overall sparsity (% zeros): {total_sparsity*100:.2f}%")
-        print(f"  Active parameters (% non-zero): {(1-total_sparsity)*100:.2f}%")
+        slurm_safe_print(f"  Total parameters covered: {total_params:,}")
+        slurm_safe_print(f"  Total active (non-zero) parameters: {total_active:,}")
+        slurm_safe_print(f"  Overall sparsity (% zeros): {total_sparsity*100:.2f}%")
+        slurm_safe_print(f"  Active parameters (% non-zero): {(1-total_sparsity)*100:.2f}%")
     
     def get_mask(self, param_name):
         """Get mask for a parameter - try direct match first, then with conversions."""
