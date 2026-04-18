@@ -49,6 +49,16 @@ mkdir -p logs
 # `from src.utils.mask_utils ...`, which needs the repo root on PYTHONPATH.
 export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
 
+# Flush print() output immediately so slurm logs reflect actual progress
+# rather than sitting in a stdout buffer until the job ends.
+export PYTHONUNBUFFERED=1
+
+# Keep per-worker BLAS threading modest so 8 joblib workers × 2 BLAS
+# threads = 16 CPUs, matching --cpus-per-task without oversubscription.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-2}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-2}"
+
 # ── Configuration ─────────────────────────────────────────────────────
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scratch/xie.yiyi/probe_pair_12masks}"
@@ -57,6 +67,7 @@ BATCH_SIZE="${BATCH_SIZE:-8}"
 MAX_LENGTH="${MAX_LENGTH:-256}"
 CV_FOLDS="${CV_FOLDS:-5}"
 PAIRS_PER_POS="${PAIRS_PER_POS:-2}"
+N_JOBS="${N_JOBS:-8}"
 MASKS_JSON="${MASKS_JSON:-}"           # optional subset of masks
 SKIP_BASELINE="${SKIP_BASELINE:-0}"    # 1 = skip unmasked baseline
 
@@ -86,6 +97,7 @@ $PYTHON_BIN src/analysis/probe_pair_12masks.py \
     --max_length "$MAX_LENGTH" \
     --cv_folds "$CV_FOLDS" \
     --pairs_per_pos "$PAIRS_PER_POS" \
+    --n_jobs "$N_JOBS" \
     $EXTRA_ARGS
 
 echo ""

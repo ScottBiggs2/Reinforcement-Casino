@@ -89,6 +89,8 @@ def parse_args():
     p.add_argument("--max_length", type=int, default=256)
     p.add_argument("--cv_folds", type=int, default=5)
     p.add_argument("--pairs_per_pos", type=int, default=2)
+    p.add_argument("--n_jobs", type=int, default=8,
+                   help="Parallel workers for per-layer probe training (default: 8)")
     p.add_argument("--samples_per_class", type=int, default=None)
     p.add_argument("--dataset_cache_dir", default=None)
     p.add_argument("--probe_cache", default=None)
@@ -162,30 +164,37 @@ def evaluate_config(model, tokenizer, extractor, all_texts, args,
     }
 
     prop_results = {}
+    cfg_t0 = time.time()
     for prop_name, prop_data in probe_datasets.items():
         slc = property_slices[prop_name]
         labels_arr = np.array([lbl for _, lbl in prop_data["examples"]])
         prop_acts = {name: acts[slc] for name, acts in sampled_acts.items()}
 
+        prop_t0 = time.time()
         layer_accs = train_pairwise_probes(
             prop_acts, labels_arr,
             cv=args.cv_folds,
             pairs_per_pos=args.pairs_per_pos,
+            n_jobs=args.n_jobs,
         )
         prop_results[prop_name] = layer_accs
+        prop_dt = time.time() - prop_t0
 
         test_vals = [v["test"] for v in layer_accs.values()]
         train_vals = [v["train"] for v in layer_accs.values()]
         n_notconv = sum(1 for v in layer_accs.values() if not v["converged"])
         n_degen = sum(1 for v in layer_accs.values() if v["degenerate"])
         print(
-            f"  {prop_name:12s}: "
+            f"  {prop_name:12s} ({prop_dt:5.1f}s): "
             f"test={np.nanmean(test_vals):.3f}  "
             f"train={np.nanmean(train_vals):.3f}  "
             f"gap={np.nanmean(train_vals) - np.nanmean(test_vals):+.3f}  "
             f"non_conv={n_notconv}/{len(layer_accs)}  "
-            f"degen={n_degen}/{len(layer_accs)}"
+            f"degen={n_degen}/{len(layer_accs)}",
+            flush=True,
         )
+    print(f"  [{label_clean}] total probe time: {time.time() - cfg_t0:.1f}s",
+          flush=True)
     return prop_results
 
 
