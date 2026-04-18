@@ -47,16 +47,8 @@ Submitted batch job XXXXXX
 
 
 Job ID | Job Content | Date | Time | Status |
-5988045| Sparse ablation | 4/16 | 20:30 | Failed - Stale File Handle again |
-5988077| Mask vs GT analysis Again| 4/16 | 20:30| CKA and ER Failed |
-5991736| Mask vs GT analysis Again^2| 4/16 | 22:02| failed |
-5991892| GRPO verification script 1| 4/16 | 22:04 | failed |
-5995131| Sparse speed ablation | 4/16 | 22:40 | not so good but it ran | 
-5998766| GRPO verification script 1 again | 23:20 | Winning |
-5999931| Mask vs GT again^3 | 4/16 | 23:30 | Failed |
-6053065| Mask vs GT again^4| 4/17| 8:45 | Yes results, no plotting? |
-6054255| Sparse speed Ablation Again| 4/17 | 9:05 | Ran, partially. Need to record results in table and resue with more sparsity values |
-6116134| 
+
+
 ---
 
 ### Mask-GT CSV sanity (finite CKA + effective rank before trusting PNGs)

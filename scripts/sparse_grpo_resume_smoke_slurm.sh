@@ -10,7 +10,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --time=00:45:00
 #SBATCH --output=logs/sparse_resume_smoke_%j.out
 #SBATCH --error=logs/sparse_resume_smoke_%j.err

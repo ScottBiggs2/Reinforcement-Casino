@@ -16,7 +16,8 @@
 #
 # If the process is "Killed" with no Python traceback, that is usually OOM (CPU RAM or GPU VRAM).
 # Login nodes: use salloc/sbatch. On a GPU node: try larger --mem (e.g. 128G), or set
-# SMOKE_NUM_GENERATIONS=1 SMOKE_MAX_COMPLETION_LENGTH=256 SMOKE_PRECISION=fp16 to shrink the first-step spike.
+# SMOKE_MAX_COMPLETION_LENGTH=256 SMOKE_PRECISION=fp16 (and optional SMOKE_GENERATION_BATCH_SIZE=1) to shrink the spike.
+# GRPO requires num_generations >= 2 (TRL); do not set SMOKE_NUM_GENERATIONS below 2.
 #
 set -euo pipefail
 
@@ -57,10 +58,15 @@ RUN_NAME="sparse_resume_smoke_$$"
 
 # First GRPO step runs generation + backward; small GPUs or tight cgroup RAM can OOM-kill the process.
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
-SMOKE_NUM_GENERATIONS="${SMOKE_NUM_GENERATIONS:-1}"
+# TRL GRPOConfig enforces num_generations >= 2 (advantages need multiple samples per prompt).
+SMOKE_NUM_GENERATIONS="${SMOKE_NUM_GENERATIONS:-2}"
 SMOKE_GENERATION_BATCH_SIZE="${SMOKE_GENERATION_BATCH_SIZE:-1}"
 SMOKE_MAX_COMPLETION_LENGTH="${SMOKE_MAX_COMPLETION_LENGTH:-512}"
 SMOKE_PRECISION="${SMOKE_PRECISION:-auto}"
+if (( SMOKE_NUM_GENERATIONS < 2 )); then
+  echo "ERROR: GRPO requires num_generations >= 2 (TRL). Got SMOKE_NUM_GENERATIONS=${SMOKE_NUM_GENERATIONS}." >&2
+  exit 1
+fi
 
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "MASK_PATH=${MASK_PATH}"
