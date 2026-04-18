@@ -18,6 +18,8 @@
 # Login nodes: use salloc/sbatch. On a GPU node: try larger --mem (e.g. 128G), or set
 # SMOKE_MAX_COMPLETION_LENGTH=256 SMOKE_PRECISION=fp16 (and optional SMOKE_GENERATION_BATCH_SIZE=1) to shrink the spike.
 # GRPO requires num_generations >= 2 (TRL); do not set SMOKE_NUM_GENERATIONS below 2.
+# If killed during "Pre-initializing optimizer states", SparseAdamW eager init is likely OOM — this script passes
+# --sparse_adamw_lazy_state (allocate Adam state on first step instead of all at once).
 #
 set -euo pipefail
 
@@ -92,7 +94,8 @@ echo "Smoke knobs: num_gen=${SMOKE_NUM_GENERATIONS} gen_bs=${SMOKE_GENERATION_BA
   --output_base_dir "${OUT}" \
   --run_name "${RUN_NAME}" \
   --save_model false \
-  --optimizer sparse_adamw
+  --optimizer sparse_adamw \
+  --sparse_adamw_lazy_state
 
 echo "Phase 2: resume auto, total steps 4 (continues from step 2)"
 "${TRAIN_PY}" src/full_training/sparse_grpo_bsr.py \
@@ -114,7 +117,8 @@ echo "Phase 2: resume auto, total steps 4 (continues from step 2)"
   --run_name "${RUN_NAME}" \
   --resume_from_checkpoint auto \
   --save_model false \
-  --optimizer sparse_adamw
+  --optimizer sparse_adamw \
+  --sparse_adamw_lazy_state
 
 echo "OK: sparse GRPO resume smoke finished."
 echo "Artifacts: ${OUT}/${RUN_NAME}/"

@@ -27,6 +27,8 @@ class SparseAdamW(torch.optim.Optimizer):
         block_size=128,
         mlp_only=False,
         max_grad_norm=1.0,
+        *,
+        eager_state_init: bool = True,
     ):
         self.param_to_name = {}
         params = []
@@ -47,27 +49,44 @@ class SparseAdamW(torch.optim.Optimizer):
             'dense_steps': 0,
             'nan_warnings': [],
         }
-        
-        # OPTIMIZATION: Pre-initialize all optimizer states upfront
-        slurm_safe_print(f"\nPre-initializing optimizer states for all parameters...")
-        init_start = time.time()
-        with torch.no_grad():
-            for group in self.param_groups:
-                for p in group['params']:
-                    state = self.state[p]
-                    state['step'] = 0
-                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-        
-        init_time = time.time() - init_start
-        slurm_safe_print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
+        self.eager_state_init = eager_state_init
+
+        # Pre-allocating exp_avg/exp_avg_sq for every parameter spikes memory (2× model size on-device).
+        # Lazy init matches PyTorch Adam: allocate on first step — slower first step, much lower peak RAM/VRAM.
+        if self.eager_state_init:
+            slurm_safe_print(f"\nPre-initializing optimizer states for all parameters...")
+            init_start = time.time()
+            with torch.no_grad():
+                for group in self.param_groups:
+                    for p in group['params']:
+                        self._init_adam_state_tensors(p)
+
+            init_time = time.time() - init_start
+            slurm_safe_print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
+        else:
+            slurm_safe_print(
+                "\nSparseAdamW: lazy optimizer state (allocate on first step per parameter; lower peak memory)"
+            )
+
         slurm_safe_print(f"✓ SparseAdamW optimizer ready")
         slurm_safe_print(f"  MLP-only: {mlp_only}")
         slurm_safe_print(f"  Block size: {block_size}")
         slurm_safe_print(f"  Using indexed sparse kernels: TRUE")
         slurm_safe_print(f"  Kernel recompilation fix: APPLIED")
         slurm_safe_print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
-    
+
+    def _init_adam_state_tensors(self, p: torch.Tensor) -> None:
+        state = self.state[p]
+        state["step"] = 0
+        state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+
+    def _ensure_adam_state(self, p: torch.Tensor) -> None:
+        if not self.eager_state_init:
+            state = self.state[p]
+            if "exp_avg" not in state:
+                self._init_adam_state_tensors(p)
+
     @torch.no_grad()
     def step(self, closure=None):
         """Perform a single optimization step using Triton kernels."""
@@ -112,6 +131,7 @@ class SparseAdamW(torch.optim.Optimizer):
         """
         Sparse update using indexed Triton kernel (PERFORMANCE FIXED).
         """
+        self._ensure_adam_state(param)
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
@@ -157,6 +177,7 @@ class SparseAdamW(torch.optim.Optimizer):
     
     def _dense_step(self, param, group):
         """Standard dense AdamW update (fallback for non-masked params)."""
+        self._ensure_adam_state(param)
         grad = param.grad
         state = self.state[param]
         state['step'] += 1

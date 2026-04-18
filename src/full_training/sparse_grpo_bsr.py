@@ -122,6 +122,7 @@ def train(
     delta_log_interval: Optional[int],
     delta_log_end_step: Optional[int],
     precision: str = "auto",
+    lazy_sparse_adamw_state: bool = False,
 ) -> None:
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
@@ -215,6 +216,7 @@ def train(
             block_size=block_size_adam,
             mlp_only=mlp_only,
             max_grad_norm=max_grad_norm,
+            eager_state_init=not lazy_sparse_adamw_state,
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
@@ -222,11 +224,6 @@ def train(
     if disable_tf32:
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
-
-    base_state: Dict[str, torch.Tensor] = {}
-    with torch.no_grad():
-        for name, param in model.named_parameters():
-            base_state[name] = param.detach().float().cpu().clone()
 
     manifest = {
         "model_name": model_name,
@@ -256,6 +253,10 @@ def train(
                 "Disable resume or omit delta logging."
             )
         else:
+            base_state: Dict[str, torch.Tensor] = {}
+            with torch.no_grad():
+                for name, param in model.named_parameters():
+                    base_state[name] = param.detach().float().cpu().clone()
             end = delta_log_end_step
             if end is None:
                 end = min(n_steps, max(interval, n_steps // 10))
@@ -440,6 +441,11 @@ if __name__ == "__main__":
         help="Training AMP: auto uses bf16 when the GPU supports it (Transformers check), else fp16. "
         "Use fp16 on V100 / GPUs that raise 'Your setup doesn't support bf16/gpu'.",
     )
+    parser.add_argument(
+        "--sparse_adamw_lazy_state",
+        action="store_true",
+        help="SparseAdamW: allocate exp_avg/exp_avg_sq on first step per param (lower peak memory; eager pre-init can OOM small GPUs).",
+    )
     args = parser.parse_args()
 
     train(
@@ -479,4 +485,5 @@ if __name__ == "__main__":
         delta_log_interval=args.delta_log_interval,
         delta_log_end_step=args.delta_log_end_step,
         precision=args.precision,
+        lazy_sparse_adamw_state=args.sparse_adamw_lazy_state,
     )
