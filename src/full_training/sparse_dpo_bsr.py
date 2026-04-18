@@ -15,6 +15,8 @@ Key Features:
 import os
 import sys
 import argparse
+from typing import Any, Dict, Optional
+
 import torch
 
 # Must override any inherited login-node exports before importing wandb (NFS Slurm logs + console_capture).
@@ -131,6 +133,7 @@ def train(
     benchmark_phase: str = None,
     benchmark_sparsity_pct: float = None,
     benchmark_optimizer_label: str = None,
+    benchmark_extra_log_fields: Optional[Dict[str, Any]] = None,
 ):
     # Determine paths
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -232,7 +235,18 @@ def train(
         slurm_safe_print(f"Injecting Sparse MLP BSR backward for {len(mask_dict)} layers...")
         use_tf32_kernel = not disable_tf32
         slurm_safe_print(f"BSR Kernel TF32 Precision Enabled: {use_tf32_kernel}")
-        replace_linear_modules(model, mask_dict, block_size=block_size_bsr, use_tf32=use_tf32_kernel)
+        _quiet_inj = os.environ.get("RL_CASINO_BSR_QUIET_INJECTION", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        replace_linear_modules(
+            model,
+            mask_dict,
+            block_size=block_size_bsr,
+            use_tf32=use_tf32_kernel,
+            verbose=not _quiet_inj,
+        )
     else:
         slurm_safe_print("Skipping BSR layer injection (dense baseline).")
 
@@ -312,6 +326,7 @@ def train(
                 sparsity_target_pct=benchmark_sparsity_pct,
                 optimizer_label=label,
                 print_every=_print_every,
+                extra_log_fields=benchmark_extra_log_fields,
             )
         )
     elif save_csv:

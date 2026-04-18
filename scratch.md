@@ -55,7 +55,8 @@ Job ID | Job Content | Date | Time | Status |
 5998766| GRPO verification script 1 again | 23:20 | Winning |
 5999931| Mask vs GT again^3 | 4/16 | 23:30 | Failed |
 6053065| Mask vs GT again^4| 4/17| 8:45 | Yes results, no plotting? |
-6054255| Sparse speed Ablation Again| 4/17 | 9:05 | Running |
+6054255| Sparse speed Ablation Again| 4/17 | 9:05 | Ran, partially. Need to record results in table and resue with more sparsity values |
+6116134| 
 ---
 
 ### Mask-GT CSV sanity (finite CKA + effective rank before trusting PNGs)

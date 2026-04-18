@@ -40,6 +40,7 @@ from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.model_slug import sanitize_model_name
 from src.utils.scratch_paths import default_grpo_sparse_outputs, default_hf_datasets_cache
+from src.utils.training_precision import resolve_grpo_precision
 
 
 class SparseDeltaCheckpointCallback(TrainerCallback):
@@ -120,6 +121,7 @@ def train(
     no_gradient_checkpointing: bool,
     delta_log_interval: Optional[int],
     delta_log_end_step: Optional[int],
+    precision: str = "auto",
 ) -> None:
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
@@ -165,8 +167,15 @@ def train(
     multi_gpu = world_size > 1
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
+    pm = precision if precision in ("auto", "bf16", "fp16") else "auto"
+    use_bf16, use_fp16, model_dtype = resolve_grpo_precision(pm)
+    print(
+        f"Precision mode={pm} → Trainer bf16={use_bf16} fp16={use_fp16}, "
+        f"model load dtype={model_dtype}"
+    )
+
     load_kw: Dict[str, Any] = {
-        "torch_dtype": torch.bfloat16,
+        "torch_dtype": model_dtype,
         "low_cpu_mem_usage": True,
     }
     if multi_gpu:
@@ -230,6 +239,7 @@ def train(
         "learning_rate": learning_rate,
         "grpo_beta": grpo_beta,
         "optimizer": optimizer_type,
+        "precision": pm,
         "run_dir": run_dir,
         "output_dir": output_dir,
         "resume_from_checkpoint": resume_ckpt,
@@ -275,8 +285,8 @@ def train(
         gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
         max_steps=n_steps,
-        bf16=True,
-        fp16=False,
+        bf16=use_bf16,
+        fp16=use_fp16,
         gradient_checkpointing=not no_gradient_checkpointing,
         logging_steps=1,
         save_strategy="steps",
@@ -322,6 +332,7 @@ def train(
 
     timing_results: Dict[str, Any] = {
         "method": "sparse_bsr",
+        "precision": pm,
         "optimizer": optimizer_type,
         "model": model_name,
         "block_size_bsr": block_size_bsr,
@@ -421,6 +432,14 @@ if __name__ == "__main__":
         help="If set, save weight deltas vs init on this interval (skipped when resuming).",
     )
     parser.add_argument("--delta_log_end_step", type=int, default=None)
+    parser.add_argument(
+        "--precision",
+        type=str,
+        choices=["auto", "bf16", "fp16"],
+        default="auto",
+        help="Training AMP: auto uses bf16 when the GPU supports it (Transformers check), else fp16. "
+        "Use fp16 on V100 / GPUs that raise 'Your setup doesn't support bf16/gpu'.",
+    )
     args = parser.parse_args()
 
     train(
@@ -459,4 +478,5 @@ if __name__ == "__main__":
         no_gradient_checkpointing=args.no_gradient_checkpointing,
         delta_log_interval=args.delta_log_interval,
         delta_log_end_step=args.delta_log_end_step,
+        precision=args.precision,
     )

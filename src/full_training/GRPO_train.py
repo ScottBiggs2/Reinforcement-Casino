@@ -36,6 +36,7 @@ from src.utils.grpo_checkpoint_utils import (
 from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
 from src.utils.model_slug import sanitize_model_name
 from src.utils.scratch_paths import default_grpo_dense_outputs, default_hf_datasets_cache
+from src.utils.training_precision import resolve_grpo_precision
 
 
 class DeltaLoggingCallback(TrainerCallback):
@@ -182,6 +183,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Last step (inclusive) for delta logs when interval is set.",
     )
+    p.add_argument(
+        "--precision",
+        type=str,
+        choices=["auto", "bf16", "fp16"],
+        default="auto",
+        help="Training AMP: auto prefers bf16 when supported, else fp16 (e.g. V100).",
+    )
     return p.parse_args()
 
 
@@ -226,8 +234,14 @@ def main() -> None:
     multi_gpu = world_size > 1
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
+    use_bf16, use_fp16, model_dtype = resolve_grpo_precision(args.precision)
+    print(
+        f"Precision mode={args.precision} → Trainer bf16={use_bf16} fp16={use_fp16}, "
+        f"model load dtype={model_dtype}"
+    )
+
     load_kw: Dict[str, Any] = {
-        "torch_dtype": torch.bfloat16,
+        "torch_dtype": model_dtype,
         "low_cpu_mem_usage": True,
     }
     if multi_gpu:
@@ -253,8 +267,8 @@ def main() -> None:
         max_grad_norm=args.max_grad_norm,
         max_steps=num_steps,
         num_train_epochs=1,
-        bf16=True,
-        fp16=False,
+        bf16=use_bf16,
+        fp16=use_fp16,
         optim=args.optim,
         logging_steps=1,
         save_strategy="steps",
@@ -287,6 +301,7 @@ def main() -> None:
         "learning_rate": args.learning_rate,
         "beta": args.beta,
         "optim": args.optim,
+        "precision": args.precision,
         "per_device_train_batch_size": args.per_device_train_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "run_dir": run_dir,

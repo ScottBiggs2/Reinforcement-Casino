@@ -26,3 +26,19 @@ This is an environment issue, not a branch-specific code difference versus `RL-i
 ## Verify job
 
 `scripts/verify_grpo_training.sh` sets `TRL_SKIP_VLLM_IMPORT=1` and uses `src.utils.model_slug` for run slugs so helper `python -c` snippets never import TRL.
+
+---
+
+## `ValueError: Your setup doesn't support bf16/gpu`
+
+### Symptom
+
+Hugging Face `TrainingArguments` / `GRPOConfig` raises this during `__post_init__` when `bf16=True` but the **GPU + PyTorch build** does not pass Transformers’ bf16 training check (common on **V100** and some partitions).
+
+### Fix
+
+- **`--precision auto`** (default): uses bf16 when `torch.cuda.is_bf16_supported()` is true, otherwise **fp16** for the Trainer and `torch.float16` for model load.
+- **`--precision fp16`**: force fp16 if auto still mis-detects.
+- **`--precision bf16`**: force bf16 on GPUs where it is supported (e.g. A100, H200).
+
+Implemented in [`src/utils/training_precision.py`](../src/utils/training_precision.py) for [`GRPO_train.py`](../src/full_training/GRPO_train.py) and [`sparse_grpo_bsr.py`](../src/full_training/sparse_grpo_bsr.py).

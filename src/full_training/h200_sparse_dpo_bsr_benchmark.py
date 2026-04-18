@@ -11,6 +11,8 @@ H200-oriented multi-phase BSR DPO benchmark: one dense + several random-mask spa
   materialization per sparse phase). Falls back to a full CPU load if meta init fails.
 
 CSV: <output_dir>/benchmark_training_log.csv (via BenchmarkRunLogSink + BenchmarkThroughputCallback).
+Theory: <output_dir>/benchmark_theory.json (one object per phase) plus ``theory_*`` columns duplicated on
+each CSV row from ``sparse_training_complexity.md``-style proxies (see ``src/utils/bsr_theory_metrics.py``).
 """
 
 import os
@@ -30,8 +32,9 @@ _force_wandb_inert_for_slurm_logs()
 
 import argparse
 import gc
+import json
 import tempfile
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -46,6 +49,11 @@ from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     save_masks,
+)
+from src.utils.bsr_theory_metrics import (
+    compute_sparse_mask_theory_metrics,
+    default_b_tokens_proxy,
+    dense_phase_theory_stub,
 )
 
 
@@ -157,6 +165,14 @@ def main():
         os.remove(csv_path)
 
     sink = BenchmarkRunLogSink(csv_path)
+    theory_json_path = os.path.join(args.output_dir, "benchmark_theory.json")
+    theory_records: List[Dict[str, Any]] = []
+    b_tokens = default_b_tokens_proxy(
+        per_device_train_batch_size=args.batch_size,
+        gradient_accumulation_steps=args.grad_accum,
+        max_length=args.max_length,
+        chosen_rejected_pairs=True,
+    )
 
     slurm_safe_print("Loading tokenizer and dataset (once)...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
@@ -186,6 +202,7 @@ def main():
         tmp_mask = None
         seed = 424200 + idx * 31 + (int(sparsity_pct * 10) if sparsity_pct is not None else 0)
 
+        extra_log: Optional[Dict[str, Any]] = None
         if sparsity_pct is not None:
             masks = generate_random_masks_cpu(
                 args.model_name,
@@ -195,6 +212,15 @@ def main():
                 mlp_only=args.mlp_only,
                 min_layer_keep_ratio=args.min_layer_keep_ratio,
             )
+            bool_masks = {k: v.bool() if v.dtype != torch.bool else v for k, v in masks.items()}
+            extra_log = compute_sparse_mask_theory_metrics(bool_masks, b_tokens)
+            theory_records.append(
+                {
+                    "phase": phase_name,
+                    "sparsity_target_pct": float(sparsity_pct),
+                    **{k: v for k, v in extra_log.items()},
+                }
+            )
             fd, tmp_mask = tempfile.mkstemp(suffix=".pt", prefix="mask_")
             os.close(fd)
             meta = {
@@ -203,11 +229,14 @@ def main():
                 "seed": seed,
                 "format": "torch_bool_binary",
             }
-            bool_masks = {k: v.bool() if v.dtype != torch.bool else v for k, v in masks.items()}
             save_masks(bool_masks, tmp_mask, metadata=meta)
             mask_path = tmp_mask
             del masks
             gc.collect()
+        else:
+            stub = dense_phase_theory_stub(b_tokens=b_tokens)
+            extra_log = stub
+            theory_records.append({"phase": phase_name, "sparsity_target_pct": None, **stub})
 
         run_name = f"{args.run_label}_{phase_name}"
 
@@ -257,6 +286,7 @@ def main():
                 benchmark_phase=phase_name,
                 benchmark_sparsity_pct=sparsity_pct,
                 benchmark_optimizer_label=opt,
+                benchmark_extra_log_fields=extra_log,
             )
         finally:
             try:
@@ -276,7 +306,13 @@ def main():
         sink.close()
     except OSError as e:
         print(f"WARNING: final CSV flush failed: {e}", file=sys.stderr)
+    try:
+        with open(theory_json_path, "w", encoding="utf-8") as tf:
+            json.dump(theory_records, tf, indent=2)
+    except OSError as e:
+        print(f"WARNING: could not write benchmark_theory.json: {e}", file=sys.stderr)
     slurm_safe_print(f"\n✓ Benchmark complete. CSV: {csv_path}")
+    slurm_safe_print(f"✓ Theory sidecar: {theory_json_path}")
 
 
 if __name__ == "__main__":

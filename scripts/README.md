@@ -164,7 +164,8 @@ This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.
 
 - **Dataset / tokenizer** are loaded **once**; each phase **reloads the base model** from the Hub so timings are not chained across phases.
 - **No W&B** (set `WANDB_MODE=disabled` in the batch script). **No delta checkpoints** and **no final model save** in the benchmark driver.
-- **CSV log:** `<output_dir>/benchmark_training_log.csv` — per-step metrics plus `phase`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, and Trainer fields (loss, etc.). Rows are **buffered in RAM** and flushed to disk **after each phase** (atomic replace), so logging does not re-read/rewrite the whole CSV every step (which was slow and could trigger **NFS `errno 116` stale file handle** on busy scratch). Temporary mask `.pt` files are written under `$TMPDIR` and deleted after each sparse phase (bool masks via `save_masks`).
+- **CSV log:** `<output_dir>/benchmark_training_log.csv` — per-step metrics plus `phase`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, repeated **`theory_*`** columns (sparse phases only; dense rows leave most theory fields blank), and Trainer fields (loss, etc.). Rows are **buffered in RAM** and flushed to disk **after each phase** (atomic replace), so logging does not re-read/rewrite the whole CSV every step (which was slow and could trigger **NFS `errno 116` stale file handle** on busy scratch). Temporary mask `.pt` files are written under `$TMPDIR` and deleted after each sparse phase (bool masks via `save_masks`).
+- **Theory sidecar:** `<output_dir>/benchmark_theory.json` — one JSON object per phase with the same proxies (computed in-process from the bool mask dict before the temp mask file is written). Formulas and caveats are documented in [`src/analysis/sparse_training_complexity.md`](../src/analysis/sparse_training_complexity.md) and implemented in [`src/utils/bsr_theory_metrics.py`](../src/utils/bsr_theory_metrics.py). These are **accounting bounds** (BSR backward FLOPs ∝ active fraction; SparseAdamW I/O ∝ active params); they do **not** include the **dense forward** pass, so **do not assume** wall time tracks theory monotonically—compare **`[throughput]`** lines on the same job.
 
 **Entry point:** [`src/full_training/h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py)  
 **Slurm wrapper:** [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) (defaults: `gpu` partition, `gres=gpu:h200:1`, 128G RAM, 8h wall in-repo — adjust `#SBATCH` to match your site).
@@ -178,7 +179,8 @@ Default LR/batch/seq knobs align with the **1024-seq** reference block at the en
 - **Pipeline stage 1** ([`pipeline_stage_01_dense.sh`](pipeline_stage_01_dense.sh) → [`DPO_train.py`](../src/full_training/DPO_train.py)) runs **dense DPO only**.
 - This benchmark runs **six phases** (one dense + five sparse sparsities). Per-phase step time varies (see `[throughput]` lines in the Slurm log); do not assume sparse vs dense ordering without measuring **your** run.
 - **Tokenizer + dataset** are loaded **once**. **Training** reloads model weights from the Hub/cache each phase (dense vs sparse need different module graphs). Random masks use a **meta skeleton** model for shapes only — not a full 8B CPU load per sparse phase.
-- **`TRITON_CACHE_DIR`** defaults to ``${SCRATCH_USER_ROOT}/.triton_cache`` in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) so Triton can reuse compiled kernels across steps/phases.
+- **`TRITON_CACHE_DIR`** defaults to ``${SCRATCH_USER_ROOT}/.triton_cache`` in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) so Triton can reuse compiled kernels across steps/phases. Treat this as the **first** kernel-related lever; **defer** custom Triton/kernel tuning until `theory_*` columns and `[throughput]` show whether steps look **math-bound** or **overhead-bound**.
+- **`RL_CASINO_BSR_QUIET_INJECTION`** defaults to **`1`** in that script so [`replace_linear_modules`](../src/mlps/bsr_sparse_mlp.py) does not print one line per layer (smaller `.out`, less NFS churn). Set to **`0`** when debugging injection order.
 
 Mitigations: **longer Slurm wall**, lower **`H200_BSR_STEPS_PER_PHASE`**, or **fewer phases** (edit [`h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py) `phases` list).
 
@@ -226,7 +228,7 @@ squeue -u "$USER"
 tail -f logs/h200_bsr_bench_<JOBID>.out
 ```
 
-**Outputs:** CSV at `$H200_BSR_OUT/benchmark_training_log.csv` (or the path printed in the job log). Per-phase HF run folders also appear under `$H200_BSR_OUT/` with names like `h200_bsr_<jobid>_phase_dense/` (checkpoints disabled; mostly empty dirs).
+**Outputs:** CSV at `$H200_BSR_OUT/benchmark_training_log.csv`, `benchmark_theory.json`, and the paths printed in the job log. Per-phase HF run folders also appear under `$H200_BSR_OUT/` with names like `h200_bsr_<jobid>_phase_dense/` (checkpoints disabled; mostly empty dirs).
 
 ### Plots from the CSV
 

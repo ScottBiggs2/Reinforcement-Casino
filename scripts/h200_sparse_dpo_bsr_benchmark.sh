@@ -45,8 +45,12 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
 # Triton: persistent compile cache on scratch (fewer recompiles across steps/phases than default TMP).
+# First kernel-adjacent lever before any custom Triton tuning; see scripts/README.md (H200 BSR section).
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${SCRATCH_USER_ROOT}/.triton_cache}"
 mkdir -p "${TRITON_CACHE_DIR}"
+
+# Fewer lines during ``replace_linear_modules`` (Slurm .out / NFS); set to 0 for per-layer debug prints.
+export RL_CASINO_BSR_QUIET_INJECTION="${RL_CASINO_BSR_QUIET_INJECTION:-1}"
 
 # Disable W&B / external experiment trackers (must disable console capture — see errno 116 on Slurm).
 # Use fixed assignments so a stray login-node export cannot re-enable wandb stdout wrapping.
@@ -88,6 +92,7 @@ echo "OUT_BASE=${OUT_BASE}"
 echo "MODEL=${MODEL}"
 echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per dense/sparse phase)"
 echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS:-}"
+echo "TRITON_CACHE_DIR=${TRITON_CACHE_DIR}  RL_CASINO_BSR_QUIET_INJECTION=${RL_CASINO_BSR_QUIET_INJECTION}"
 
 GC_ARGS=()
 if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then

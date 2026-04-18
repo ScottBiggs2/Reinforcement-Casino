@@ -194,6 +194,7 @@ class BenchmarkThroughputCallback(TrainerCallback):
         sparsity_target_pct: Optional[float],
         optimizer_label: str,
         print_every: int = 10,
+        extra_log_fields: Optional[Dict[str, Any]] = None,
     ):
         self.sink = sink
         self.phase = phase
@@ -201,6 +202,7 @@ class BenchmarkThroughputCallback(TrainerCallback):
         self.optimizer_label = optimizer_label
         self._t0: Optional[float] = None
         self.print_every = int(print_every) if print_every and int(print_every) > 0 else 0
+        self._extra_log_fields = extra_log_fields or {}
 
     def on_train_begin(self, args, state, control, **kwargs):
         self._t0 = time.perf_counter()
@@ -228,6 +230,7 @@ class BenchmarkThroughputCallback(TrainerCallback):
             "cumulative_steps_per_s": round(sps, 8),
             "cumulative_samples_per_s": round(sms, 6),
         }
+        row.update(self._extra_log_fields)
         row.update(logs)
         self.sink.write_row(row)
 
