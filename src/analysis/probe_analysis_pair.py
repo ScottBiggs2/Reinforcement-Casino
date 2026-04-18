@@ -95,8 +95,14 @@ def _train_one_layer(
 ) -> tuple:
     """Fit all folds for one layer. Returned as (name, result_dict) so
     Parallel(...) output can be converted straight to a dict."""
-    # Check finite first — std() on ±inf warns and returns NaN.
-    if not np.isfinite(X).all() or float(X.std()) < 1e-8:
+    # Only bail out on genuinely unrecoverable inputs: non-finite values
+    # (±inf or NaN would make LR explode) or an exactly-constant feature
+    # matrix (StandardScaler divides by zero). Very small std (e.g. 1e-5
+    # on a heavily-pruned network) is fine — the probe will simply
+    # produce accuracy ≈0.5, which is itself the answer ("no linearly
+    # separable direction exists here"). The old 1e-8 threshold was too
+    # conservative and masked every high-sparsity warm mask as NaN.
+    if not np.isfinite(X).all() or float(X.std()) < 1e-16:
         return layer_name, {
             "test": float("nan"), "std": float("nan"),
             "train": float("nan"), "gap": float("nan"),
