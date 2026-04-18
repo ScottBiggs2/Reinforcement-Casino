@@ -189,7 +189,7 @@ cat > "$JOB3_SCRIPT" << EOF
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
 #SBATCH --mem=200G
-#SBATCH --time=12:00:00
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/llama8b_probes_%j.out
 #SBATCH --error=logs/llama8b_probes_%j.err
 

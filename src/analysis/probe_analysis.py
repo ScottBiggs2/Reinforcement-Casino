@@ -301,14 +301,15 @@ def train_probes(activations_by_layer: dict, labels: np.ndarray, cv: int = 5) ->
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ConvergenceWarning)
-            # n_jobs=1: cross_validate parallelism with Pipeline on 14336-d
-            # features copies X per worker, which blew memory past 200GB on
-            # a 32-core node. Serial folds are fast enough here.
+            # n_jobs=4: n_jobs=-1 copies the 14336-d feature matrix to every
+            # worker and blew past 200GB on a 32-core node; n_jobs=1 is too
+            # slow to finish 12 probe pairs inside the 8h partition cap.
+            # 4 workers × 91MB(X copy) ≈ 0.4GB extra — safe under 200G.
             out = cross_validate(
                 pipe, X, labels, cv=skf,
                 scoring="accuracy",
                 return_train_score=True,
-                n_jobs=1,
+                n_jobs=4,
             )
             converged = not any(
                 issubclass(w.category, ConvergenceWarning) for w in caught
