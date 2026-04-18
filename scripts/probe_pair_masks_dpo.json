@@ -1,0 +1,8 @@
+[
+  {"label": "Cold-SNIP-DPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_snip_dpo.pt"},
+  {"label": "Cold-CAV-DPO",     "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_dpo.pt"},
+  {"label": "Cold-Fisher-DPO",  "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_fisher_dpo.pt"},
+  {"label": "Warm-Fisher-DPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_fisher_step50_sp97.5.pt"},
+  {"label": "Warm-Magnitude-DPO", "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_magnitude_step50_sp97.5.pt"},
+  {"label": "Warm-Momentum-DPO",  "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_momentum_step50_sp97.5.pt"}
+]

@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=probe_pair_12masks
-#SBATCH --partition=multigpu
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200G
-#SBATCH --gres=gpu:2
-#SBATCH --time=12:00:00
+#SBATCH --gres=gpu:h200:1
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/probe_pair_12masks_%j.out
 #SBATCH --error=logs/probe_pair_12masks_%j.err
 
@@ -53,12 +53,24 @@ BATCH_SIZE="${BATCH_SIZE:-8}"
 MAX_LENGTH="${MAX_LENGTH:-256}"
 CV_FOLDS="${CV_FOLDS:-5}"
 PAIRS_PER_POS="${PAIRS_PER_POS:-2}"
+MASKS_JSON="${MASKS_JSON:-}"           # optional subset of masks
+SKIP_BASELINE="${SKIP_BASELINE:-0}"    # 1 = skip unmasked baseline
+
+EXTRA_ARGS=""
+if [ -n "$MASKS_JSON" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --masks_json $MASKS_JSON"
+fi
+if [ "$SKIP_BASELINE" = "1" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --skip_baseline"
+fi
 
 echo "[config] MODEL=$MODEL"
 echo "[config] OUTPUT_DIR=$OUTPUT_DIR"
 echo "[config] LAYER_STRIDE=$LAYER_STRIDE"
 echo "[config] BATCH_SIZE=$BATCH_SIZE"
 echo "[config] PAIRS_PER_POS=$PAIRS_PER_POS"
+echo "[config] MASKS_JSON=${MASKS_JSON:-<default-12>}"
+echo "[config] SKIP_BASELINE=$SKIP_BASELINE"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -69,7 +81,8 @@ $PYTHON_BIN src/analysis/probe_pair_12masks.py \
     --batch_size "$BATCH_SIZE" \
     --max_length "$MAX_LENGTH" \
     --cv_folds "$CV_FOLDS" \
-    --pairs_per_pos "$PAIRS_PER_POS"
+    --pairs_per_pos "$PAIRS_PER_POS" \
+    $EXTRA_ARGS
 
 echo ""
 echo "========================================"
