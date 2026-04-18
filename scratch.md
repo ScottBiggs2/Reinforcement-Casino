@@ -51,11 +51,11 @@ Job ID | Job Content | Date | Time | Status |
 5988077| Mask vs GT analysis Again| 4/16 | 20:30| CKA and ER Failed |
 5991736| Mask vs GT analysis Again^2| 4/16 | 22:02| failed |
 5991892| GRPO verification script 1| 4/16 | 22:04 | failed |
-5995131| Sparse speed ablation | 4/16 | 22:40 | Running | 
-5998766| GRPO verification script 1 again | 23:20 | Running |
+5995131| Sparse speed ablation | 4/16 | 22:40 | not so good but it ran | 
+5998766| GRPO verification script 1 again | 23:20 | Winning |
 5999931| Mask vs GT again^3 | 4/16 | 23:30 | Failed |
-6053065| Mask vs GT again^4| 4/17| 8:45 | Running |
-
+6053065| Mask vs GT again^4| 4/17| 8:45 | Yes results, no plotting? |
+6054255| Sparse speed Ablation Again| 4/17 | 9:05 | Running |
 ---
 
 ### Mask-GT CSV sanity (finite CKA + effective rank before trusting PNGs)
@@ -114,13 +114,28 @@ sbatch --export=ALL \
 
 # Note job id from sbatch, then e.g.:
 #   tail -f logs/mask_gt_analysis_<JOBID>.out
+# Wait until the log shows plot_layer_metrics_csv finishing and lines like
+#   [plot_layer_metrics] layer_metrics_....csv: finite_cka=... finite_er_a_norm=...
+# before copying PNGs; otherwise you may copy stale images from an earlier run.
 # Artifacts:
 #   ${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth/{jaccard_*,cka_*,layer_metrics_*}.csv/json
 #   ${MASK_ANALYSIS_DIR}/comparisons_vs_ground_truth/plots/*_plots.png
 # Tee log: logs/mask_gt_analysis_gt_analysis_<dir_basename>_<JOBID>.log
 ```
 
-**Copy PNGs to home after success** (`PLOT_DIR` must be set — do not rely on an empty env):
+**Plots only (compute node — do not run `plot_layer_metrics_csv.py` on the login node):** if CSVs exist but PNGs are missing or stale, regenerate plots with a short CPU job:
+
+```bash
+export REPO="${REPO:-$HOME/rl_casino}"
+cd "$REPO" || exit 1
+export MASK_ANALYSIS_DIR="/scratch/biggs.s/rl_casino_masks/tulu3_500_h200_fresh_0409_again"
+# Optional: delete old *_plots.png in plots/ before regenerating
+# export PLOT_MASK_GT_REMOVE_OLD=1
+sbatch scripts/sbatch_plot_mask_gt_comparisons.sh
+# tail -f logs/mask_gt_plots_<JOBID>.out
+```
+
+**Copy PNGs to home after success** (`PLOT_DIR` must be set — do not rely on an empty env). Only copy after the mask-GT job (or plot-only job above) has finished writing PNGs:
 
 ```bash
 export MASK_ANALYSIS_DIR="/scratch/biggs.s/rl_casino_masks/tulu3_500_h200_fresh_0409_again"

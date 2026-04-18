@@ -6,13 +6,29 @@
 #   masks/verify_google_gemma_3_270m_it_math_220k_grpo_dense_step10.pt
 #
 # Usage:
-#   cd ~/rl_casino && ./scripts/sparse_grpo_resume_smoke.sh
-#   MASK_PATH=/path/to/mask.pt ./scripts/sparse_grpo_resume_smoke.sh
+#   On a GPU node (recommended):
+#     salloc -p gpu --gres=gpu:1 -t 0:45:00 --mem=64G ...
+#     cd ~/rl_casino && bash scripts/sparse_grpo_resume_smoke.sh
+#   Or batch:
+#     sbatch scripts/sparse_grpo_resume_smoke_slurm.sh
+#
+#   MASK_PATH=/path/to/mask.pt bash scripts/sparse_grpo_resume_smoke.sh
+#
+# If the process is "Killed" with no Python traceback, you were likely on a login node
+# (OOM / policy). Use salloc/sbatch with a GPU and enough RAM.
 #
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+if [[ -z "${SLURM_JOB_ID:-}" ]] && [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  echo "WARNING: No SLURM_JOB_ID and CUDA_VISIBLE_DEVICES is unset." >&2
+  echo "  Running Gemma + GRPO on a login node often gets OOM-killed (shows as: Killed)." >&2
+  echo "  Use: salloc -p gpu --gres=gpu:1 -t 0:45:00 --mem=64G bash -l" >&2
+  echo "  Then: cd $REPO_ROOT && bash scripts/sparse_grpo_resume_smoke.sh" >&2
+  echo "  Or:  sbatch scripts/sparse_grpo_resume_smoke_slurm.sh" >&2
+fi
 
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"

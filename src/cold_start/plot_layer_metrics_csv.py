@@ -43,6 +43,10 @@ def has_valid(vals):
     return any(not math.isnan(v) for v in vals)
 
 
+def finite_count(vals):
+    return sum(1 for v in vals if not math.isnan(v))
+
+
 def read_rows(path: Path):
     with path.open("r", encoding="utf-8") as f:
         return list(csv.DictReader(f))
@@ -220,6 +224,13 @@ def plot_one(
     erank_a = [to_float(r.get("effective_rank_a_norm")) for r in rows]
     erank_b = [to_float(r.get("effective_rank_b_norm")) for r in rows]
     n_params_col = [to_int_params(r.get("n_params")) for r in rows]
+
+    print(
+        f"[plot_layer_metrics] {csv_path.name}: rows={len(rows)} "
+        f"finite_cka={finite_count(cka)} finite_er_a_norm={finite_count(erank_a)} "
+        f"finite_er_b_norm={finite_count(erank_b)}",
+        flush=True,
+    )
 
     mask_a_name = rows[0].get("mask_a_name") or "mask_a"
     mask_b_name = rows[0].get("mask_b_name") or "mask_b"
