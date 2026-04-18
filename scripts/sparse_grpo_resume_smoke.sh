@@ -7,15 +7,16 @@
 #
 # Usage:
 #   On a GPU node (recommended):
-#     salloc -p gpu --gres=gpu:1 -t 0:45:00 --mem=64G ...
+#     salloc -p gpu --gres=gpu:1 -t 0:45:00 --mem=128G ...
 #     cd ~/rl_casino && bash scripts/sparse_grpo_resume_smoke.sh
 #   Or batch:
 #     sbatch scripts/sparse_grpo_resume_smoke_slurm.sh
 #
 #   MASK_PATH=/path/to/mask.pt bash scripts/sparse_grpo_resume_smoke.sh
 #
-# If the process is "Killed" with no Python traceback, you were likely on a login node
-# (OOM / policy). Use salloc/sbatch with a GPU and enough RAM.
+# If the process is "Killed" with no Python traceback, that is usually OOM (CPU RAM or GPU VRAM).
+# Login nodes: use salloc/sbatch. On a GPU node: try larger --mem (e.g. 128G), or set
+# SMOKE_NUM_GENERATIONS=1 SMOKE_MAX_COMPLETION_LENGTH=256 SMOKE_PRECISION=fp16 to shrink the first-step spike.
 #
 set -euo pipefail
 
@@ -25,7 +26,7 @@ cd "$REPO_ROOT"
 if [[ -z "${SLURM_JOB_ID:-}" ]] && [[ -z "${CUDA_VISIBLE_DEVICES:-}" ]]; then
   echo "WARNING: No SLURM_JOB_ID and CUDA_VISIBLE_DEVICES is unset." >&2
   echo "  Running Gemma + GRPO on a login node often gets OOM-killed (shows as: Killed)." >&2
-  echo "  Use: salloc -p gpu --gres=gpu:1 -t 0:45:00 --mem=64G bash -l" >&2
+  echo "  Use: salloc -p gpu --gres=gpu:1 -t 0:45:00 --mem=128G bash -l" >&2
   echo "  Then: cd $REPO_ROOT && bash scripts/sparse_grpo_resume_smoke.sh" >&2
   echo "  Or:  sbatch scripts/sparse_grpo_resume_smoke_slurm.sh" >&2
 fi
@@ -54,11 +55,19 @@ fi
 OUT="${SPARSE_SMOKE_OUT:-${RL_CASINO_SCRATCH_ROOT:-${SCRATCH_USER_ROOT}}/rl_casino_grpo/sparse_resume_smoke_$$}"
 RUN_NAME="sparse_resume_smoke_$$"
 
+# First GRPO step runs generation + backward; small GPUs or tight cgroup RAM can OOM-kill the process.
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+SMOKE_NUM_GENERATIONS="${SMOKE_NUM_GENERATIONS:-1}"
+SMOKE_GENERATION_BATCH_SIZE="${SMOKE_GENERATION_BATCH_SIZE:-1}"
+SMOKE_MAX_COMPLETION_LENGTH="${SMOKE_MAX_COMPLETION_LENGTH:-512}"
+SMOKE_PRECISION="${SMOKE_PRECISION:-auto}"
+
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "MASK_PATH=${MASK_PATH}"
 echo "OUT=${OUT} RUN_NAME=${RUN_NAME}"
 
 echo "Phase 1: 2 steps, save every step"
+echo "Smoke knobs: num_gen=${SMOKE_NUM_GENERATIONS} gen_bs=${SMOKE_GENERATION_BATCH_SIZE} max_len=${SMOKE_MAX_COMPLETION_LENGTH} precision=${SMOKE_PRECISION}"
 "${TRAIN_PY}" src/full_training/sparse_grpo_bsr.py \
   --model_name "${MODEL}" \
   --checkpoint "${MODEL}" \
@@ -68,8 +77,10 @@ echo "Phase 1: 2 steps, save every step"
   --save_total_limit 5 \
   --batch_size 1 \
   --grad_accum 1 \
-  --num_generations 2 \
-  --generation_batch_size 2 \
+  --num_generations "${SMOKE_NUM_GENERATIONS}" \
+  --generation_batch_size "${SMOKE_GENERATION_BATCH_SIZE}" \
+  --max_completion_length "${SMOKE_MAX_COMPLETION_LENGTH}" \
+  --precision "${SMOKE_PRECISION}" \
   --dataset math-220k \
   --subset_size 32 \
   --output_base_dir "${OUT}" \
@@ -87,8 +98,10 @@ echo "Phase 2: resume auto, total steps 4 (continues from step 2)"
   --save_total_limit 5 \
   --batch_size 1 \
   --grad_accum 1 \
-  --num_generations 2 \
-  --generation_batch_size 2 \
+  --num_generations "${SMOKE_NUM_GENERATIONS}" \
+  --generation_batch_size "${SMOKE_GENERATION_BATCH_SIZE}" \
+  --max_completion_length "${SMOKE_MAX_COMPLETION_LENGTH}" \
+  --precision "${SMOKE_PRECISION}" \
   --dataset math-220k \
   --subset_size 32 \
   --output_base_dir "${OUT}" \

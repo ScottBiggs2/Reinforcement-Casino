@@ -174,17 +174,16 @@ def train(
         f"model load dtype={model_dtype}"
     )
 
+    # Single-process training: avoid device_map="auto" (shards across devices). Trainer expects a
+    # conventional single-device model; "already on multiple devices" + pin_memory warnings are common otherwise.
     load_kw: Dict[str, Any] = {
         "torch_dtype": model_dtype,
         "low_cpu_mem_usage": True,
+        "device_map": None,
     }
-    if multi_gpu:
-        load_kw["device_map"] = None
-    else:
-        load_kw["device_map"] = "auto"
 
     model = AutoModelForCausalLM.from_pretrained(checkpoint_path, **load_kw)
-    if multi_gpu and torch.cuda.is_available():
+    if torch.cuda.is_available():
         model.to(device)
     model.config.use_cache = False
 
@@ -288,6 +287,7 @@ def train(
         bf16=use_bf16,
         fp16=use_fp16,
         gradient_checkpointing=not no_gradient_checkpointing,
+        dataloader_pin_memory=torch.cuda.is_available(),
         logging_steps=1,
         save_strategy="steps",
         save_steps=save_steps,
