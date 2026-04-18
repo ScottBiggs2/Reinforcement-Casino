@@ -29,13 +29,16 @@ import os
 import random
 import re
 import sys
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 import torch
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -257,33 +260,67 @@ def no_mask():
 # ---------------------------------------------------------------------------
 
 def train_probes(activations_by_layer: dict, labels: np.ndarray, cv: int = 5) -> dict:
-    """Train a linear probe per layer and return cross-validated accuracy.
+    """Train a linear probe per layer with full diagnostics.
 
-    Args:
-        activations_by_layer: {layer_name: Tensor[N, D]}
-        labels: np.array of shape [N] with binary labels
-        cv: number of cross-validation folds
-
-    Returns:
-        {layer_name: float mean_cv_accuracy}
+    Returns {layer_name: {"test", "std", "train", "gap", "converged", "degenerate"}}.
+    Scaler is inside a Pipeline so per-fold leakage is avoided. Degenerate features
+    (all-zero / NaN activations) are detected and skipped with NaN results instead
+    of raising from inside LR.
     """
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
     results = {}
 
     for layer_name, acts in activations_by_layer.items():
         X = acts.float().numpy()
-        scaler = StandardScaler()
-        X_sc = scaler.fit_transform(X)
 
-        clf = LogisticRegression(
-            penalty="l2",
-            solver="lbfgs",
-            C=1.0,
-            max_iter=2000,
-            random_state=42,
-        )
-        scores = cross_val_score(clf, X_sc, labels, cv=skf, scoring="accuracy")
-        results[layer_name] = float(scores.mean())
+        nan_frac = float(np.isnan(X).mean())
+        x_std = float(X.std())
+        degenerate = nan_frac > 0 or x_std < 1e-8
+
+        if degenerate:
+            results[layer_name] = {
+                "test": float("nan"),
+                "std": float("nan"),
+                "train": float("nan"),
+                "gap": float("nan"),
+                "converged": False,
+                "degenerate": True,
+            }
+            continue
+
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("lr", LogisticRegression(
+                penalty="l2",
+                solver="lbfgs",
+                C=1.0,
+                max_iter=2000,
+                random_state=42,
+            )),
+        ])
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ConvergenceWarning)
+            out = cross_validate(
+                pipe, X, labels, cv=skf,
+                scoring="accuracy",
+                return_train_score=True,
+                n_jobs=-1,
+            )
+            converged = not any(
+                issubclass(w.category, ConvergenceWarning) for w in caught
+            )
+
+        test_scores = out["test_score"]
+        train_scores = out["train_score"]
+        results[layer_name] = {
+            "test": float(test_scores.mean()),
+            "std": float(test_scores.std()),
+            "train": float(train_scores.mean()),
+            "gap": float(train_scores.mean() - test_scores.mean()),
+            "converged": converged,
+            "degenerate": False,
+        }
 
     return results
 
@@ -343,7 +380,7 @@ def plot_probe_heatmap(
                 idx = _layer_index(lname)
                 col = sample_idx_to_col.get(idx)
                 if col is not None:
-                    mat[pi, col] = acc
+                    mat[pi, col] = acc["test"] if isinstance(acc, dict) else acc
 
         # NaN cells render as chance (neutral yellow). Real below-chance
         # accuracies are left unclipped down to vmin so they show as red.
@@ -441,7 +478,7 @@ def plot_delta_heatmap(
                 idx = _layer_index(lname)
                 col = sample_idx_to_col.get(idx)
                 if col is not None:
-                    mat[pi, col] = acc
+                    mat[pi, col] = acc["test"] if isinstance(acc, dict) else acc
         return mat
 
     baseline_mat = _build_matrix(baseline_results)
@@ -698,11 +735,37 @@ def main():
             layer_accs = train_probes(prop_acts, labels_arr, cv=args.cv_folds)
             prop_results[prop_name] = layer_accs
 
-            vals = list(layer_accs.values())
-            print(f"  {prop_name:12s}: mean={np.mean(vals):.3f}  "
-                  f"min={np.min(vals):.3f}  max={np.max(vals):.3f}")
+            test_vals = [v["test"] for v in layer_accs.values()]
+            train_vals = [v["train"] for v in layer_accs.values()]
+            n_notconv = sum(1 for v in layer_accs.values() if not v["converged"])
+            n_degen = sum(1 for v in layer_accs.values() if v["degenerate"])
+            print(
+                f"  {prop_name:12s}: "
+                f"test={np.nanmean(test_vals):.3f}  "
+                f"train={np.nanmean(train_vals):.3f}  "
+                f"gap={np.nanmean(train_vals) - np.nanmean(test_vals):+.3f}  "
+                f"[min={np.nanmin(test_vals):.3f} max={np.nanmax(test_vals):.3f}]  "
+                f"non_conv={n_notconv}/{len(layer_accs)}  "
+                f"degen={n_degen}/{len(layer_accs)}"
+            )
 
         results_by_config[config_label] = prop_results
+
+        # Config-level health summary — bubbles up issues across all props/layers
+        total_probes = sum(len(v) for v in prop_results.values())
+        total_notconv = sum(
+            1 for prop in prop_results.values()
+            for v in prop.values() if not v["converged"]
+        )
+        total_degen = sum(
+            1 for prop in prop_results.values()
+            for v in prop.values() if v["degenerate"]
+        )
+        if total_notconv or total_degen:
+            print(
+                f"  ⚠️  [{label_clean}] {total_notconv}/{total_probes} did not converge, "
+                f"{total_degen}/{total_probes} degenerate"
+            )
 
     extractor.remove()
 
