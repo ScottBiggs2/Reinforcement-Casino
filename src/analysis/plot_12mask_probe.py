@@ -76,8 +76,14 @@ def load_results(results_dir):
 
 
 def extract_per_layer(prop_results, layer_keys):
-    """Extract ordered per-layer values for each property."""
-    return {p: [prop_results[p][lk] for lk in layer_keys] for p in PROPERTIES}
+    """Extract ordered per-layer values for each property.
+
+    Compatible with both the legacy format (value=float) and the new
+    diagnostics format (value={"test": float, "train": ..., ...}).
+    """
+    def _get(v):
+        return v["test"] if isinstance(v, dict) else v
+    return {p: [_get(prop_results[p][lk]) for lk in layer_keys] for p in PROPERTIES}
 
 
 def find_config(data, keyword):
