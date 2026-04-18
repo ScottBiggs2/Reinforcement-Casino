@@ -206,9 +206,9 @@ cd "\${SLURM_SUBMIT_DIR}"
 MODEL="${MODEL}"
 LAYER_STRIDE=4    # Llama 8B has 32 layers
 BATCH_SIZE=4
-MAX_LENGTH=128
+MAX_LENGTH=256    # was 128; bumped to cover AG News / GSM8K tails
 PROBE_OUTPUT_DIR="${PROBE_OUTPUT_DIR}"
-PROBE_CACHE="\${PROBE_OUTPUT_DIR}/probe_dataset_cache.json"
+PROBE_CACHE="\${PROBE_OUTPUT_DIR}/probe_dataset_cache_v2.json"
 
 # Mask directories
 COLD="${COLD_MASK_DIR}"

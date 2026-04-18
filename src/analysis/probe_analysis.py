@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -124,19 +125,39 @@ def _load_hf_probe_datasets(samples_per_class: int = None,
         gsm8k = load_dataset("openai/gsm8k", "main", split="test", cache_dir=cache_dir)
         questions = [row["question"] for row in gsm8k]
         rng.shuffle(questions)
-        # Split in half: first half = real, second half = shuffled
-        half = len(questions) // 2
-        real_qs = [(q, 1) for q in questions[:half]]
+
+        # Split on sentence terminators while keeping them on the preceding
+        # sentence (avoids losing "?" from the final question).
+        def _split_sentences(q: str) -> list:
+            parts = re.split(r"(?<=[.!?])\s+", q.strip())
+            return [p for p in parts if p]
+
+        def _shuffled_distinct(sents: list, max_tries: int = 10):
+            for _ in range(max_tries):
+                cand = sents[:]
+                rng.shuffle(cand)
+                if cand != sents:
+                    return cand
+            return None
+
+        # Only keep questions with enough structure to meaningfully shuffle.
+        shuffleable = [(q, _split_sentences(q)) for q in questions]
+        shuffleable = [(q, s) for q, s in shuffleable if len(s) >= 3]
+
+        half = len(shuffleable) // 2
+        real_qs = [(q, 1) for q, _ in shuffleable[:half]]
         fake_qs = []
-        for q in questions[half:half * 2]:
-            sentences = q.split(". ")
-            rng.shuffle(sentences)
-            fake_qs.append((". ".join(sentences), 0))
+        for _, sents in shuffleable[half:half * 2]:
+            shuffled = _shuffled_distinct(sents)
+            if shuffled is not None:
+                fake_qs.append((" ".join(shuffled), 0))
+
         datasets["math"] = {
             "description": "Math coherence (GSM8K; 0=shuffled, 1=coherent)",
             "pos": real_qs, "neg": fake_qs,
         }
-        print(f"[data]   math: {len(real_qs)} real, {len(fake_qs)} shuffled")
+        print(f"[data]   math: {len(real_qs)} real, {len(fake_qs)} shuffled "
+              f"(filtered from {len(questions)} to questions with ≥3 sentences)")
     except Exception as e:
         print(f"[data]   WARNING: GSM8K load failed ({e}), using MMLU abstract_algebra")
         mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test", cache_dir=cache_dir)
@@ -208,8 +229,16 @@ def apply_mask(model, mask_dict: dict):
     try:
         for name, param in model.named_parameters():
             if name in mask_dict:
+                m = mask_dict[name]
+                # Strict {0,1} check: non-binary masks would silently scale
+                # weights, corrupting the baseline restore below.
+                if not torch.all((m == 0) | (m == 1)):
+                    raise ValueError(
+                        f"Mask for {name} contains non-binary values; "
+                        f"refusing to apply to avoid precision loss."
+                    )
                 originals[name] = param.data.clone()
-                param.data.mul_(mask_dict[name].to(param.device, dtype=param.dtype))
+                param.data.mul_(m.to(param.device, dtype=param.dtype))
         yield
     finally:
         for name, param in model.named_parameters():
@@ -250,7 +279,7 @@ def train_probes(activations_by_layer: dict, labels: np.ndarray, cv: int = 5) ->
             penalty="l2",
             solver="lbfgs",
             C=1.0,
-            max_iter=500,
+            max_iter=2000,
             random_state=42,
         )
         scores = cross_val_score(clf, X_sc, labels, cv=skf, scoring="accuracy")
@@ -286,9 +315,12 @@ def plot_probe_heatmap(
     n_layers = len(sample_indices)
 
     layer_labels = [f"layer {i}" for i in sample_indices]
-    # Colormap: chance (0.5) → yellow, 1.0 → dark green; below chance → red
+    # Colormap: below chance → red, chance (0.5) → yellow, 1.0 → dark green.
+    # vmin must go below 0.5 so below-chance results are visibly distinct from
+    # chance rather than clipped to the same colour.
     cmap = plt.cm.RdYlGn
-    vmin, vmax = 0.5, 1.0
+    vmin, vmax = 0.3, 1.0
+    sample_idx_to_col = {idx: i for i, idx in enumerate(sample_indices)}
 
     fig_width = max(10, 4 * n_configs + 2)
     fig, axes = plt.subplots(
@@ -299,19 +331,23 @@ def plot_probe_heatmap(
     axes = axes[0]
 
     for ax, (config_label, prop_results) in zip(axes, results_by_config.items()):
-        # Build [n_props, n_layers] accuracy matrix
+        # Build [n_props, n_layers] accuracy matrix. Columns are positioned
+        # by layer index, not by iteration order — the two agree today but
+        # decoupling them prevents silent misalignment if upstream filtering
+        # ever drops a layer.
         mat = np.full((n_props, n_layers), np.nan)
         for pi, prop in enumerate(property_order):
             if prop not in prop_results:
                 continue
-            layer_map = prop_results[prop]
-            sorted_layer_names = sorted(layer_map.keys(), key=_layer_index)
-            for li, lname in enumerate(sorted_layer_names):
-                if li < n_layers:
-                    mat[pi, li] = layer_map[lname]
+            for lname, acc in prop_results[prop].items():
+                idx = _layer_index(lname)
+                col = sample_idx_to_col.get(idx)
+                if col is not None:
+                    mat[pi, col] = acc
 
-        # Clamp values below chance to vmin for display purposes
-        display_mat = np.where(np.isnan(mat), vmin, np.clip(mat, vmin, vmax))
+        # NaN cells render as chance (neutral yellow). Real below-chance
+        # accuracies are left unclipped down to vmin so they show as red.
+        display_mat = np.where(np.isnan(mat), 0.5, np.clip(mat, vmin, vmax))
 
         im = ax.imshow(display_mat, cmap=cmap, vmin=vmin, vmax=vmax, aspect="auto")
 
@@ -344,7 +380,9 @@ def plot_probe_heatmap(
     sm.set_array([])
     cbar = fig.colorbar(sm, cax=cbar_ax)
     cbar.set_label("probe accuracy", fontsize=10, labelpad=8)
-    cbar.set_ticks([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    cbar.set_ticks([0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+    # Mark chance explicitly so readers can spot below-chance cells.
+    cbar.ax.axhline(0.5, color="black", linewidth=0.8, linestyle="--")
     cbar_ax.text(
         0.5, -0.04, "low\n(knowledge lost)",
         ha="center", va="top", transform=cbar_ax.transAxes, fontsize=8,
@@ -392,15 +430,18 @@ def plot_delta_heatmap(
     n_layers = len(sample_indices)
     layer_labels = [f"layer {i}" for i in sample_indices]
 
+    sample_idx_to_col = {idx: i for i, idx in enumerate(sample_indices)}
+
     def _build_matrix(prop_results):
         mat = np.full((n_props, n_layers), np.nan)
         for pi, prop in enumerate(property_order):
             if prop not in prop_results:
                 continue
-            sorted_names = sorted(prop_results[prop].keys(), key=_layer_index)
-            for li, lname in enumerate(sorted_names):
-                if li < n_layers:
-                    mat[pi, li] = prop_results[prop][lname]
+            for lname, acc in prop_results[prop].items():
+                idx = _layer_index(lname)
+                col = sample_idx_to_col.get(idx)
+                if col is not None:
+                    mat[pi, col] = acc
         return mat
 
     baseline_mat = _build_matrix(baseline_results)
@@ -490,7 +531,10 @@ def parse_args():
     p.add_argument("--layer_stride", type=int, default=4,
                    help="Plot every N-th layer (default: 4). Use 1 for all layers.")
     p.add_argument("--batch_size", type=int, default=8)
-    p.add_argument("--max_length", type=int, default=128)
+    p.add_argument("--max_length", type=int, default=256,
+                   help="Token length cap. 256 covers ~99%% of AG News and "
+                        "most GSM8K questions; lower values systematically "
+                        "penalise factual/math probes.")
     p.add_argument("--cv_folds", type=int, default=5,
                    help="Cross-validation folds for probe accuracy (default: 5)")
     p.add_argument("--samples_per_class", type=int, default=None,
@@ -513,10 +557,15 @@ def main():
     # Load probe datasets (with disk caching for cross-run consistency)
     # ------------------------------------------------------------------
     cache_dir = args.dataset_cache_dir or os.environ.get("HF_DATASETS_CACHE")
+    # Cache version tag — bump when dataset construction logic changes so old
+    # caches are invalidated instead of silently reused.
+    _CACHE_VERSION = "v2"
     if args.probe_cache:
         probe_cache_path = args.probe_cache
     else:
-        probe_cache_path = os.path.join(args.output_dir, os.pardir, "probe_dataset_cache.json")
+        n_tag = args.samples_per_class if args.samples_per_class is not None else "all"
+        cache_name = f"probe_dataset_cache_{_CACHE_VERSION}_n{n_tag}_seed42.json"
+        probe_cache_path = os.path.join(args.output_dir, os.pardir, cache_name)
         probe_cache_path = os.path.normpath(probe_cache_path)
 
     if os.path.exists(probe_cache_path):
