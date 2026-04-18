@@ -51,6 +51,12 @@ def main():
     parser.add_argument("--results", required=True,
                         help="Merged probe_pair_results.json (baseline + 12 masks)")
     parser.add_argument("--output", default=None)
+    parser.add_argument("--dpi", type=int, default=100,
+                        help="Figure DPI. 150 = publication quality but ~1GB RAM, "
+                             "100 = default, 80 = fits in login-node memory limits.")
+    parser.add_argument("--figscale", type=float, default=0.7,
+                        help="Multiplier on figure size (default 0.7 = smaller, "
+                             "1.0 = original publication size).")
     args = parser.parse_args()
 
     output = args.output or os.path.join(
@@ -95,8 +101,9 @@ def main():
 
     # ── Layout (same as plot_12mask_probe.py) ──────────────────────────
     n_delta_rows = len(PANEL_LAYOUT)
-    fig_height = 4.2 + n_delta_rows * 3.2
-    fig = plt.figure(figsize=(19, fig_height))
+    fig_height = (4.2 + n_delta_rows * 3.2) * args.figscale
+    fig_width = 19 * args.figscale
+    fig = plt.figure(figsize=(fig_width, fig_height))
 
     baseline_h = 0.14
     gap = 0.03
@@ -183,7 +190,7 @@ def main():
         fontsize=14, fontweight="bold", y=1.005,
     )
 
-    plt.savefig(output, dpi=150, bbox_inches="tight")
+    plt.savefig(output, dpi=args.dpi, bbox_inches="tight")
     print(f"Saved → {output}")
     plt.close()
 
