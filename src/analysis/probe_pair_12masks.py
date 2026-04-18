@@ -31,7 +31,13 @@ import numpy as np
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_SRC = Path(__file__).parent.parent
+_ROOT = _SRC.parent
+# cold_start.utils.__init__ eagerly imports SNIPScorer, which uses
+# `from src.utils.mask_utils ...` — that needs the repo root on sys.path,
+# not just src/. Add both to be safe.
+sys.path.insert(0, str(_SRC))
+sys.path.insert(0, str(_ROOT))
 from cold_start.utils.activation_hooks import FeatureExtractor
 from analysis.probe_analysis import (
     _layer_index,

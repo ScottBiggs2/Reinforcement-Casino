@@ -40,7 +40,13 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_SRC = Path(__file__).parent.parent
+_ROOT = _SRC.parent
+# Both: src/ lets `from cold_start...` work; repo root lets the snip_scorer
+# chain (`from src.utils.mask_utils`) resolve when cold_start.utils.__init__
+# pulls in SNIPScorer eagerly.
+sys.path.insert(0, str(_SRC))
+sys.path.insert(0, str(_ROOT))
 from cold_start.utils.activation_hooks import FeatureExtractor
 from analysis.probe_analysis import (
     _layer_index,

@@ -45,6 +45,10 @@ fi
 cd /home/xie.yiyi/Reinforcement-Casino
 mkdir -p logs
 
+# snip_scorer (imported eagerly by cold_start.utils.__init__) uses
+# `from src.utils.mask_utils ...`, which needs the repo root on PYTHONPATH.
+export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
+
 # ── Configuration ─────────────────────────────────────────────────────
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scratch/xie.yiyi/probe_pair_12masks}"
