@@ -10,18 +10,21 @@
 #   GRPO_MODE=sparse GRPO_MASK=/path/to/mask.pt sbatch scripts/grpo_openr1_llama31_slurm.sh
 #   GRPO_RESUME=auto GRPO_TARGET_STEPS=5000 sbatch ...   # same run_slug / run_name as prior job
 #
+# Explorer / many sites: the gpu partition requires an explicit --gres; omitting it can yield
+# "sbatch: error: Batch job submission failed: Access/permission denied". Match other H200 jobs:
+#   scripts/h200_sparse_dpo_bsr_benchmark.sh, scripts/pipeline_stage_01_dense.sh
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
+#SBATCH --gres=gpu:h200:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
 #SBATCH --time=08:00:00
 #SBATCH --job-name=grpo_openr1
 #SBATCH --output=logs/grpo_openr1_%j.out
 #SBATCH --error=logs/grpo_openr1_%j.err
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
-## GPU: set for your cluster (examples — uncomment one):
-# #SBATCH --gres=gpu:h200:1
-## #SBATCH --gres=gpu:1
+# If the scheduler rejects gpu:h200:1 (or you need a different GPU type), replace the --gres line above, e.g.:
+# #SBATCH --gres=gpu:1
 
 set -euo pipefail
 

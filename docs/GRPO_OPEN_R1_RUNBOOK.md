@@ -22,7 +22,7 @@ export GRPO_TARGET_STEPS=1000
 sbatch scripts/grpo_openr1_llama31_slurm.sh
 ```
 
-Uncomment or set **`#SBATCH --gres=...`** in the script for your cluster (e.g. **one H200**). Partition names differ by site.
+The script includes **`#SBATCH --gres=gpu:h200:1`** (same pattern as `h200_sparse_dpo_bsr_benchmark.sh`). **Do not remove `--gres`** when using the `gpu` partition on Northeastern Explorer—submitting without a GPU request can produce **`Access/permission denied`**. If your site uses a different GRES string, edit that one line (e.g. `--gres=gpu:1`).
 
 ## Sparse BSR
 
