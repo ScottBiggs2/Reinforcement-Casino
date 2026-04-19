@@ -8,19 +8,29 @@ Usage:
 """
 import argparse
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", default="meta-llama/Llama-3.1-8B-Instruct")
     p.add_argument("--mask", required=True)
+    p.add_argument("--full", action="store_true",
+                   help="Actually load weights (needs GPU/lots of RAM). "
+                        "Default uses meta device — param names/shapes only, "
+                        "zero memory. Sufficient for this sanity check.")
     args = p.parse_args()
 
-    print(f"[load] model: {args.model}")
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, torch_dtype=torch.bfloat16, device_map="auto",
-    )
+    if args.full:
+        print(f"[load] model (full weights): {args.model}")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, torch_dtype=torch.bfloat16, device_map="auto",
+        )
+    else:
+        print(f"[load] model (meta device, names+shapes only): {args.model}")
+        config = AutoConfig.from_pretrained(args.model)
+        with torch.device("meta"):
+            model = AutoModelForCausalLM.from_config(config)
 
     print(f"[load] mask: {args.mask}")
     data = torch.load(args.mask, map_location="cpu", weights_only=False)
