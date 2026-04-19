@@ -1,0 +1,85 @@
+# Hyperparameter record: Open-R1 Math + Llama 3.1 8B Instruct (RL Casino)
+# -----------------------------------------------------------------------------
+# This file is the canonical place to store defaults and rationale. Shell scripts
+# and training entrypoints may duplicate values; when they drift, update this file
+# and align scripts (see scripts/grpo_openr1_llama31_slurm.sh).
+
+schema_version: 1
+updated: "2026-04-16"
+
+# --- Shared identifiers ---
+model:
+  hf_id: meta-llama/Llama-3.1-8B-Instruct
+  notes: "Gated on Hugging Face; set HF_TOKEN on the cluster."
+
+dataset:
+  registry_key: math-220k
+  hf_id: open-r1/OpenR1-Math-220k
+  notes: "Field remap problem→prompt via dataset_registry."
+
+# -----------------------------------------------------------------------------
+# GRPO (production path: src/full_training/GRPO_train.py dense, or sparse_grpo_bsr.py)
+# Launched by: scripts/grpo_openr1_llama31_slurm.sh
+# -----------------------------------------------------------------------------
+grpo_open_r1:
+  learning_rate: 5.0e-6
+  beta: 0.025
+  description: "beta is TRL GRPO KL-style coefficient; LR aligned with project GRPO defaults (not DPO)."
+
+  batch:
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 4
+    effective_batch_per_step: 8  # per_device * grad_accum (single GPU)
+
+  generation:
+    num_generations: 8
+    generation_batch_size: 8
+    constraint: "TRL requires generation_batch_size % num_generations == 0."
+
+  sequence:
+    max_prompt_length: 512
+    max_completion_length: 1024
+    notes: "Match GRPO_train.py argparse defaults unless overridden via GRPO_* env in Slurm."
+
+  optimizer: adamw_8bit
+  precision_default: bf16
+  precision_notes: "Use bf16 on H200/Ampere+; use --precision fp16 on GPUs without bf16 (e.g. some V100)."
+
+  training:
+    target_steps_default: 1000
+    save_steps: 50
+    save_total_limit: 3
+    gradient_checkpointing: true  # default in GRPO_train unless --no_gradient_checkpointing
+
+  scheduler:
+    warmup_ratio: 0.1
+    lr_scheduler_type: cosine
+    weight_decay: 0.0
+    max_grad_norm: 0.1
+
+# -----------------------------------------------------------------------------
+# DPO (reference — H200 sparse BSR benchmark snippet from scratch/workflow notes)
+# Launched by: scripts/h200_sparse_dpo_bsr_benchmark.sh
+# Not identical to GRPO; stored here for cross-experiment comparison only.
+# -----------------------------------------------------------------------------
+dpo_h200_sparse_bsr_benchmark:
+  source: "scratch.md workflow (H200_BSR benchmark env block)"
+  learning_rate: 5.0e-7
+  warmup_ratio: 0.1
+  max_length: 1024
+  max_prompt_length: 1024
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 64
+  steps_per_phase_example: 100
+  notes: |
+    DPO uses a much lower LR than GRPO in this repo’s defaults. Do not copy DPO LR into GRPO
+    without intentional ablation. Sequence lengths here are 1024 for that benchmark; pipeline
+    Tulu3-style DPO often uses 768/512 — see scripts/README.md.
+
+# -----------------------------------------------------------------------------
+# Alignment summary
+# -----------------------------------------------------------------------------
+comparison_notes:
+  - "GRPO beta default 0.025 matches the GRPO production plan; DPO beta (when used) is separate (see DPO_train / pipeline)."
+  - "Explorer login nodes often have torch.cuda.is_available()==False; training jobs must run under GPU allocation (salloc/sbatch) or load fp32 and OOM."
+  - "Single H200: set partition/gres per site; export GRPO_PRECISION=bf16 if CUDA is available and the GPU supports bf16."

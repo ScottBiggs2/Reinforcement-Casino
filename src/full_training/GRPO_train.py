@@ -230,8 +230,6 @@ def main() -> None:
     tokenizer.padding_side = "right"
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    world_size = int(os.environ.get("WORLD_SIZE", 1))
-    multi_gpu = world_size > 1
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
 
     use_bf16, use_fp16, model_dtype = resolve_grpo_precision(args.precision)
@@ -240,18 +238,16 @@ def main() -> None:
         f"model load dtype={model_dtype}"
     )
 
+    # Single-device model for Trainer (avoid device_map="auto" + GRPOTrainer "multiple devices" quirks).
     load_kw: Dict[str, Any] = {
         "torch_dtype": model_dtype,
         "low_cpu_mem_usage": True,
+        "device_map": None,
     }
-    if multi_gpu:
-        load_kw["device_map"] = None
-    else:
-        load_kw["device_map"] = "auto"
 
     model = AutoModelForCausalLM.from_pretrained(model_id, **load_kw)
     model.config.use_cache = False
-    if multi_gpu and torch.cuda.is_available():
+    if torch.cuda.is_available():
         model.to(device)
 
     if args.generation_batch_size % args.num_generations != 0:
@@ -263,7 +259,7 @@ def main() -> None:
     cfg = GRPOConfig(
         output_dir=output_dir,
         run_name=run_display_name,
-        report_to=["wandb"] if args.use_wandb else [],
+        report_to=["wandb"] if args.use_wandb else ["none"],
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
@@ -287,6 +283,8 @@ def main() -> None:
         max_prompt_length=args.max_prompt_length,
         beta=args.beta,
         gradient_checkpointing=not args.no_gradient_checkpointing,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=torch.cuda.is_available(),
     )
 
     trainer = GRPOTrainer(

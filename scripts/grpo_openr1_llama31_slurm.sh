@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Open-R1 Math GRPO (dense or sparse BSR) with scratch under RL_CASINO_SCRATCH_ROOT.
+# Hyperparameter defaults and rationale: docs/hyperparams/open_r1_llama31.yaml
+# Runbook: docs/GRPO_OPEN_R1_RUNBOOK.md
+#
 # Submit from repo root: sbatch scripts/grpo_openr1_llama31_slurm.sh
 #
 # Examples:
@@ -16,9 +19,9 @@
 #SBATCH --error=logs/grpo_openr1_%j.err
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-## Uncomment and set GPU type/count for your cluster, e.g.:
-## #SBATCH --gres=gpu:h200:1
-## #SBATCH --gres=gpu:v100:4
+## GPU: set for your cluster (examples — uncomment one):
+# #SBATCH --gres=gpu:h200:1
+## #SBATCH --gres=gpu:1
 
 set -euo pipefail
 
@@ -43,8 +46,26 @@ export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 # Avoid importing a broken vLLM wheel (see src/utils/trl_vllm_import_guard.py). Set to 0 if you use trl[vllm].
 export TRL_SKIP_VLLM_IMPORT="${TRL_SKIP_VLLM_IMPORT:-1}"
+
+# Fail fast on login/CPU nodes (torch loads fp32 → huge RAM → OOM kill with no Python traceback).
+cuda_preflight() {
+  "${TRAIN_PY}" - <<'PY'
+import sys
+import torch
+if not torch.cuda.is_available():
+    print(
+        "ERROR: CUDA is not available. Use a GPU allocation (sbatch/salloc with --gres). "
+        "On Explorer, `python -c \"import torch; print(torch.cuda.is_available())\"` must print True.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+name = torch.cuda.get_device_name(0)
+print(f"CUDA preflight OK: device_count={torch.cuda.device_count()} device0={name!r}")
+PY
+}
 
 # --- Model / data (override before sbatch) ---
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
@@ -57,15 +78,26 @@ export GRPO_NGPUS="${GRPO_NGPUS:-1}"
 export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
 export GRPO_RESUME="${GRPO_RESUME:-}"  # empty | auto | path to checkpoint-*
 
-# Hyperparams (aligned with plan defaults)
+# Hyperparams (see docs/hyperparams/open_r1_llama31.yaml)
 export GRPO_LR="${GRPO_LR:-5e-6}"
 export GRPO_BETA="${GRPO_BETA:-0.025}"
 export GRPO_PER_DEVICE_BS="${GRPO_PER_DEVICE_BS:-2}"
 export GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-4}"
 export GRPO_NUM_GEN="${GRPO_NUM_GEN:-8}"
 export GRPO_GEN_BATCH="${GRPO_GEN_BATCH:-8}"
+# Passed through to HF Trainer as save_steps / save_total_limit (save_strategy=steps).
+# save_steps: write checkpoint-* every N global steps. save_total_limit: keep only the newest K checkpoints on disk (rotation).
+# This script does NOT auto-requeue; if wall time stops training early, resubmit with GRPO_RESUME=auto and the same run_slug/run_name.
 export GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-50}"
+export GRPO_SAVE_TOTAL_LIMIT="${GRPO_SAVE_TOTAL_LIMIT:-3}"
 export GRPO_OPTIM="${GRPO_OPTIM:-adamw_8bit}"
+export GRPO_PRECISION="${GRPO_PRECISION:-bf16}"
+export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
+export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
+# 1 = pass --use_wandb to training; 0 = offline / no W&B UI integration
+export GRPO_USE_WANDB="${GRPO_USE_WANDB:-1}"
+# Sparse only: set 1 to pass --sparse_adamw_lazy_state (lower peak VRAM during SparseAdamW init)
+export GRPO_SPARSE_ADAMW_LAZY="${GRPO_SPARSE_ADAMW_LAZY:-0}"
 
 # Optional: fixed run folder for resume requeues (must match first job)
 export GRPO_RUN_SLUG="${GRPO_RUN_SLUG:-}"
@@ -75,6 +107,8 @@ echo "REPO_ROOT=${REPO_ROOT}"
 echo "RL_CASINO_SCRATCH_ROOT=${RL_CASINO_SCRATCH_ROOT}"
 echo "GRPO_MODE=${GRPO_MODE} GRPO_NGPUS=${GRPO_NGPUS}"
 echo "MODEL=${MODEL} DATASET=${GRPO_DATASET} STEPS=${GRPO_TARGET_STEPS} RESUME=${GRPO_RESUME:-<none>}"
+
+cuda_preflight || exit 1
 
 LAUNCHER=( "${TRAIN_PY}" )
 if [ "${GRPO_NGPUS}" -gt 1 ]; then
@@ -96,6 +130,16 @@ if [ -n "${GRPO_RUN_NAME:-}" ]; then
   RUN_NAME_ARGS+=( --run_name "${GRPO_RUN_NAME}" )
 fi
 
+WANDB_ARGS=()
+if [ "${GRPO_USE_WANDB:-1}" = "1" ]; then
+  WANDB_ARGS+=( --use_wandb )
+fi
+
+SPARSE_LAZY_ARGS=()
+if [ "${GRPO_SPARSE_ADAMW_LAZY:-0}" = "1" ]; then
+  SPARSE_LAZY_ARGS+=( --sparse_adamw_lazy_state )
+fi
+
 if [ "${GRPO_MODE}" = "dense" ]; then
   "${LAUNCHER[@]}" src/full_training/GRPO_train.py \
     --model_name "${MODEL}" \
@@ -108,9 +152,13 @@ if [ "${GRPO_MODE}" = "dense" ]; then
     --num_generations "${GRPO_NUM_GEN}" \
     --generation_batch_size "${GRPO_GEN_BATCH}" \
     --save_steps "${GRPO_SAVE_STEPS}" \
+    --save_total_limit "${GRPO_SAVE_TOTAL_LIMIT}" \
+    --max_prompt_length "${GRPO_MAX_PROMPT_LENGTH}" \
+    --max_completion_length "${GRPO_MAX_COMPLETION_LENGTH}" \
+    --precision "${GRPO_PRECISION}" \
     --optim "${GRPO_OPTIM}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
-    --use_wandb \
+    "${WANDB_ARGS[@]}" \
     "${RUN_SLUG_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \
     "${RESUME_ARGS[@]}"
@@ -132,10 +180,15 @@ elif [ "${GRPO_MODE}" = "sparse" ]; then
     --num_generations "${GRPO_NUM_GEN}" \
     --generation_batch_size "${GRPO_GEN_BATCH}" \
     --save_steps "${GRPO_SAVE_STEPS}" \
+    --save_total_limit "${GRPO_SAVE_TOTAL_LIMIT}" \
+    --max_prompt_length "${GRPO_MAX_PROMPT_LENGTH}" \
+    --max_completion_length "${GRPO_MAX_COMPLETION_LENGTH}" \
+    --precision "${GRPO_PRECISION}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
-    --use_wandb \
+    "${WANDB_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \
-    "${RESUME_ARGS[@]}"
+    "${RESUME_ARGS[@]}" \
+    "${SPARSE_LAZY_ARGS[@]}"
 else
   echo "ERROR: GRPO_MODE must be 'dense' or 'sparse'." >&2
   exit 1
@@ -145,3 +198,4 @@ echo ""
 echo "To resume this run after requeue, re-submit with the same GRPO_RUN_SLUG (dense) or"
 echo "GRPO_RUN_NAME (sparse) and: export GRPO_RESUME=auto"
 echo "W&B id is stored under the run directory as wandb_run_id.txt"
+echo "Hyperparameter record: docs/hyperparams/open_r1_llama31.yaml"

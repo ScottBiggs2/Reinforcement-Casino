@@ -31,6 +31,7 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `pipeline_sparse_one_mask.sh` - one sparse DPO run per mask; **stage 4** submits one Slurm job per `*.pt` under the run’s mask dir (parallel), then queues evals when all finish (`SPARSE_SLURM_TIME` default **7h45** per mask; override `SPARSE_SLURM_MEM` if needed).
 - `multigpu_pipeline/` - **parallel multi-GPU entrypoints** (keeps the single-GPU pipeline unchanged). Currently provides a multi-GPU dense DPO stage 1 launcher.
 - `h200_sparse_dpo_bsr_benchmark.sh` - **single H200 GPU** Slurm job: multi-phase BSR DPO throughput benchmark (dense AdamW + random-mask sparse phases). See [H200 BSR DPO benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) below.
+- `grpo_openr1_llama31_slurm.sh` - **Open-R1 Math GRPO** for `meta-llama/Llama-3.1-8B-Instruct` (dense `GRPO_train.py` or sparse `sparse_grpo_bsr.py`). Hyperparameters and env vars: [`docs/hyperparams/open_r1_llama31.yaml`](../docs/hyperparams/open_r1_llama31.yaml); runbook: [`docs/GRPO_OPEN_R1_RUNBOOK.md`](../docs/GRPO_OPEN_R1_RUNBOOK.md).
 - `plot_h200_bsr_benchmark.py` - **plots** `benchmark_training_log.csv` from that benchmark (throughput, loss, summary bars). Run locally or on a login node with pandas/matplotlib.
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)

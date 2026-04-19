@@ -132,7 +132,9 @@ python src/full_training/GRPO_train.py
 python src/full_training/GRPO_train.py --model_name "Qwen/Qwen2.5-0.5B-Instruct"
 ```
 
-**Outputs:** Default `--output_base_dir` is `{RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense` (see `scratch_paths.py`). Each run uses `run_slug/` (default `{model}_{dataset}_grpo_dense`): HuggingFace checkpoints in `run_slug/checkpoints/`, optional deltas in `run_slug/deltas/` when `--delta_log_interval` is set, `run_manifest.json`, and `wandb_run_id.txt` for resumed W&B runs. Use `--resume_from_checkpoint auto` (or a path) to continue training. Slurm helper: `scripts/grpo_openr1_llama31_slurm.sh`.
+**Outputs:** Default `--output_base_dir` is `{RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense` (see `scratch_paths.py`). Each run uses `run_slug/` (default `{model}_{dataset}_grpo_dense`): HuggingFace checkpoints in `run_slug/checkpoints/`, optional deltas in `run_slug/deltas/` when `--delta_log_interval` is set, `run_manifest.json`, and `wandb_run_id.txt` for resumed W&B runs. Use `--resume_from_checkpoint auto` (or a path) to continue training.
+
+**Open-R1 + Llama 3.1 8B (Slurm):** [`scripts/grpo_openr1_llama31_slurm.sh`](scripts/grpo_openr1_llama31_slurm.sh) — runbook [`docs/GRPO_OPEN_R1_RUNBOOK.md`](docs/GRPO_OPEN_R1_RUNBOOK.md), canonical hyperparameters [`docs/hyperparams/open_r1_llama31.yaml`](docs/hyperparams/open_r1_llama31.yaml).
 
 **vLLM / import errors:** If `trl` fails to import `GRPOTrainer` due to a broken `vllm` install, see [docs/TROUBLESHOOTING_GRPO.md](docs/TROUBLESHOOTING_GRPO.md). By default we skip loading vLLM (HF generation only); set `TRL_SKIP_VLLM_IMPORT=0` only when using a compatible vLLM build.
 
