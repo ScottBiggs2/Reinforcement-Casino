@@ -492,8 +492,14 @@ def plot_delta_heatmap(
     for config_label, prop_results in mask_configs.items():
         delta_mats[config_label] = _build_matrix(prop_results) - baseline_mat
 
-    all_deltas = np.concatenate([m[~np.isnan(m)] for m in delta_mats.values()])
-    abs_max = max(0.05, np.nanmax(np.abs(all_deltas)))  # at least ±0.05 range
+    flat = np.concatenate([m[~np.isnan(m)] for m in delta_mats.values()])
+    if flat.size == 0:
+        # All deltas are NaN (e.g. mask collapsed activations to zero, probes
+        # returned NaN). Fall back to a nominal range so the plot still renders.
+        print("[plot] WARNING: all delta values are NaN; using default ±0.05 range")
+        abs_max = 0.05
+    else:
+        abs_max = max(0.05, float(np.nanmax(np.abs(flat))))
 
     cmap = plt.cm.RdBu
     norm = mcolors.TwoSlopeNorm(vmin=-abs_max, vcenter=0, vmax=abs_max)
