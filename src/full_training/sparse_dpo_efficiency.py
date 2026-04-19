@@ -29,6 +29,12 @@ from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino
 from src.utils.data_utils import dpo_collator_fn
 from src.utils.dataset_registry import get_dataset_config, load_dpo_dataset as registry_load_dpo
 from src.utils.logging_utils import FlexibleCheckpointCallback, CSVLoggerCallback
+from src.utils.grpo_checkpoint_utils import (
+    maybe_load_wandb_resume_env,
+    resolve_resume_checkpoint,
+    RunManifestCallback,
+    WandbRunIdCallback,
+)
 from src.optimizers.sparse_adamw import SparseAdamW
 
 def sanitize_model_name(model_name: str) -> str:
@@ -61,6 +67,9 @@ def train(
     max_prompt_length,
     dpo_beta,
     gradient_checkpointing=True,
+    save_steps=None,
+    save_total_limit=None,
+    resume_from_checkpoint=None,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -81,7 +90,16 @@ def train(
     os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join(output_base_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
-    
+    output_dir = os.path.join(run_dir, "checkpoints")
+    os.makedirs(output_dir, exist_ok=True)
+
+    resume_ckpt = resolve_resume_checkpoint(output_dir, resume_from_checkpoint)
+    if use_wandb:
+        maybe_load_wandb_resume_env(run_dir, resume_ckpt)
+
+    use_hf_rolling = save_steps is not None and save_steps > 0 and save_steps < 10**9
+    hf_save_total_limit = save_total_limit if save_total_limit is not None else 3
+
     print(f"\n{'='*60}")
     print(f"SPARSE DPO EFFICIENCY TRAINING")
     print(f"{'='*60}")
@@ -93,6 +111,7 @@ def train(
         f"DPO training: max_steps={n_steps}, num_train_epochs=1, peak_lr={learning_rate}, "
         f"warmup_ratio={warmup_ratio}, lr_scheduler=linear (Trainer; align with DPO_train.py / pipeline NUM_STEPS_DPO)"
     )
+    print(f"HF rolling checkpoints: {use_hf_rolling} resume={resume_ckpt!r}")
 
     # Callback only uses this for optional full-delta dumps; not tied to dense delta_logs.
     checkpoint_schedule = [n_steps] if n_steps > 0 else []
@@ -132,35 +151,69 @@ def train(
         
     # Callbacks
     callbacks = []
-    
-    # Snapshot base state for flexible callback
-    base_state = {}
-    with torch.no_grad():
-        for name, param in model.named_parameters():
-             base_state[name] = param.detach().float().cpu().clone()
-             
-    callbacks.append(FlexibleCheckpointCallback(
-        base_state=base_state,
-        delta_log_dir=os.path.join(run_dir, "deltas"),
-        checkpoint_schedule=checkpoint_schedule,
-        threshold=1e-3,
-        model_name=model_name,
-        dataset_name=dataset_name,
-        subset_size=subset_size,
-        learning_rate=learning_rate,
-        batch_size=batch_size,
-        grad_accum=grad_accum,
-        run_name=run_name,
-        use_wandb=use_wandb,
-        wandb_project=wandb_project
-    ))
-    
+
+    manifest = {
+        "model_name": model_name,
+        "checkpoint_path": checkpoint_path,
+        "mask_path": mask_path,
+        "dataset_key": dataset_key,
+        "dataset_name": dataset_name,
+        "n_steps": n_steps,
+        "learning_rate": learning_rate,
+        "optimizer": optimizer_type,
+        "mlp_only": mlp_only,
+        "output_dir": output_dir,
+        "resume_from_checkpoint": resume_ckpt,
+        "hf_rolling_save_steps": save_steps,
+        "hf_save_total_limit": hf_save_total_limit if use_hf_rolling else None,
+    }
+    callbacks.append(RunManifestCallback(run_dir, manifest))
+    if use_wandb:
+        callbacks.append(WandbRunIdCallback(run_dir))
+
+    if not resume_ckpt:
+        base_state = {}
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                base_state[name] = param.detach().float().cpu().clone()
+        callbacks.append(
+            FlexibleCheckpointCallback(
+                base_state=base_state,
+                delta_log_dir=os.path.join(run_dir, "deltas"),
+                checkpoint_schedule=checkpoint_schedule,
+                threshold=1e-3,
+                model_name=model_name,
+                dataset_name=dataset_name,
+                subset_size=subset_size,
+                learning_rate=learning_rate,
+                batch_size=batch_size,
+                grad_accum=grad_accum,
+                run_name=run_name,
+                use_wandb=use_wandb,
+                wandb_project=wandb_project,
+            )
+        )
+    else:
+        print(
+            "Resume: skipping FlexibleCheckpointCallback weight-delta logging "
+            "(base_state would not match a cold start)."
+        )
+
     if save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
-    
+
+    if use_hf_rolling:
+        save_strategy = "steps"
+        cfg_save_steps = save_steps
+        cfg_save_total = hf_save_total_limit
+    else:
+        save_strategy = "no"
+        cfg_save_steps = 500
+        cfg_save_total = None
+
     # DPO Config — align with src/full_training/DPO_train.py (step-based run: max_steps + num_train_epochs=1)
     dpo_config = DPOConfig(
-        output_dir=os.path.join(run_dir, "checkpoints"),
+        output_dir=output_dir,
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
@@ -170,6 +223,9 @@ def train(
         num_train_epochs=1,
         lr_scheduler_type="linear",
         logging_steps=1,
+        save_strategy=save_strategy,
+        save_steps=cfg_save_steps,
+        save_total_limit=cfg_save_total,
         report_to="wandb" if use_wandb else "none",
         run_name=run_name,
         remove_unused_columns=False,
@@ -179,17 +235,17 @@ def train(
         max_length=max_length,
         max_prompt_length=max_prompt_length,
     )
-    
+
     trainer = DPOTrainer(
         model=model,
         args=dpo_config,
         train_dataset=dpo_dataset,
         data_collator=lambda x: dpo_collator_fn(x, tokenizer),
         optimizers=(optimizer, None),
-        callbacks=callbacks
+        callbacks=callbacks,
     )
-    
-    trainer.train()
+
+    trainer.train(resume_from_checkpoint=resume_ckpt)
 
     # Final Saving
     if save_model:
@@ -248,9 +304,27 @@ if __name__ == "__main__":
         else: raise argparse.ArgumentTypeError('Boolean value expected.')
         
     parser.add_argument("--save_model", type=str2bool, default=True, help="Save final model checkpoint (default: True)")
-    
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=None,
+        help="HF Trainer checkpoint interval (rolling). Omit for no intermediate HF checkpoints (legacy behavior).",
+    )
+    parser.add_argument(
+        "--save_total_limit",
+        type=int,
+        default=None,
+        help="Keep only the newest K HF checkpoints when --save_steps is set (default: 3).",
+    )
+    parser.add_argument(
+        "--resume_from_checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint-* dir, or 'auto' for latest under run_dir/checkpoints.",
+    )
+
     args = parser.parse_args()
-    
+
     train(
         model_name=args.model_name,
         checkpoint_path=args.checkpoint,
@@ -276,4 +350,7 @@ if __name__ == "__main__":
         max_prompt_length=args.max_prompt_length,
         dpo_beta=args.dpo_beta,
         gradient_checkpointing=False if args.no_gradient_checkpointing else (True if args.gradient_checkpointing is True else True),
+        save_steps=args.save_steps,
+        save_total_limit=args.save_total_limit,
+        resume_from_checkpoint=args.resume_from_checkpoint,
     )

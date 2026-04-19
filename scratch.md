@@ -36,17 +36,10 @@ export WANDB_CONSOLE=off
 Submitted batch job XXXXXX
 
 
-(base) [biggs.s@explorer-01 rl_casino]$ squeue -u $USER
-             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
-           5991736       gpu mask_gt_  biggs.s PD       0:00      1 (Priority)
-           5991892       gpu verify_g  biggs.s PD       0:00      1 (Priority)
-           5988045       gpu h200_bsr  biggs.s  R    1:24:17      1 d4055
-(base) [biggs.s@explorer-01 rl_casino]$ squeue -u $USER
-             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
-           5991736       gpu mask_gt_  biggs.s  R       6:27      1 d1029
-
-
 Job ID | Job Content | Date | Time | Status |
+6249251| Dense GRPO 5k | 4/19 | 15:30 | queued|
+6249627| random sparse GRPO 5k 97.5%| 4/19 | 15:30| queued|
+6249648| CAV sparse GRPO 5k 97.5%| 4/19| 15:40 | queued|
 
 
 ---

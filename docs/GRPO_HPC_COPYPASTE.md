@@ -57,7 +57,7 @@ export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
 ```bash
 # After "Shared environment" above
 export GRPO_MODE=dense
-export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
+export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-5000}"
 # Optional: stable folder for resume — set on first job and reuse
 # export GRPO_RUN_SLUG="llama31_math220k_grpo_dense_v1"
 
@@ -89,6 +89,11 @@ python src/utils/generate_random_mask.py \
   --model_name "${MODEL}" \
   --sparsity_percent 97.5 \
   --seed "${RANDOM_SEED}" \
+  --output_file "${MASK_RANDOM}"
+
+python src/utils/generate_random_mask.py \
+  --model_name "${MODEL}" \
+  --sparsity_percent 97.5 \
   --output_file "${MASK_RANDOM}"
 ```
 
@@ -126,7 +131,6 @@ python src/cold_start/inference_mask_finder.py \
   --sparsity 97.5 \
   --max_length "${GRPO_MAX_PROMPT_LENGTH:-512}" \
   --batch_size 4 \
-  --seed 42 \
   --output "${MASK_CAV}"
 ```
 

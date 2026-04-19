@@ -333,6 +333,18 @@ run_dense_dpo() {
       dpo_extra+=(--gradient_checkpointing)
     fi
 
+    # HF rolling checkpoints + resume (optional; see DPO_train.py --save_steps / --resume_from_checkpoint)
+    local dpo_ckpt_args=()
+    if [ -n "${DPO_SAVE_STEPS:-}" ]; then
+      dpo_ckpt_args+=(--save_steps "${DPO_SAVE_STEPS}")
+    fi
+    if [ -n "${DPO_SAVE_TOTAL_LIMIT:-}" ]; then
+      dpo_ckpt_args+=(--save_total_limit "${DPO_SAVE_TOTAL_LIMIT}")
+    fi
+    if [ -n "${DPO_RESUME:-}" ]; then
+      dpo_ckpt_args+=(--resume_from_checkpoint "${DPO_RESUME}")
+    fi
+
     timeout --signal=TERM --kill-after=60 "${TRAIN_TIMEOUT_PER_DATASET}" \
       "$TRAIN_PY" src/full_training/DPO_train.py \
         --model_name "$MODEL" \
@@ -342,6 +354,7 @@ run_dense_dpo() {
         --delta_log_interval "${DELTA_LOG_INTERVAL}" \
         "${delta_end_args[@]}" \
         "${dpo_extra[@]}" \
+        "${dpo_ckpt_args[@]}" \
         --output_base_dir "$out_base" \
         --dataset_cache_dir "$cache_dir" \
         --use_wandb \
@@ -729,6 +742,17 @@ run_sparse_dpo_one_mask() {
     sparse_dpo_extra+=(--no_gradient_checkpointing)
   fi
 
+  local sparse_ckpt_args=()
+  if [ -n "${DPO_SAVE_STEPS:-}" ]; then
+    sparse_ckpt_args+=(--save_steps "${DPO_SAVE_STEPS}")
+  fi
+  if [ -n "${DPO_SAVE_TOTAL_LIMIT:-}" ]; then
+    sparse_ckpt_args+=(--save_total_limit "${DPO_SAVE_TOTAL_LIMIT}")
+  fi
+  if [ -n "${DPO_RESUME:-}" ]; then
+    sparse_ckpt_args+=(--resume_from_checkpoint "${DPO_RESUME}")
+  fi
+
   timeout --signal=TERM --kill-after=60 "${SPARSE_TIMEOUT_PER_MASK}" \
     "$TRAIN_PY" src/full_training/sparse_dpo_efficiency.py \
       --model_name "$MODEL" \
@@ -741,6 +765,7 @@ run_sparse_dpo_one_mask() {
       --lr "$sparse_lr" \
       "${sparse_dpo_extra[@]}" \
       "${sparse_subset_args[@]}" \
+      "${sparse_ckpt_args[@]}" \
       --optimizer sparse_adamw \
       --block_size 32 \
       --use_wandb \

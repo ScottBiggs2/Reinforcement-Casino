@@ -11,6 +11,8 @@
 #SBATCH --job-name=sparse_one
 #SBATCH --mem=128G
 #SBATCH --ntasks=1
+#SBATCH --output=logs/pipeline_sparse_one_mask_%j.out
+#SBATCH --error=logs/pipeline_sparse_one_mask_%j.err
 
 set -euo pipefail
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
