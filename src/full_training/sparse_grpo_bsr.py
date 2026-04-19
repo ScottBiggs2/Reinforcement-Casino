@@ -280,7 +280,7 @@ def train(
     cfg = GRPOConfig(
         output_dir=output_dir,
         run_name=run_name,
-        report_to=["wandb"] if use_wandb else [],
+        report_to=["wandb"] if use_wandb else ["none"],
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
@@ -288,6 +288,7 @@ def train(
         bf16=use_bf16,
         fp16=use_fp16,
         gradient_checkpointing=not no_gradient_checkpointing,
+        dataloader_num_workers=0,
         dataloader_pin_memory=torch.cuda.is_available(),
         logging_steps=1,
         save_strategy="steps",

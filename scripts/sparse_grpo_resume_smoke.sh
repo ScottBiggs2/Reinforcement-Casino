@@ -15,11 +15,13 @@
 #   MASK_PATH=/path/to/mask.pt bash scripts/sparse_grpo_resume_smoke.sh
 #
 # If the process is "Killed" with no Python traceback, that is usually OOM (CPU RAM or GPU VRAM).
-# Login nodes: use salloc/sbatch. On a GPU node: try larger --mem (e.g. 128G), or set
-# SMOKE_MAX_COMPLETION_LENGTH=256 SMOKE_PRECISION=fp16 (and optional SMOKE_GENERATION_BATCH_SIZE=1) to shrink the spike.
+# Bash prints the line where the `python ...` command *starts* (this file ~79–98), not the line inside Python
+# where memory spiked — so "line 98" can mean OOM during the first GRPO generation step, not SparseAdamW.
+# With num_generations=1 you used to get a Python ValueError at GRPOConfig *before* trainer.train(); the optimizer
+# had already finished — that did not prove the generation phase fit in memory. num_generations>=2 runs that phase.
+# Login nodes: use salloc/sbatch. On a GPU node: try larger --mem (e.g. 128G), or lower SMOKE_MAX_COMPLETION_LENGTH.
 # GRPO requires num_generations >= 2 (TRL); do not set SMOKE_NUM_GENERATIONS below 2.
-# If killed during "Pre-initializing optimizer states", SparseAdamW eager init is likely OOM — this script passes
-# --sparse_adamw_lazy_state (allocate Adam state on first step instead of all at once).
+# --sparse_adamw_lazy_state avoids eager Adam state pre-allocation (OOM on small GPUs during init only).
 #
 set -euo pipefail
 
@@ -41,7 +43,6 @@ export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export TRL_SKIP_VLLM_IMPORT="${TRL_SKIP_VLLM_IMPORT:-1}"
 export WANDB_MODE="${WANDB_MODE:-disabled}"
-export WANDB_DISABLED="${WANDB_DISABLED:-true}"
 export WANDB_CONSOLE=off
 
 MODEL="${MODEL:-google/gemma-3-270m-it}"
@@ -63,7 +64,9 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 # TRL GRPOConfig enforces num_generations >= 2 (advantages need multiple samples per prompt).
 SMOKE_NUM_GENERATIONS="${SMOKE_NUM_GENERATIONS:-2}"
 SMOKE_GENERATION_BATCH_SIZE="${SMOKE_GENERATION_BATCH_SIZE:-1}"
-SMOKE_MAX_COMPLETION_LENGTH="${SMOKE_MAX_COMPLETION_LENGTH:-512}"
+# Short completions shrink GRPO generation memory (KV + activations) more than lowering num_generations (min 2).
+SMOKE_MAX_COMPLETION_LENGTH="${SMOKE_MAX_COMPLETION_LENGTH:-256}"
+SMOKE_SUBSET_SIZE="${SMOKE_SUBSET_SIZE:-8}"
 SMOKE_PRECISION="${SMOKE_PRECISION:-auto}"
 if (( SMOKE_NUM_GENERATIONS < 2 )); then
   echo "ERROR: GRPO requires num_generations >= 2 (TRL). Got SMOKE_NUM_GENERATIONS=${SMOKE_NUM_GENERATIONS}." >&2
@@ -75,7 +78,7 @@ echo "MASK_PATH=${MASK_PATH}"
 echo "OUT=${OUT} RUN_NAME=${RUN_NAME}"
 
 echo "Phase 1: 2 steps, save every step"
-echo "Smoke knobs: num_gen=${SMOKE_NUM_GENERATIONS} gen_bs=${SMOKE_GENERATION_BATCH_SIZE} max_len=${SMOKE_MAX_COMPLETION_LENGTH} precision=${SMOKE_PRECISION}"
+echo "Smoke knobs: num_gen=${SMOKE_NUM_GENERATIONS} gen_bs=${SMOKE_GENERATION_BATCH_SIZE} max_len=${SMOKE_MAX_COMPLETION_LENGTH} subset=${SMOKE_SUBSET_SIZE} precision=${SMOKE_PRECISION}"
 "${TRAIN_PY}" src/full_training/sparse_grpo_bsr.py \
   --model_name "${MODEL}" \
   --checkpoint "${MODEL}" \
@@ -90,7 +93,7 @@ echo "Smoke knobs: num_gen=${SMOKE_NUM_GENERATIONS} gen_bs=${SMOKE_GENERATION_BA
   --max_completion_length "${SMOKE_MAX_COMPLETION_LENGTH}" \
   --precision "${SMOKE_PRECISION}" \
   --dataset math-220k \
-  --subset_size 32 \
+  --subset_size "${SMOKE_SUBSET_SIZE}" \
   --output_base_dir "${OUT}" \
   --run_name "${RUN_NAME}" \
   --save_model false \
@@ -112,7 +115,7 @@ echo "Phase 2: resume auto, total steps 4 (continues from step 2)"
   --max_completion_length "${SMOKE_MAX_COMPLETION_LENGTH}" \
   --precision "${SMOKE_PRECISION}" \
   --dataset math-220k \
-  --subset_size 32 \
+  --subset_size "${SMOKE_SUBSET_SIZE}" \
   --output_base_dir "${OUT}" \
   --run_name "${RUN_NAME}" \
   --resume_from_checkpoint auto \
