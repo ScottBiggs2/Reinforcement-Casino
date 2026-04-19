@@ -57,19 +57,23 @@ class SNIPScorer:
         print(f"[SNIPScorer] Scored {len(scores)} weight matrices.")
         return scores
 
-    def scores_to_masks(self, scores, sparsity_percent=90.0, local_pool=False):
+    def scores_to_masks(self, scores, sparsity_percent=90.0, local_pool=False,
+                        min_layer_keep_ratio=0.0):
         """Keep top-k saliency weights.
 
         Args:
             local_pool: If False (default), one global threshold across all layers.
                         If True, each weight matrix independently keeps keep_frac elements.
+            min_layer_keep_ratio: Per-layer keep floor for global mode. Each layer
+                keeps at least floor(ratio * layer_numel) parameters even if the
+                global threshold would have pruned them.
         """
         masks = create_mask_from_scores_gpu_efficient(
             scores,
             sparsity_percent=sparsity_percent,
             device="cpu",
             local_pool=local_pool,
-            min_layer_keep_ratio=0.0,
+            min_layer_keep_ratio=min_layer_keep_ratio,
         )
 
         total  = sum(m.numel() for m in masks.values())

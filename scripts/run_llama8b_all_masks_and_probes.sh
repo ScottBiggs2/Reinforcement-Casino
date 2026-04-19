@@ -37,8 +37,23 @@ WARM_DPO_MOMENTUM="${SCRATCH_ROOT}/rl_casino_masks/llama8b/warm_momentum_step50_
 # Fisher warm DPO — still queued; probes involving it will be skipped until it exists
 WARM_DPO_FISHER="${SCRATCH_ROOT}/rl_casino_masks/llama8b/warm_fisher_step50_sp97.5.pt"
 
-# Existing GRPO deltas (1gpu run with deltas up to step 200)
-GRPO_DELTA_DIR="${GRPO_DELTA_DIR:-${SCRATCH_ROOT}/rl_casino_outputs/llama8b_dpo_mask_grpo_dense_baseline_1gpu_20260408_044634/deltas/meta_llama_llama_3_1_8b_instruct_math_220k_grpo_dense}"
+# Existing GRPO deltas — REQUIRED, must be set by caller (no default).
+# Historical runs:
+#   llama8b_dpo_mask_grpo_dense_baseline_1gpu_20260408_044634 (1-GPU, to step 200)
+#   llama8b_dpo_mask_grpo_dense_baseline_4gpu_20260408_022221 (4-GPU)
+# Set GRPO_DELTA_DIR before invocation, e.g.:
+#   GRPO_DELTA_DIR=/scratch/.../deltas/<sub_dir> bash scripts/run_llama8b_all_masks_and_probes.sh
+if [ -z "${GRPO_DELTA_DIR:-}" ]; then
+  echo "FATAL: GRPO_DELTA_DIR must be set to the dense-GRPO deltas directory."
+  echo "Example:"
+  echo "  GRPO_DELTA_DIR=${SCRATCH_ROOT}/rl_casino_outputs/<grpo_run>/deltas/<model_dataset_grpo_dense> \\"
+  echo "    bash scripts/run_llama8b_all_masks_and_probes.sh"
+  exit 1
+fi
+if [ ! -d "$GRPO_DELTA_DIR" ]; then
+  echo "FATAL: GRPO_DELTA_DIR does not exist: $GRPO_DELTA_DIR"
+  exit 1
+fi
 
 # New output dirs
 COLD_MASK_DIR="${COLD_MASK_DIR:-${SCRATCH_ROOT}/rl_casino_masks/llama8b_cold}"
@@ -81,12 +96,15 @@ conda activate /home/\$USER/.conda/envs/rl_casino || conda activate /scratch/\$U
 export HF_HOME="/scratch/\$USER/hf_cache"
 export HF_DATASETS_CACHE="/scratch/\$USER/hf_cache/datasets"
 export PYTHONPATH="\${SLURM_SUBMIT_DIR}:\${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTHONUNBUFFERED=1
 
 cd "\${SLURM_SUBMIT_DIR}"
 mkdir -p "${COLD_MASK_DIR}"
 
 echo "=== Cold-start mask generation (Llama 8B) ==="
 
+FAILURES=()
 for MODE in dpo grpo; do
   for METHOD in snip cav fisher; do
     OUTFILE="${COLD_MASK_DIR}/cold_\${METHOD}_\${MODE}.pt"
@@ -96,20 +114,38 @@ for MODE in dpo grpo; do
     fi
     echo ""
     echo "--- Cold \${METHOD} \${MODE} ---"
-    python src/cold_start/inference_mask_finder.py \\
-      --model_name ${MODEL} \\
-      --method "\$METHOD" \\
-      --mode "\$MODE" \\
-      --n_samples ${N_SAMPLES} \\
-      --sparsity ${SPARSITY} \\
-      --batch_size ${BATCH_SIZE} \\
-      --max_length ${MAX_LENGTH} \\
-      --output "\$OUTFILE" || echo "WARNING: cold \${METHOD} \${MODE} failed"
+    if ! python src/cold_start/inference_mask_finder.py \\
+        --model_name "${MODEL}" \\
+        --method "\$METHOD" \\
+        --mode "\$MODE" \\
+        --n_samples ${N_SAMPLES} \\
+        --sparsity ${SPARSITY} \\
+        --batch_size ${BATCH_SIZE} \\
+        --max_length ${MAX_LENGTH} \\
+        --min_layer_keep_ratio 0.0025 \\
+        --verbose \\
+        --output "\$OUTFILE"; then
+      echo "ERROR: cold \${METHOD} \${MODE} failed"
+      FAILURES+=("cold_\${METHOD}_\${MODE}")
+      rm -f "\$OUTFILE"   # avoid half-written file masquerading as valid on retry
+      continue
+    fi
+    # Post-flight: file must exist and be non-trivially sized
+    if [ ! -s "\$OUTFILE" ]; then
+      echo "ERROR: cold \${METHOD} \${MODE} produced empty/missing output"
+      FAILURES+=("cold_\${METHOD}_\${MODE}")
+      rm -f "\$OUTFILE"
+    fi
   done
 done
 
 echo "=== Cold masks done ==="
 ls -la "${COLD_MASK_DIR}/"
+
+if [ "\${#FAILURES[@]}" -gt 0 ]; then
+  echo "FAILED masks: \${FAILURES[*]}"
+  exit 1
+fi
 EOF
 
 echo "[Job 1] Submitting cold-start masks..."
@@ -139,6 +175,8 @@ source "\$HOME/miniconda/etc/profile.d/conda.sh" 2>/dev/null || source "\$(conda
 conda activate /home/\$USER/.conda/envs/rl_casino || conda activate /scratch/\$USER/conda_envs/rl_casino
 
 export PYTHONPATH="\${SLURM_SUBMIT_DIR}:\${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTHONUNBUFFERED=1
 cd "\${SLURM_SUBMIT_DIR}"
 mkdir -p "${WARM_GRPO_MASK_DIR}"
 
@@ -147,9 +185,45 @@ TARGET_STEP=200
 
 echo "=== Warm-start GRPO masks (Llama 8B) ==="
 echo "GRPO deltas: \$GRPO_DELTA_DIR"
-echo "Available deltas:"
-ls "\$GRPO_DELTA_DIR"/*.pt 2>/dev/null || echo "(none found)"
 
+# Pre-flight: dir must exist, and the specific target_step file must be present.
+# Without this, the mask finder silently uses whatever older steps exist (or 0).
+if [ ! -d "\$GRPO_DELTA_DIR" ]; then
+  echo "FATAL: GRPO_DELTA_DIR does not exist: \$GRPO_DELTA_DIR"
+  echo "Hint: verify the dense-GRPO run completed and the timestamped path is correct."
+  exit 1
+fi
+if [ ! -f "\$GRPO_DELTA_DIR/deltas_step_\${TARGET_STEP}.pt" ]; then
+  echo "FATAL: missing deltas_step_\${TARGET_STEP}.pt in \$GRPO_DELTA_DIR"
+  echo "Available deltas:"
+  ls "\$GRPO_DELTA_DIR"/*.pt 2>/dev/null || echo "(none)"
+  exit 1
+fi
+echo "Available deltas:"
+ls "\$GRPO_DELTA_DIR"/*.pt
+
+# Sanity-check delta magnitude. If the GRPO trainer saw near-zero reward
+# (common if the accuracy reward parses math-220k poorly), weights barely
+# move and the resulting "warm" mask is just float noise. Abort rather than
+# emit garbage masks.
+echo "Sanity-checking delta L2 magnitude..."
+python - "\$GRPO_DELTA_DIR/deltas_step_\${TARGET_STEP}.pt" <<'PYEOF'
+import sys, torch
+path = sys.argv[1]
+d = torch.load(path, map_location="cpu")
+n = sum(t.numel() for t in d.values())
+l2 = sum(float(t.float().pow(2).sum()) for t in d.values()) ** 0.5
+rms = l2 / max(n, 1) ** 0.5
+print(f"  params={n:,}  total_L2={l2:.6e}  per-elem RMS={rms:.6e}")
+# Threshold chosen well below typical post-training deltas; only catches
+# the "literally didn't train" regime, not small-but-real learning signals.
+if rms < 1e-6:
+    print("FATAL: delta RMS is below 1e-6 — GRPO effectively did not learn.")
+    print("  Check reward function and training logs before generating masks.")
+    sys.exit(1)
+PYEOF
+
+FAILURES=()
 for METHOD in magnitude momentum fisher; do
   OUTFILE="${WARM_GRPO_MASK_DIR}/warm_\${METHOD}_grpo.pt"
   if [ -f "\$OUTFILE" ]; then
@@ -158,17 +232,32 @@ for METHOD in magnitude momentum fisher; do
   fi
   echo ""
   echo "--- Warm \${METHOD} GRPO ---"
-  python src/warm_start/even_better_mask_finder.py \\
-    --delta_log_dir "\$GRPO_DELTA_DIR" \\
-    --method "\$METHOD" \\
-    --sparsity_percent ${SPARSITY} \\
-    --target_step "\$TARGET_STEP" \\
-    --min_layer_keep_ratio 0.0025 \\
-    --output_file "\$OUTFILE" || echo "WARNING: warm \${METHOD} GRPO failed"
+  if ! python src/warm_start/even_better_mask_finder.py \\
+      --delta_log_dir "\$GRPO_DELTA_DIR" \\
+      --method "\$METHOD" \\
+      --sparsity_percent ${SPARSITY} \\
+      --target_step "\$TARGET_STEP" \\
+      --min_layer_keep_ratio 0.0025 \\
+      --output_file "\$OUTFILE"; then
+    echo "ERROR: warm \${METHOD} GRPO failed"
+    FAILURES+=("warm_\${METHOD}_grpo")
+    rm -f "\$OUTFILE"
+    continue
+  fi
+  if [ ! -s "\$OUTFILE" ]; then
+    echo "ERROR: warm \${METHOD} GRPO produced empty/missing output"
+    FAILURES+=("warm_\${METHOD}_grpo")
+    rm -f "\$OUTFILE"
+  fi
 done
 
 echo "=== Warm GRPO masks done ==="
 ls -la "${WARM_GRPO_MASK_DIR}/"
+
+if [ "\${#FAILURES[@]}" -gt 0 ]; then
+  echo "FAILED masks: \${FAILURES[*]}"
+  exit 1
+fi
 EOF
 
 echo ""

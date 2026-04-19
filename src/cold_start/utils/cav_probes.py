@@ -47,7 +47,8 @@ class CAVProbeScorer:
         print("[CAVProbeScorer] Probe training done.")
         return neuron_scores
 
-    def scores_to_masks(self, neuron_scores, model, sparsity_percent=90.0, local_pool=False):
+    def scores_to_masks(self, neuron_scores, model, sparsity_percent=90.0, local_pool=False,
+                        min_layer_keep_ratio=0.0):
         """Broadcast neuron scores to `gate_proj`, `up_proj`, and `down_proj` masks.
 
         Args:
@@ -57,6 +58,10 @@ class CAVProbeScorer:
                 that per-layer selection produces.
                 If True, each layer independently keeps `keep_frac * intermediate_size`
                 neurons (original behavior, uniform sparsity per layer).
+            min_layer_keep_ratio: Per-layer keep floor for global mode. Each hook
+                (layer) keeps at least ceil(ratio * intermediate_size) neurons even
+                if the global threshold would have pruned them all. Matches the
+                warm-mask convention (default 0.0025 upstream).
         """
         keep_frac = 1.0 - sparsity_percent / 100.0
 
@@ -94,6 +99,26 @@ class CAVProbeScorer:
                 hook_key: (scores >= threshold).float()
                 for hook_key, scores in seen_hooks.items()
             }
+
+            # Enforce per-layer keep floor: each hook keeps at least
+            # floor(min_layer_keep_ratio * layer_size) top neurons regardless of
+            # the global threshold. Prevents whole layers from being zeroed out.
+            if min_layer_keep_ratio > 0:
+                enforced = 0
+                for hook_key, scores in seen_hooks.items():
+                    layer_size = scores.numel()
+                    floor_n = int(min_layer_keep_ratio * layer_size)
+                    if floor_n <= 0:
+                        continue
+                    current_kept = int(keep_1d_per_hook[hook_key].sum().item())
+                    if current_kept >= floor_n:
+                        continue
+                    _, top_idx = torch.topk(scores, floor_n)
+                    keep_1d_per_hook[hook_key][top_idx] = 1.0
+                    enforced += 1
+                if enforced > 0:
+                    print(f"[CAVProbeScorer] Applied per-layer keep floor "
+                          f"(ratio={min_layer_keep_ratio}) to {enforced} hooks.")
         else:
             # --- Local selection: each layer independently ---
             keep_1d_per_hook = {}

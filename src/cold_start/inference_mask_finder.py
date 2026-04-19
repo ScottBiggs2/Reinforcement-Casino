@@ -123,7 +123,16 @@ def load_calibration_samples_dpo(dataset_name, n_samples=64, seed=42):
 
 
 def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
-    """Load problem/solution pairs from a GRPO-format dataset."""
+    """Load problem/solution pairs from a GRPO-format dataset.
+
+    Returns (positive_texts, negative_texts) where:
+      - positive_texts: prompt_i + solution_i  (matched pair)
+      - negative_texts: prompt_i + solution_{(i+1) mod N}  (mismatched pair)
+
+    Both classes have equal-length, full texts so the CAV probe learns
+    reasoning-content differences rather than sequence-length differences.
+    For SNIP/Fisher only positive_texts are used.
+    """
     print(f"[GRPO mode] Loading {n_samples} calibration samples from {dataset_name}...")
     raw = load_dataset(dataset_name, split="train")
     raw = raw.shuffle(seed=seed)
@@ -142,11 +151,11 @@ def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
             f"Tried inputs={INPUT_CANDIDATES}, outputs={OUTPUT_CANDIDATES}."
         )
 
-    positive_texts: List[str] = []
-    negative_texts: List[str] = []
+    prompts: List[str] = []
+    solutions: List[str] = []
 
     for rec in raw:
-        if len(positive_texts) >= n_samples:
+        if len(prompts) >= n_samples:
             break
 
         prompt = str(rec.get(input_col, "") or "").strip()
@@ -155,11 +164,20 @@ def load_calibration_samples_grpo(dataset_name, n_samples=64, seed=42):
         if not prompt or not solution:
             continue
 
-        positive_texts.append(prompt + "\n" + solution)
-        negative_texts.append(prompt)
+        prompts.append(prompt)
+        solutions.append(solution)
 
-    print(f"  Loaded {len(positive_texts)} positive (prompt+solution) / "
-          f"{len(negative_texts)} negative (prompt-only) samples.")
+    n = len(prompts)
+    if n < 2:
+        raise ValueError(
+            f"Need at least 2 valid prompt/solution pairs for mismatched negatives, got {n}."
+        )
+
+    positive_texts = [prompts[i] + "\n" + solutions[i] for i in range(n)]
+    negative_texts = [prompts[i] + "\n" + solutions[(i + 1) % n] for i in range(n)]
+
+    print(f"  Loaded {n} positive (prompt+matched solution) / "
+          f"{n} negative (prompt+mismatched solution) samples.")
     return positive_texts, negative_texts
 
 
@@ -503,6 +521,7 @@ def main(args):
         masks = create_mask_from_scores_gpu_efficient(
             score_dict, args.sparsity, device=device,
             local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
         )
         metadata = {
             "method": "fisher",
@@ -539,6 +558,7 @@ def main(args):
             neuron_scores, model,
             sparsity_percent=args.sparsity,
             local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
         )
         metadata = {
             "method": "cav",
@@ -567,6 +587,7 @@ def main(args):
         )
         masks = scorer.scores_to_masks(
             snip_scores, sparsity_percent=args.sparsity, local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
         )
         metadata = {
             "method": "snip",
@@ -610,6 +631,7 @@ def main(args):
             neuron_scores, model,
             sparsity_percent=args.sparsity,
             local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
         )
         metadata = {
             "method": "activation",
@@ -708,6 +730,15 @@ if __name__ == "__main__":
             "Use per-layer selection instead of global cross-layer ranking. "
             "Default (off): one global threshold. "
             "With --local-pool: each layer keeps top keep_frac independently."
+        ),
+    )
+    parser.add_argument(
+        "--min_layer_keep_ratio", type=float, default=0.0025,
+        help=(
+            "Per-layer keep floor in global mode. Each layer keeps at least "
+            "floor(ratio * layer_size) parameters/neurons even if global "
+            "threshold would prune them. Matches warm-mask default (0.0025). "
+            "Set to 0 for pure global selection."
         ),
     )
     parser.add_argument("--reference_mask", type=str, default=None,
