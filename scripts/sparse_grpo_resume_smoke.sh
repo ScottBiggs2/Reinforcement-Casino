@@ -63,13 +63,18 @@ RUN_NAME="sparse_resume_smoke_$$"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 # TRL GRPOConfig enforces num_generations >= 2 (advantages need multiple samples per prompt).
 SMOKE_NUM_GENERATIONS="${SMOKE_NUM_GENERATIONS:-2}"
-SMOKE_GENERATION_BATCH_SIZE="${SMOKE_GENERATION_BATCH_SIZE:-1}"
+# TRL also requires generation_batch_size % num_generations == 0 (e.g. 2/2, not 1/2).
+SMOKE_GENERATION_BATCH_SIZE="${SMOKE_GENERATION_BATCH_SIZE:-${SMOKE_NUM_GENERATIONS}}"
 # Short completions shrink GRPO generation memory (KV + activations) more than lowering num_generations (min 2).
 SMOKE_MAX_COMPLETION_LENGTH="${SMOKE_MAX_COMPLETION_LENGTH:-256}"
 SMOKE_SUBSET_SIZE="${SMOKE_SUBSET_SIZE:-8}"
 SMOKE_PRECISION="${SMOKE_PRECISION:-auto}"
 if (( SMOKE_NUM_GENERATIONS < 2 )); then
   echo "ERROR: GRPO requires num_generations >= 2 (TRL). Got SMOKE_NUM_GENERATIONS=${SMOKE_NUM_GENERATIONS}." >&2
+  exit 1
+fi
+if (( SMOKE_GENERATION_BATCH_SIZE % SMOKE_NUM_GENERATIONS != 0 )); then
+  echo "ERROR: TRL requires generation_batch_size divisible by num_generations. Got gen_bs=${SMOKE_GENERATION_BATCH_SIZE} num_gen=${SMOKE_NUM_GENERATIONS}." >&2
   exit 1
 fi
 

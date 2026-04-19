@@ -277,6 +277,12 @@ def train(
                 )
             )
 
+    if generation_batch_size % num_generations != 0:
+        raise ValueError(
+            f"generation_batch_size ({generation_batch_size}) must be divisible by "
+            f"num_generations ({num_generations}) (TRL GRPO)."
+        )
+
     cfg = GRPOConfig(
         output_dir=output_dir,
         run_name=run_name,

@@ -254,6 +254,12 @@ def main() -> None:
     if multi_gpu and torch.cuda.is_available():
         model.to(device)
 
+    if args.generation_batch_size % args.num_generations != 0:
+        raise ValueError(
+            f"generation_batch_size ({args.generation_batch_size}) must be divisible by "
+            f"num_generations ({args.num_generations}) (TRL GRPO)."
+        )
+
     cfg = GRPOConfig(
         output_dir=output_dir,
         run_name=run_display_name,
