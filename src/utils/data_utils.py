@@ -20,8 +20,11 @@ def load_dpo_dataset(dataset_name, subset_size=None, split="train"):
     return norm_ds
 
 
-def load_grpo_dataset(dataset_name, subset_size=None, split="train"):
-    """Load and normalize GRPO dataset from HuggingFace."""
+def load_grpo_dataset(dataset_name, subset_size=None, split="train", grpo_prompt_suffix=None):
+    """Load and normalize GRPO dataset from HuggingFace.
+
+    If ``grpo_prompt_suffix`` is set (e.g. OpenR1 tag instructions), it is appended to every prompt.
+    """
     slurm_safe_print(f"Loading GRPO dataset: {dataset_name}")
     raw_ds = load_dataset(dataset_name, split=split)
     
@@ -67,6 +70,8 @@ def load_grpo_dataset(dataset_name, subset_size=None, split="train"):
 
     def normalize_record(rec):
         prompt_text = extract_prompt(rec)
+        if grpo_prompt_suffix:
+            prompt_text = f"{prompt_text}{grpo_prompt_suffix}"
         solution_raw = rec.get("solution", rec.get("ground_truth", rec.get("answer", "")))
         solution_text = msg_to_text(solution_raw).strip()
         return {"prompt": prompt_text, "solution": solution_text}

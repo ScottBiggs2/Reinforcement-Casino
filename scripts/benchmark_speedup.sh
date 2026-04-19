@@ -2,11 +2,11 @@
 # ============================================================================
 # Sparse Training Speedup Benchmark — Single H200 GPU
 #
-# Runs 4 training methods with identical hyperparams and collects timing JSON:
+# Runs 3 training methods with identical hyperparams and collects timing JSON:
 #   1. Dense + AdamW
 #   2. Dense + SGD
-#   3. LoRA + AdamW
-#   4. Sparse BSR + SparseAdamW
+#   3. Sparse BSR + SparseAdamW
+# (LoRA GRPO is not part of this repo’s supported matrix.)
 #
 # Submit: sbatch scripts/benchmark_speedup.sh
 # Local:  bash scripts/benchmark_speedup.sh
@@ -130,25 +130,7 @@ run_and_track "Dense + SGD" \
         --output_base_dir "$OUTPUT_DIR" \
         --dataset_cache_dir "$CACHE_DIR"
 
-# ── 3. LoRA + AdamW ─────────────────────────────────────────────────────────
-run_and_track "LoRA + AdamW (r=16)" \
-    "$PYTHON" src/full_training/lora_grpo_timing.py \
-        --model_name "$MODEL" \
-        --dataset "$DATASET" \
-        --n_steps "$N_STEPS" \
-        --subset_size "$SUBSET" \
-        --batch_size "$BATCH_SIZE" \
-        --grad_accum "$GRAD_ACCUM" \
-        --num_generations "$NUM_GENERATIONS" \
-        --generation_batch_size "$GEN_BATCH_SIZE" \
-        --lr "$LR" \
-        --optimizer adamw \
-        --lora_rank 16 \
-        --use_wandb \
-        --output_base_dir "$OUTPUT_DIR" \
-        --dataset_cache_dir "$CACHE_DIR"
-
-# ── 4. Sparse BSR + SparseAdamW ─────────────────────────────────────────────
+# ── 3. Sparse BSR + SparseAdamW ─────────────────────────────────────────────
 run_and_track "Sparse BSR + SparseAdamW" \
     "$PYTHON" src/full_training/sparse_grpo_bsr.py \
         --model_name "$MODEL" \

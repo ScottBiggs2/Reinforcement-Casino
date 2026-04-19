@@ -187,28 +187,43 @@ def _normalize_dataset(raw_ds, subset_size=None, label="dataset"):
     return norm_ds
 
 
-def load_grpo_dataset(key_or_hf_id: str, subset_size: Optional[int] = None, split: str = "train"):
+def load_grpo_dataset(
+    key_or_hf_id: str,
+    subset_size: Optional[int] = None,
+    split: str = "train",
+    grpo_prompt_suffix: Optional[str] = None,
+):
     """
     Load and normalize a GRPO dataset, resolving registry keys.
     """
     from src.utils.data_utils import load_grpo_dataset as _base_load_grpo
-    
+
     config = get_dataset_config(key_or_hf_id)
     hf_id = config["hf_id"]
     field_map = config.get("field_map")
-    
+
     slurm_safe_print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} for GRPO (domain: {config['domain']})")
-    
+
     if field_map:
         slurm_safe_print(f"[dataset_registry] Applying field remapping: {field_map}")
         raw_ds = load_dataset(hf_id, split=split)
         raw_ds = _apply_field_map(raw_ds, field_map)
-        return _normalize_grpo_dataset(raw_ds, subset_size=subset_size, label=hf_id)
+        return _normalize_grpo_dataset(
+            raw_ds,
+            subset_size=subset_size,
+            label=hf_id,
+            grpo_prompt_suffix=grpo_prompt_suffix,
+        )
     else:
-        return _base_load_grpo(hf_id, subset_size=subset_size, split=split)
+        return _base_load_grpo(
+            hf_id,
+            subset_size=subset_size,
+            split=split,
+            grpo_prompt_suffix=grpo_prompt_suffix,
+        )
 
 
-def _normalize_grpo_dataset(raw_ds, subset_size=None, label="dataset"):
+def _normalize_grpo_dataset(raw_ds, subset_size=None, label="dataset", grpo_prompt_suffix=None):
     def _msg_to_text(x):
         if isinstance(x, str): return x
         if isinstance(x, dict):
@@ -249,6 +264,8 @@ def _normalize_grpo_dataset(raw_ds, subset_size=None, label="dataset"):
 
     def normalize_record(rec):
         prompt_text = _extract_prompt(rec)
+        if grpo_prompt_suffix:
+            prompt_text = f"{prompt_text}{grpo_prompt_suffix}"
         solution_raw = rec.get("solution", rec.get("ground_truth", rec.get("answer", "")))
         solution_text = _msg_to_text(solution_raw).strip()
         return {"prompt": prompt_text, "solution": solution_text}

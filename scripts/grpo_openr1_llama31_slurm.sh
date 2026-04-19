@@ -97,6 +97,8 @@ export GRPO_OPTIM="${GRPO_OPTIM:-adamw_8bit}"
 export GRPO_PRECISION="${GRPO_PRECISION:-bf16}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
+# openr1_tags | llama_cot — see src/utils/grpo_rewards.py (default: delimiter-aware for Instruct models)
+export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
 # 1 = pass --use_wandb to training; 0 = offline / no W&B UI integration
 export GRPO_USE_WANDB="${GRPO_USE_WANDB:-1}"
 # Sparse only: set 1 to pass --sparse_adamw_lazy_state (lower peak VRAM during SparseAdamW init)
@@ -160,6 +162,7 @@ if [ "${GRPO_MODE}" = "dense" ]; then
     --max_completion_length "${GRPO_MAX_COMPLETION_LENGTH}" \
     --precision "${GRPO_PRECISION}" \
     --optim "${GRPO_OPTIM}" \
+    --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
     "${WANDB_ARGS[@]}" \
     "${RUN_SLUG_ARGS[@]}" \
@@ -187,6 +190,7 @@ elif [ "${GRPO_MODE}" = "sparse" ]; then
     --max_prompt_length "${GRPO_MAX_PROMPT_LENGTH}" \
     --max_completion_length "${GRPO_MAX_COMPLETION_LENGTH}" \
     --precision "${GRPO_PRECISION}" \
+    --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
     "${WANDB_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \

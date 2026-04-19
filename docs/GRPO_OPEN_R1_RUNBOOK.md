@@ -66,6 +66,23 @@ sbatch scripts/grpo_openr1_llama31_slurm.sh
 
 The trainer will load the latest `checkpoint-*` and continue until `max_steps` is reached. For chained automation, wrap that in your own script or use Slurm dependencies (similar to `scripts/submit_pipeline_chain.sh` for the DPO pipeline).
 
+## GRPO reward profile (`GRPO_REWARD_PROFILE`)
+
+Math rewards are defined in [`src/utils/grpo_rewards.py`](../src/utils/grpo_rewards.py).
+
+| Profile | When to use |
+|---------|-------------|
+| **`llama_cot`** (default) | Instruct models (e.g. Llama 3.1) that rarely emit `<redacted_thinking>` tags. Uses delimiter heuristics (`####`, `\boxed{}`, `Final Answer:`) so `format_reasoning` and `format_number` are not degenerate. |
+| **`openr1_tags`** | Strict OpenR1-style blocks only; prompts get an optional suffix asking for redacted tags (dense/sparse GRPO loaders). |
+
+Override: `export GRPO_REWARD_PROFILE=openr1_tags` before `sbatch`, or pass `--grpo_reward_profile` if invoking Python directly.
+
+### Evaluation parity (benchmarks)
+
+- Use the **same** [`run_evals_slurm.sh`](../scripts/run_evals_slurm.sh) / lm-eval settings and **`apply_chat_template`** behavior as your **base** model for fair accuracy comparisons.
+- Training caps completions at **`GRPO_MAX_COMPLETION_LENGTH`** (default 1024). If lm-eval tasks use a **much lower** `max_gen_toks`, long-CoT checkpoints may look weaker than they are — align generation limits when comparing to GRPO-tuned checkpoints (or report two caps).
+- Standard math harnesses extract final answers from full model output; they do **not** require training-time reward tags.
+
 ## Environment: CUDA
 
 Training **must** run where **`torch.cuda.is_available()`** is true. On **login nodes** or CPU partitions, PyTorch often loads **fp32** weights and the process can be **OOM-killed** with no Python traceback.
@@ -91,6 +108,7 @@ nvidia-smi
 | `GRPO_USE_WANDB` | `1` (default) adds `--use_wandb`; set `0` for offline/disabled UI |
 | `GRPO_RESUME` | empty, `auto`, or path to `checkpoint-*` |
 | `GRPO_SAVE_STEPS`, `GRPO_SAVE_TOTAL_LIMIT` | Checkpoint frequency and how many checkpoints to retain on disk (see section above) |
+| `GRPO_REWARD_PROFILE` | `llama_cot` (default) or `openr1_tags` — see [GRPO reward profile](#grpo-reward-profile-grpo_reward_profile) |
 | `TRL_SKIP_VLLM_IMPORT` | default `1` — see [`TROUBLESHOOTING_GRPO.md`](TROUBLESHOOTING_GRPO.md) |
 
 ## Related docs

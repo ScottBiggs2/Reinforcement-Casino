@@ -42,3 +42,22 @@ Hugging Face `TrainingArguments` / `GRPOConfig` raises this during `__post_init_
 - **`--precision bf16`**: force bf16 on GPUs where it is supported (e.g. A100, H200).
 
 Implemented in [`src/utils/training_precision.py`](../src/utils/training_precision.py) for [`GRPO_train.py`](../src/full_training/GRPO_train.py) and [`sparse_grpo_bsr.py`](../src/full_training/sparse_grpo_bsr.py).
+
+---
+
+## W&B: `train/rewards/format_reasoning_reward` stuck at zero
+
+### Cause
+
+Rewards in [`src/utils/grpo_rewards.py`](../src/utils/grpo_rewards.py) used to assume `<redacted_thinking>...</redacted_thinking>`. Instruct models often **never** emit those tags, so the reasoning term was always zero.
+
+### Fix
+
+- Use **`--grpo_reward_profile llama_cot`** (default) or `export GRPO_REWARD_PROFILE=llama_cot` so parsing uses **delimiter-based** splitting as well as tags when present.
+- Or use **`openr1_tags`** and rely on the appended prompt instruction (see `OPENR1_TAG_PROMPT_SUFFIX` in `grpo_rewards.py`) so the model is nudged toward redacted blocks.
+
+---
+
+## Eval scores look worse than training suggested
+
+Benchmark tasks may use a **shorter** max generation than your training **`max_completion_length`**. Align lm-eval / task `max_gen_toks` with training when comparing GRPO checkpoints to baselines, or note both caps in reports.

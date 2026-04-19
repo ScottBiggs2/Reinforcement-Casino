@@ -5,7 +5,7 @@
 # and align scripts (see scripts/grpo_openr1_llama31_slurm.sh).
 
 schema_version: 1
-updated: "2026-04-16"
+updated: "2026-04-18"
 
 # --- Shared identifiers ---
 model:
@@ -44,6 +44,15 @@ grpo_open_r1:
   optimizer: adamw_8bit
   precision_default: bf16
   precision_notes: "Use bf16 on H200/Ampere+; use --precision fp16 on GPUs without bf16 (e.g. some V100)."
+
+  reward_profile:
+    default: llama_cot
+    choices:
+      - llama_cot   # Try <redacted_thinking> if present; else split via ####, \\boxed{}, Final Answer:, etc.
+      - openr1_tags # Only redacted blocks; appends OPENR1_TAG_PROMPT_SUFFIX to prompts for math-220k
+    cli_flag: "--grpo_reward_profile"
+    env_var: "GRPO_REWARD_PROFILE"
+    implementation: "src/utils/grpo_rewards.py"
 
   training:
     target_steps_default: 1000

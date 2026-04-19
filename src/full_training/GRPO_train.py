@@ -33,7 +33,11 @@ from src.utils.grpo_checkpoint_utils import (
     maybe_load_wandb_resume_env,
     resolve_resume_checkpoint,
 )
-from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
+from src.utils.grpo_rewards import (
+    OPENR1_TAG_PROMPT_SUFFIX,
+    get_grpo_reward_funcs,
+    normalize_reward_profile,
+)
 from src.utils.model_slug import sanitize_model_name
 from src.utils.scratch_paths import default_grpo_dense_outputs, default_hf_datasets_cache
 from src.utils.training_precision import resolve_grpo_precision
@@ -190,6 +194,13 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Training AMP: auto prefers bf16 when supported, else fp16 (e.g. V100).",
     )
+    p.add_argument(
+        "--grpo_reward_profile",
+        type=str,
+        choices=["openr1_tags", "llama_cot"],
+        default="llama_cot",
+        help="Reward parsing: openr1_tags (redacted blocks only) vs llama_cot (delimiters + tags).",
+    )
     return p.parse_args()
 
 
@@ -222,7 +233,15 @@ def main() -> None:
         os.environ["WANDB_PROJECT"] = wandb_project
     run_display_name = args.run_name or f"{model_sanitized}_{dataset_sanitized}_grpo_{num_steps}steps"
 
-    train_dataset = load_grpo_dataset(dataset_key, subset_size=args.subset_size)
+    reward_prof = normalize_reward_profile(args.grpo_reward_profile)
+    prompt_suffix = OPENR1_TAG_PROMPT_SUFFIX if reward_prof == "openr1_tags" else None
+    train_dataset = load_grpo_dataset(
+        dataset_key,
+        subset_size=args.subset_size,
+        grpo_prompt_suffix=prompt_suffix,
+    )
+    reward_funcs = get_grpo_reward_funcs(args.grpo_reward_profile)
+    print(f"GRPO reward profile={reward_prof} (prompt_suffix={'yes' if prompt_suffix else 'no'})")
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     if tokenizer.pad_token is None:
@@ -291,7 +310,7 @@ def main() -> None:
         model=model,
         args=cfg,
         train_dataset=train_dataset,
-        reward_funcs=GRPO_REWARD_FUNCS,
+        reward_funcs=reward_funcs,
         processing_class=tokenizer,
     )
 
@@ -306,6 +325,7 @@ def main() -> None:
         "beta": args.beta,
         "optim": args.optim,
         "precision": args.precision,
+        "grpo_reward_profile": reward_prof,
         "per_device_train_batch_size": args.per_device_train_batch_size,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "run_dir": run_dir,

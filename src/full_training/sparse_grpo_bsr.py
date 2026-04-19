@@ -36,7 +36,11 @@ from src.utils.grpo_checkpoint_utils import (
     maybe_load_wandb_resume_env,
     resolve_resume_checkpoint,
 )
-from src.utils.grpo_rewards import GRPO_REWARD_FUNCS
+from src.utils.grpo_rewards import (
+    OPENR1_TAG_PROMPT_SUFFIX,
+    get_grpo_reward_funcs,
+    normalize_reward_profile,
+)
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.model_slug import sanitize_model_name
 from src.utils.scratch_paths import default_grpo_sparse_outputs, default_hf_datasets_cache
@@ -123,6 +127,7 @@ def train(
     delta_log_end_step: Optional[int],
     precision: str = "auto",
     lazy_sparse_adamw_state: bool = False,
+    grpo_reward_profile: str = "llama_cot",
 ) -> None:
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
@@ -156,12 +161,21 @@ def train(
     print(f"Dataset: {dataset_key} ({dataset_name})")
     print(f"run_dir={run_dir}\nresume={resume_ckpt!r}")
 
+    reward_prof = normalize_reward_profile(grpo_reward_profile)
+    prompt_suffix = OPENR1_TAG_PROMPT_SUFFIX if reward_prof == "openr1_tags" else None
+    reward_funcs = get_grpo_reward_funcs(grpo_reward_profile)
+    print(f"GRPO reward profile={reward_prof} (prompt_suffix={'yes' if prompt_suffix else 'no'})")
+
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
-    train_dataset = load_grpo_dataset(dataset_key, subset_size=subset_size)
+    train_dataset = load_grpo_dataset(
+        dataset_key,
+        subset_size=subset_size,
+        grpo_prompt_suffix=prompt_suffix,
+    )
 
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -239,6 +253,7 @@ def train(
         "run_dir": run_dir,
         "output_dir": output_dir,
         "resume_from_checkpoint": resume_ckpt,
+        "grpo_reward_profile": reward_prof,
     }
 
     callbacks: List[TrainerCallback] = [
@@ -313,7 +328,7 @@ def train(
         model=model,
         args=cfg,
         train_dataset=train_dataset,
-        reward_funcs=GRPO_REWARD_FUNCS,
+        reward_funcs=reward_funcs,
         processing_class=tokenizer,
         optimizers=(optimizer, None),
         callbacks=callbacks,
@@ -453,6 +468,13 @@ if __name__ == "__main__":
         action="store_true",
         help="SparseAdamW: allocate exp_avg/exp_avg_sq on first step per param (lower peak memory; eager pre-init can OOM small GPUs).",
     )
+    parser.add_argument(
+        "--grpo_reward_profile",
+        type=str,
+        choices=["openr1_tags", "llama_cot"],
+        default="llama_cot",
+        help="Reward parsing: openr1_tags vs llama_cot (delimiter + optional tags).",
+    )
     args = parser.parse_args()
 
     train(
@@ -493,4 +515,5 @@ if __name__ == "__main__":
         delta_log_end_step=args.delta_log_end_step,
         precision=args.precision,
         lazy_sparse_adamw_state=args.sparse_adamw_lazy_state,
+        grpo_reward_profile=args.grpo_reward_profile,
     )
