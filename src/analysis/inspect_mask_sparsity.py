@@ -89,13 +89,15 @@ def print_per_layer_by_depth(results: list):
     """Group per-layer kept% by MLP layer index across all masks — shows if
     some masks over-prune early vs late layers."""
     print("\nPer-layer kept% (rows=mask, cols=layer-index):")
-    # Build {label: {layer_idx: kept}} restricted to down_proj entries
+    # Build {label: {layer_idx: kept}} restricted to down_proj entries.
+    # Mask keys look like "model.layers.N.mlp.down_proj.weight" — match
+    # substring rather than endswith to handle the trailing ".weight".
     by_label = {}
     all_indices = set()
     for r in results:
         idx_map = {}
         for name, frac in r["per_layer"].items():
-            if not name.endswith("down_proj"):
+            if "down_proj" not in name:
                 continue
             idx = _layer_index(name)
             if idx >= 0:
