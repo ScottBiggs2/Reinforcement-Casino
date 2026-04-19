@@ -36,8 +36,8 @@ def run_diagnostic(model_name="google/gemma-2b-it"):
     mask_path = "/tmp/diagnostic_mask.pt"
     # Create 1% sparse masks (very sparse to be sure)
     masks = {
-        "q_proj.weight": (torch.rand(128, 128) > 0.99).float().to(device),
-        "mlp_up.weight": (torch.rand(512, 128) > 0.99).float().to(device)
+        "q_proj.weight": (torch.rand(128, 128) > 0.99).to(device=device, dtype=torch.bool),
+        "mlp_up.weight": (torch.rand(512, 128) > 0.99).to(device=device, dtype=torch.bool),
     }
     torch.save(masks, mask_path)
     print(f"✓ Created diagnostic mask at {mask_path}")

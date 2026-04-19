@@ -66,7 +66,7 @@ def create_masks(aggregated_deltas, top_k_percent):
         
         flat_changes = total_change.flatten()
         if flat_changes.numel() == 0:
-            masks[name] = torch.zeros_like(total_change)
+            masks[name] = torch.zeros_like(total_change, dtype=torch.bool)
             continue
 
         k = int(top_k_percent / 100.0 * flat_changes.numel())
@@ -77,7 +77,7 @@ def create_masks(aggregated_deltas, top_k_percent):
             # Find the k-th largest value. We need to find the (n-k)-th smallest value.
             threshold = torch.kthvalue(flat_changes, flat_changes.numel() - k).values
         
-        masks[name] = (total_change > threshold).float()
+        masks[name] = (total_change > threshold).to(dtype=torch.bool)
         
     return masks
 
@@ -90,7 +90,11 @@ def save_masks(masks, output_file):
     output_dir = os.path.dirname(output_file)
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
-    
+
+    masks = {
+        k: (v if v.dtype == torch.bool else v.ne(0).to(dtype=torch.bool))
+        for k, v in masks.items()
+    }
     torch.save(masks, output_file)
     print(f"Masks saved to {output_file}")
     print(f"Mask keys are in underscore format (e.g., 'model_norm_weight')")

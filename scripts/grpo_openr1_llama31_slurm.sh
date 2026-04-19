@@ -8,6 +8,7 @@
 # Examples:
 #   GRPO_MODE=dense sbatch scripts/grpo_openr1_llama31_slurm.sh
 #   GRPO_MODE=sparse GRPO_MASK=/path/to/mask.pt sbatch scripts/grpo_openr1_llama31_slurm.sh
+# Scratch layout (override any): GRPO_MASK_DIR, GRPO_DENSE_OUTPUT_BASE, GRPO_SPARSE_OUTPUT_BASE — see docs/GRPO_HPC_COPYPASTE.md
 #   GRPO_RESUME=auto GRPO_TARGET_STEPS=5000 sbatch ...   # same run_slug / run_name as prior job
 #
 # Explorer / many sites: the gpu partition requires an explicit --gres; omitting it can yield
@@ -39,6 +40,11 @@ mkdir -p logs
 
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
+# GRPO artifacts (separate from DPO pipeline's rl_casino_masks / rl_casino_train); see docs/GRPO_HPC_COPYPASTE.md
+export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/masks}"
+export GRPO_DENSE_OUTPUT_BASE="${GRPO_DENSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense}"
+export GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/sparse}"
+mkdir -p "${GRPO_MASK_DIR}"
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
 if [ ! -x "$TRAIN_PY" ]; then
@@ -110,6 +116,9 @@ export GRPO_RUN_NAME="${GRPO_RUN_NAME:-}"
 
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "RL_CASINO_SCRATCH_ROOT=${RL_CASINO_SCRATCH_ROOT}"
+echo "GRPO_MASK_DIR=${GRPO_MASK_DIR}"
+echo "GRPO_DENSE_OUTPUT_BASE=${GRPO_DENSE_OUTPUT_BASE}"
+echo "GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE}"
 echo "GRPO_MODE=${GRPO_MODE} GRPO_NGPUS=${GRPO_NGPUS}"
 echo "MODEL=${MODEL} DATASET=${GRPO_DATASET} STEPS=${GRPO_TARGET_STEPS} RESUME=${GRPO_RESUME:-<none>}"
 
@@ -163,6 +172,7 @@ if [ "${GRPO_MODE}" = "dense" ]; then
     --precision "${GRPO_PRECISION}" \
     --optim "${GRPO_OPTIM}" \
     --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
+    --output_base_dir "${GRPO_DENSE_OUTPUT_BASE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
     "${WANDB_ARGS[@]}" \
     "${RUN_SLUG_ARGS[@]}" \
@@ -191,6 +201,7 @@ elif [ "${GRPO_MODE}" = "sparse" ]; then
     --max_completion_length "${GRPO_MAX_COMPLETION_LENGTH}" \
     --precision "${GRPO_PRECISION}" \
     --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
+    --output_base_dir "${GRPO_SPARSE_OUTPUT_BASE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
     "${WANDB_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \

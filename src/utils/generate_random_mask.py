@@ -12,6 +12,7 @@ from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     pooling_metadata,
+    save_masks,
 )
 
 
@@ -81,8 +82,7 @@ def generate_random_mask(
         **pooling_metadata(local_pool=False, min_layer_keep_ratio=min_layer_keep_ratio),
     }
     
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    torch.save({"masks": masks, "metadata": metadata}, output_file)
+    save_masks(masks, output_file, metadata=metadata)
     print(f"✓ Saved random mask to {output_file}")
     
     # Diagnostic Jaccard check if a mask is provided

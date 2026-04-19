@@ -29,6 +29,7 @@ from src.cold_start.utils.activation_hooks import FeatureExtractor
 from src.cold_start.utils.cav_probes import CAVProbeScorer
 from src.cold_start.utils.snip_scorer import SNIPScorer
 from src.utils.mask_manager import SparseMaskManager
+from src.utils.mask_utils import save_masks
 
 # ============================================================
 # CONFIG
@@ -159,7 +160,11 @@ def generate_cold_start_masks(model, tokenizer, device, cal_dataset):
     cav_scorer    = CAVProbeScorer()
     neuron_scores = cav_scorer.score(pos_acts, neg_acts)
     cav_masks     = cav_scorer.scores_to_masks(neuron_scores, model, sparsity_percent=SPARSITY)
-    torch.save({"masks": cav_masks, "metadata": {"method":"cav","sparsity":SPARSITY}}, COLD_MASK_CAV)
+    save_masks(
+        cav_masks,
+        COLD_MASK_CAV,
+        metadata={"method": "cav", "sparsity": SPARSITY},
+    )
     print(f"[CAV] Mask saved → {COLD_MASK_CAV}")
 
     # --- SNIP ---
@@ -169,7 +174,11 @@ def generate_cold_start_masks(model, tokenizer, device, cal_dataset):
     snip_scorer  = SNIPScorer()
     snip_scores  = snip_scorer.score(model, tokenizer, chosen_texts, device, max_length=MAX_LENGTH, batch_size=4)
     snip_masks   = snip_scorer.scores_to_masks(snip_scores, sparsity_percent=SPARSITY)
-    torch.save({"masks": snip_masks, "metadata": {"method":"snip","sparsity":SPARSITY}}, COLD_MASK_SNIP)
+    save_masks(
+        snip_masks,
+        COLD_MASK_SNIP,
+        metadata={"method": "snip", "sparsity": SPARSITY},
+    )
     print(f"[SNIP] Mask saved → {COLD_MASK_SNIP}")
 
     return cav_masks, snip_masks

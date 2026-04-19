@@ -103,7 +103,7 @@ def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_nois
 
         idx = _topk_indices_safe(flat, k=n_keep, largest=True)
         mask_flat = torch.zeros(n, device=device, dtype=torch.bool)
-        mask_flat[idx] = 1.0
+        mask_flat[idx] = True
 
         masks[name] = mask_flat.reshape(score.shape).cpu()
         total_params += n
@@ -650,7 +650,8 @@ def create_mask_from_scores_gpu_efficient(
     for name, score in scores_dict.items():
         if name in masks or score is None:
             continue
-        masks[name] = torch.zeros_like(score, dtype=torch.float32).cpu()
+        # Unscored tensors: all False (same semantics as float zeros; bool on disk).
+        masks[name] = torch.zeros_like(score, dtype=torch.bool).cpu()
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -765,7 +766,7 @@ def load_masks_file(path: str) -> Tuple[Dict[str, torch.Tensor], Optional[Dict[s
     Returns
     -------
     masks : dict
-        Parameter name -> mask tensor (typically 0/1 floats: 1 = include weight).
+        Parameter name -> mask tensor (``torch.bool`` preferred; legacy 0/1 floats still load).
     metadata : dict or None
         Present only for wrapped format.
     uses_wrapped_format : bool

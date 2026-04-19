@@ -32,8 +32,8 @@ def test_mask_isolation():
     mask_path = "/tmp/test_mask.pt"
     # Create 10% sparse masks
     masks = {
-        "q_proj.weight": (torch.rand(32, 32) > 0.9).float().to(device),
-        "mlp_up.weight": (torch.rand(64, 32) > 0.9).float().to(device)
+        "q_proj.weight": (torch.rand(32, 32) > 0.9).to(device=device, dtype=torch.bool),
+        "mlp_up.weight": (torch.rand(64, 32) > 0.9).to(device=device, dtype=torch.bool),
     }
     torch.save(masks, mask_path)
 

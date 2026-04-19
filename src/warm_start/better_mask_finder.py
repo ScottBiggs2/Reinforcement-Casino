@@ -1,8 +1,12 @@
 import torch
 import os
+import sys
 import argparse
 from collections import defaultdict
 import json
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from src.utils.mask_utils import save_masks
 
 def load_deltas_from_log_dir(delta_log_dir, target_step=None):
     """
@@ -278,20 +282,6 @@ def compute_fisher_mask(delta_log_dir, base_state_path, top_k_percent, target_st
     print(f"Actual sparsity: {actual_sparsity:.2f}%")
     
     return masks
-
-
-def save_masks(masks, output_file, metadata=None):
-    """Saves masks with optional metadata."""
-    os.makedirs(os.path.dirname(output_file), exist_ok=True)
-    
-    save_dict = {"masks": masks}
-    if metadata:
-        save_dict["metadata"] = metadata
-    
-    torch.save(save_dict, output_file)
-    print(f"\nMasks saved to: {output_file}")
-    print(f"Total parameters: {sum(m.numel() for m in masks.values())}")
-    print(f"Masked parameters: {sum(m.sum().item() for m in masks.values())}")
 
 
 def verify_masks(masks, delta_log_dir):

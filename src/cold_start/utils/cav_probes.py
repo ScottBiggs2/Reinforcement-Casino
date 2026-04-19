@@ -91,7 +91,7 @@ class CAVProbeScorer:
 
             # Build per-hook keep_1d using the global threshold.
             keep_1d_per_hook = {
-                hook_key: (scores >= threshold).float()
+                hook_key: (scores >= threshold).to(dtype=torch.bool)
                 for hook_key, scores in seen_hooks.items()
             }
         else:
@@ -103,8 +103,8 @@ class CAVProbeScorer:
                 intermediate_size = scores.shape[0]
                 n_keep = max(1, int(keep_frac * intermediate_size))
                 _, top_idx = torch.topk(scores, n_keep)
-                keep_1d = torch.zeros(intermediate_size)
-                keep_1d[top_idx] = 1.0
+                keep_1d = torch.zeros(intermediate_size, dtype=torch.bool)
+                keep_1d[top_idx] = True
                 keep_1d_per_hook[hook_key] = keep_1d
 
         masks = {}
