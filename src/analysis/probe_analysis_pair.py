@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -83,6 +84,13 @@ def _build_pairs(pos_idx: np.ndarray, neg_idx: np.ndarray,
     return np.array(pairs, dtype=np.int64)
 
 
+def _stable_layer_seed(base_seed: int, layer_name: str) -> int:
+    """Deterministic per-layer seed across runs/processes."""
+    digest = hashlib.blake2b(layer_name.encode("utf-8"), digest_size=8).digest()
+    layer_u64 = int.from_bytes(digest, byteorder="little", signed=False)
+    return int((base_seed + layer_u64) % (2**31 - 1))
+
+
 def _train_one_layer(
     layer_name: str,
     X: np.ndarray,
@@ -102,14 +110,23 @@ def _train_one_layer(
     # produce accuracy ≈0.5, which is itself the answer ("no linearly
     # separable direction exists here"). The old 1e-8 threshold was too
     # conservative and masked every high-sparsity warm mask as NaN.
-    if not np.isfinite(X).all() or float(X.std()) < 1e-16:
+    nonfinite_count = int(np.size(X) - np.isfinite(X).sum())
+    x_std = float(np.std(X))
+    if nonfinite_count > 0 or x_std < 1e-16:
+        if nonfinite_count > 0:
+            reason = "nonfinite"
+        else:
+            reason = "near_constant"
         return layer_name, {
             "test": float("nan"), "std": float("nan"),
             "train": float("nan"), "gap": float("nan"),
             "converged": False, "degenerate": True,
+            "degenerate_reason": reason,
+            "feature_std": x_std,
+            "nonfinite_count": nonfinite_count,
         }
 
-    rng = np.random.default_rng(seed + hash(layer_name) % (2**31))
+    rng = np.random.default_rng(_stable_layer_seed(seed, layer_name))
     test_accs, train_accs = [], []
     all_converged = True
 
@@ -157,6 +174,9 @@ def _train_one_layer(
         "gap": float(train_arr.mean() - test_arr.mean()),
         "converged": all_converged,
         "degenerate": False,
+        "degenerate_reason": None,
+        "feature_std": x_std,
+        "nonfinite_count": 0,
     }
 
 

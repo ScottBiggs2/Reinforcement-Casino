@@ -165,6 +165,10 @@ def evaluate_config(model, tokenizer, extractor, all_texts, args,
 
     prop_results = {}
     cfg_t0 = time.time()
+    cfg_notconv = 0
+    cfg_degen = 0
+    cfg_nonfinite = 0
+    cfg_reason_counts = {}
     for prop_name, prop_data in probe_datasets.items():
         slc = property_slices[prop_name]
         labels_arr = np.array([lbl for _, lbl in prop_data["examples"]])
@@ -184,15 +188,44 @@ def evaluate_config(model, tokenizer, extractor, all_texts, args,
         train_vals = [v["train"] for v in layer_accs.values()]
         n_notconv = sum(1 for v in layer_accs.values() if not v["converged"])
         n_degen = sum(1 for v in layer_accs.values() if v["degenerate"])
+        nonfinite_total = int(sum(v.get("nonfinite_count", 0) for v in layer_accs.values()))
+        reasons = {}
+        for v in layer_accs.values():
+            r = v.get("degenerate_reason")
+            if r:
+                reasons[r] = reasons.get(r, 0) + 1
+
+        cfg_notconv += n_notconv
+        cfg_degen += n_degen
+        cfg_nonfinite += nonfinite_total
+        for k, v in reasons.items():
+            cfg_reason_counts[k] = cfg_reason_counts.get(k, 0) + v
+
+        reason_msg = ", ".join(f"{k}:{v}" for k, v in sorted(reasons.items()))
+        if not reason_msg:
+            reason_msg = "none"
         print(
             f"  {prop_name:12s} ({prop_dt:5.1f}s): "
             f"test={np.nanmean(test_vals):.3f}  "
             f"train={np.nanmean(train_vals):.3f}  "
             f"gap={np.nanmean(train_vals) - np.nanmean(test_vals):+.3f}  "
             f"non_conv={n_notconv}/{len(layer_accs)}  "
-            f"degen={n_degen}/{len(layer_accs)}",
+            f"degen={n_degen}/{len(layer_accs)}  "
+            f"nonfinite={nonfinite_total}  "
+            f"reasons={reason_msg}",
             flush=True,
         )
+    cfg_reason_msg = ", ".join(
+        f"{k}:{v}" for k, v in sorted(cfg_reason_counts.items())
+    )
+    if not cfg_reason_msg:
+        cfg_reason_msg = "none"
+    print(
+        f"  [{label_clean}] diagnostics: "
+        f"non_conv={cfg_notconv} degen={cfg_degen} "
+        f"nonfinite={cfg_nonfinite} reasons={cfg_reason_msg}",
+        flush=True,
+    )
     print(f"  [{label_clean}] total probe time: {time.time() - cfg_t0:.1f}s",
           flush=True)
     return prop_results
