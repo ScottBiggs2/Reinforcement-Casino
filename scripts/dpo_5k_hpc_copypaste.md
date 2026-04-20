@@ -22,6 +22,28 @@ Sparse checkpoints live under:
 
 ---
 
+## One-command launcher (masks + queue DPO+GRPO)
+
+If you want a **single Slurm job** that grabs **any GPU briefly** to generate the needed masks and then **queues all downstream DPO + GRPO jobs** with Slurm `afterok` dependencies, use:
+
+```bash
+cd /path/to/rl_casino
+mkdir -p logs
+
+# Required for gated models (e.g. Llama):
+export HF_TOKEN="hf_xxxxxxxx"
+
+sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
+```
+
+Key overrides (optional; export before `sbatch`):
+
+- **DPO run ids**: `DPO_DENSE_RUN_ID`, `DPO_SPARSE_RANDOM_RUN_ID`, `DPO_SPARSE_CAV_RUN_ID`, `DPO_SPARSE_SNIP_RUN_ID`
+- **DPO mask config**: `DPO_DS_KEY` (default `tulu3`), `COLD_DATASET_HF` (default Tulu3 HF id), `DPO_SNIP_OBJECTIVE` (default `dpo_preference`)
+- **DPO hyperparams** (same as below blocks): `NUM_STEPS_DPO`, `DPO_LEARNING_RATE`, `DPO_WARMUP_RATIO`, `DPO_MAX_LENGTH`, `DPO_MAX_PROMPT_LENGTH`, `DPO_PER_DEVICE_TRAIN_BATCH_SIZE`, `DPO_GRADIENT_ACCUMULATION_STEPS`
+
+This doc’s manual blocks below remain useful if you want to submit only DPO runs without GRPO.
+
 ## 0) One-time: generate masks (GPU; can use `srun` or a short `sbatch`)
 
 Set paths (example):

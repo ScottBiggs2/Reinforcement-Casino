@@ -6,6 +6,28 @@ Use these blocks on the cluster **from the repo root** (so `PYTHONPATH` and `scr
 
 ---
 
+## One-command launcher (masks + queue DPO+GRPO)
+
+If you want a **single Slurm job** that uses **one short generic GPU allocation** to compute the mask `.pt` files (both DPO + GRPO) and then **queues all downstream DPO + GRPO training jobs** with Slurm `afterok` dependencies, submit:
+
+```bash
+cd /path/to/rl_casino
+mkdir -p logs
+
+# Required for gated models (e.g. Llama):
+export HF_TOKEN="hf_xxxxxxxx"
+
+sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
+```
+
+Key overrides (optional; export before `sbatch`):
+
+- **GRPO run ids**: `GRPO_DENSE_RUN_SLUG`, `GRPO_SPARSE_RANDOM_RUN_NAME`, `GRPO_SPARSE_CAV_RUN_NAME`, `GRPO_SPARSE_SNIP_RUN_NAME`
+- **GRPO mask config**: `GRPO_DATASET_HF` (default `open-r1/OpenR1-Math-220k`), `GRPO_SNIP_OBJECTIVE` (default `lm`)
+- **GRPO training config**: `GRPO_DATASET` (default `math-220k`), `GRPO_TARGET_STEPS`, `GRPO_MAX_PROMPT_LENGTH`, `GRPO_MAX_COMPLETION_LENGTH`, `GRPO_REWARD_PROFILE`
+
+The manual blocks below remain useful if you want to run only GRPO, or if you want to generate just one mask type and launch a single sparse run.
+
 ## Shared environment (run once per shell session)
 
 ```bash
