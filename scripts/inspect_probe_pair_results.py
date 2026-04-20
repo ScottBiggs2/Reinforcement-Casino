@@ -52,6 +52,7 @@ def summarize_config(cfg_name, cfg_data, top_k):
     all_test = []
     all_train = []
     all_gap = []
+    all_holdout = []
 
     print(f"\n=== {cfg_name} ===")
     for prop in prop_names:
@@ -61,12 +62,14 @@ def summarize_config(cfg_name, cfg_data, top_k):
         prop_test = []
         prop_train = []
         prop_gap = []
+        prop_holdout = []
         worst = []
 
         for layer_name, m in layer_map.items():
             test = m.get("test", float("nan"))
             train = m.get("train", float("nan"))
             gap = m.get("gap", float("nan"))
+            holdout = m.get("holdout_test")
             degen = bool(m.get("degenerate", False))
             conv = bool(m.get("converged", False))
             nonfinite = int(m.get("nonfinite_count", 0))
@@ -88,6 +91,9 @@ def summarize_config(cfg_name, cfg_data, top_k):
             prop_test.append(test)
             prop_train.append(train)
             prop_gap.append(gap)
+            if holdout is not None:
+                prop_holdout.append(holdout)
+                all_holdout.append(holdout)
             all_test.append(test)
             all_train.append(train)
             all_gap.append(gap)
@@ -99,7 +105,8 @@ def summarize_config(cfg_name, cfg_data, top_k):
             f"  {prop:12s} "
             f"test={_safe_mean(prop_test):.3f} "
             f"train={_safe_mean(prop_train):.3f} "
-            f"gap={_safe_mean(prop_gap):+.3f}"
+            f"gap={_safe_mean(prop_gap):+.3f} "
+            f"holdout={_safe_mean(prop_holdout):.3f}"
         )
 
         worst_sorted = sorted(worst, key=lambda x: x[0], reverse=True)
@@ -127,6 +134,7 @@ def summarize_config(cfg_name, cfg_data, top_k):
     print(f"    overall_test_mean={_safe_mean(all_test):.3f}")
     print(f"    overall_train_mean={_safe_mean(all_train):.3f}")
     print(f"    overall_gap_mean={_safe_mean(all_gap):+.3f}")
+    print(f"    overall_holdout_mean={_safe_mean(all_holdout):.3f}")
 
 
 def main():

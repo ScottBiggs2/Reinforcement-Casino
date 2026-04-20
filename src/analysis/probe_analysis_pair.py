@@ -31,6 +31,7 @@ import os
 import sys
 import warnings
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -91,15 +92,36 @@ def _stable_layer_seed(base_seed: int, layer_name: str) -> int:
     return int((base_seed + layer_u64) % (2**31 - 1))
 
 
+def _make_pair_dataset(X: np.ndarray, pairs: np.ndarray) -> tuple:
+    """Create symmetric logistic-regression examples from (pos, neg) pairs."""
+    diff_pos = X[pairs[:, 0]] - X[pairs[:, 1]]
+    X_pair = np.concatenate([diff_pos, -diff_pos], axis=0)
+    y_pair = np.concatenate([np.ones(len(diff_pos)), np.zeros(len(diff_pos))])
+    return X_pair, y_pair
+
+
+def _make_pairwise_pipe(seed: int) -> Pipeline:
+    return Pipeline([
+        ("scaler", StandardScaler(with_mean=False)),
+        ("lr", LogisticRegression(
+            penalty="l2", solver="lbfgs", C=1.0,
+            max_iter=2000, fit_intercept=False, random_state=seed,
+        )),
+    ])
+
+
 def _train_one_layer(
     layer_name: str,
     X: np.ndarray,
-    pos_idx_all: np.ndarray,
-    neg_idx_all: np.ndarray,
+    pos_idx_cv: np.ndarray,
+    neg_idx_cv: np.ndarray,
     pos_splits: list,
     neg_splits: list,
     pairs_per_pos: int,
     seed: int,
+    pos_idx_holdout: Optional[np.ndarray] = None,
+    neg_idx_holdout: Optional[np.ndarray] = None,
+    use_holdout_as_test: bool = False,
 ) -> tuple:
     """Fit all folds for one layer. Returned as (name, result_dict) so
     Parallel(...) output can be converted straight to a dict."""
@@ -120,6 +142,10 @@ def _train_one_layer(
         return layer_name, {
             "test": float("nan"), "std": float("nan"),
             "train": float("nan"), "gap": float("nan"),
+            "cv_test": float("nan"), "cv_std": float("nan"),
+            "cv_train": float("nan"), "cv_gap": float("nan"),
+            "holdout_test": None, "holdout_train": None,
+            "holdout_gap": None, "primary_metric": "degenerate",
             "converged": False, "degenerate": True,
             "degenerate_reason": reason,
             "feature_std": x_std,
@@ -131,30 +157,18 @@ def _train_one_layer(
     all_converged = True
 
     for (p_tr, p_te), (n_tr, n_te) in zip(pos_splits, neg_splits):
-        pos_tr = pos_idx_all[p_tr]
-        pos_te = pos_idx_all[p_te]
-        neg_tr = neg_idx_all[n_tr]
-        neg_te = neg_idx_all[n_te]
+        pos_tr = pos_idx_cv[p_tr]
+        pos_te = pos_idx_cv[p_te]
+        neg_tr = neg_idx_cv[n_tr]
+        neg_te = neg_idx_cv[n_te]
 
         train_pairs = _build_pairs(pos_tr, neg_tr, pairs_per_pos, rng)
         test_pairs = _build_pairs(pos_te, neg_te, pairs_per_pos, rng)
 
         # Symmetric dataset on diffs: (h+ - h-, 1) and (h- - h+, 0).
-        diff_pos = X[train_pairs[:, 0]] - X[train_pairs[:, 1]]
-        X_train = np.concatenate([diff_pos, -diff_pos], axis=0)
-        y_train = np.concatenate([np.ones(len(diff_pos)), np.zeros(len(diff_pos))])
-
-        diff_te = X[test_pairs[:, 0]] - X[test_pairs[:, 1]]
-        X_test = np.concatenate([diff_te, -diff_te], axis=0)
-        y_test = np.concatenate([np.ones(len(diff_te)), np.zeros(len(diff_te))])
-
-        pipe = Pipeline([
-            ("scaler", StandardScaler(with_mean=False)),
-            ("lr", LogisticRegression(
-                penalty="l2", solver="lbfgs", C=1.0,
-                max_iter=2000, fit_intercept=False, random_state=seed,
-            )),
-        ])
+        X_train, y_train = _make_pair_dataset(X, train_pairs)
+        X_test, y_test = _make_pair_dataset(X, test_pairs)
+        pipe = _make_pairwise_pipe(seed)
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ConvergenceWarning)
@@ -167,11 +181,45 @@ def _train_one_layer(
 
     test_arr = np.array(test_accs)
     train_arr = np.array(train_accs)
+    cv_test = float(test_arr.mean())
+    cv_std = float(test_arr.std())
+    cv_train = float(train_arr.mean())
+
+    holdout_test = None
+    holdout_train = None
+    if pos_idx_holdout is not None and neg_idx_holdout is not None:
+        train_pairs = _build_pairs(pos_idx_cv, neg_idx_cv, pairs_per_pos, rng)
+        holdout_pairs = _build_pairs(pos_idx_holdout, neg_idx_holdout, pairs_per_pos, rng)
+        if len(train_pairs) > 0 and len(holdout_pairs) > 0:
+            X_train, y_train = _make_pair_dataset(X, train_pairs)
+            X_holdout, y_holdout = _make_pair_dataset(X, holdout_pairs)
+            pipe = _make_pairwise_pipe(seed)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ConvergenceWarning)
+                pipe.fit(X_train, y_train)
+                if any(issubclass(w.category, ConvergenceWarning) for w in caught):
+                    all_converged = False
+            holdout_train = float(pipe.score(X_train, y_train))
+            holdout_test = float(pipe.score(X_holdout, y_holdout))
+
+    primary_test = holdout_test if (use_holdout_as_test and holdout_test is not None) else cv_test
+    primary_train = holdout_train if (use_holdout_as_test and holdout_train is not None) else cv_train
     return layer_name, {
-        "test": float(test_arr.mean()),
-        "std": float(test_arr.std()),
-        "train": float(train_arr.mean()),
-        "gap": float(train_arr.mean() - test_arr.mean()),
+        "test": primary_test,
+        "std": cv_std,
+        "train": primary_train,
+        "gap": primary_train - primary_test,
+        "cv_test": cv_test,
+        "cv_std": cv_std,
+        "cv_train": cv_train,
+        "cv_gap": cv_train - cv_test,
+        "holdout_test": holdout_test,
+        "holdout_train": holdout_train,
+        "holdout_gap": (
+            None if holdout_test is None or holdout_train is None
+            else holdout_train - holdout_test
+        ),
+        "primary_metric": "holdout" if use_holdout_as_test and holdout_test is not None else "cv",
         "converged": all_converged,
         "degenerate": False,
         "degenerate_reason": None,
@@ -187,6 +235,8 @@ def train_pairwise_probes(
     pairs_per_pos: int = 2,
     seed: int = 42,
     n_jobs: int = 8,
+    holdout_frac: float = 0.0,
+    use_holdout_as_test: bool = False,
 ) -> dict:
     """Train a pairwise ranking probe per layer (parallel over layers).
 
@@ -206,22 +256,44 @@ def train_pairwise_probes(
 
     pos_idx_all = np.where(labels == 1)[0]
     neg_idx_all = np.where(labels == 0)[0]
+    pos_idx_cv = pos_idx_all
+    neg_idx_cv = neg_idx_all
+    pos_idx_holdout = None
+    neg_idx_holdout = None
+
+    if holdout_frac < 0.0 or holdout_frac >= 0.5:
+        raise ValueError(f"holdout_frac must be in [0, 0.5), got {holdout_frac}")
+    if holdout_frac > 0.0:
+        rng = np.random.default_rng(seed)
+        pos_perm = rng.permutation(pos_idx_all)
+        neg_perm = rng.permutation(neg_idx_all)
+        n_pos_holdout = max(1, int(round(len(pos_perm) * holdout_frac)))
+        n_neg_holdout = max(1, int(round(len(neg_perm) * holdout_frac)))
+        pos_idx_holdout = np.sort(pos_perm[:n_pos_holdout])
+        neg_idx_holdout = np.sort(neg_perm[:n_neg_holdout])
+        pos_idx_cv = np.sort(pos_perm[n_pos_holdout:])
+        neg_idx_cv = np.sort(neg_perm[n_neg_holdout:])
+        print(
+            f"[pair] holdout split: cv pos/neg={len(pos_idx_cv)}/{len(neg_idx_cv)}, "
+            f"holdout pos/neg={len(pos_idx_holdout)}/{len(neg_idx_holdout)}, "
+            f"use_holdout_as_test={use_holdout_as_test}"
+        )
 
     # Guard: KFold crashes if n_splits > n_samples. Fall back to min class size.
-    effective_cv = min(cv, len(pos_idx_all), len(neg_idx_all))
+    effective_cv = min(cv, len(pos_idx_cv), len(neg_idx_cv))
     if effective_cv < 2:
         raise ValueError(
             f"Need >=2 samples per class for CV, got "
-            f"pos={len(pos_idx_all)}, neg={len(neg_idx_all)}"
+            f"pos={len(pos_idx_cv)}, neg={len(neg_idx_cv)}"
         )
     if effective_cv < cv:
         print(f"[pair] WARNING: reducing cv from {cv} to {effective_cv} "
-              f"(pos={len(pos_idx_all)}, neg={len(neg_idx_all)})")
+              f"(pos={len(pos_idx_cv)}, neg={len(neg_idx_cv)})")
 
     kf_pos = KFold(n_splits=effective_cv, shuffle=True, random_state=seed)
     kf_neg = KFold(n_splits=effective_cv, shuffle=True, random_state=seed + 1)
-    pos_splits = list(kf_pos.split(pos_idx_all))
-    neg_splits = list(kf_neg.split(neg_idx_all))
+    pos_splits = list(kf_pos.split(pos_idx_cv))
+    neg_splits = list(kf_neg.split(neg_idx_cv))
 
     # Convert activations to numpy once, outside the parallel section, so
     # worker processes receive already-materialized arrays (joblib with
@@ -234,16 +306,18 @@ def train_pairwise_probes(
     if n_jobs == 1 or len(layer_items) <= 1:
         results = [
             _train_one_layer(
-                name, X, pos_idx_all, neg_idx_all,
+                name, X, pos_idx_cv, neg_idx_cv,
                 pos_splits, neg_splits, pairs_per_pos, seed,
+                pos_idx_holdout, neg_idx_holdout, use_holdout_as_test,
             )
             for name, X in layer_items
         ]
     else:
         results = Parallel(n_jobs=n_jobs, prefer="processes")(
             delayed(_train_one_layer)(
-                name, X, pos_idx_all, neg_idx_all,
+                name, X, pos_idx_cv, neg_idx_cv,
                 pos_splits, neg_splits, pairs_per_pos, seed,
+                pos_idx_holdout, neg_idx_holdout, use_holdout_as_test,
             )
             for name, X in layer_items
         )
@@ -275,6 +349,13 @@ def parse_args():
                         "example per fold (default: 2)")
     p.add_argument("--n_jobs", type=int, default=8,
                    help="Parallel workers for per-layer probe training (default: 8)")
+    p.add_argument("--holdout_frac", type=float, default=0.0,
+                   help="Stratified per-class fraction reserved as untouched "
+                        "holdout before CV (default: 0.0 = CV only)")
+    p.add_argument("--use_holdout_as_test", action="store_true",
+                   help="When --holdout_frac > 0, make the JSON/plots' primary "
+                        "'test' metric use holdout accuracy instead of CV mean. "
+                        "CV diagnostics are still saved as cv_* fields.")
     p.add_argument("--samples_per_class", type=int, default=None)
     p.add_argument("--dataset_cache_dir", default=None)
     p.add_argument("--probe_cache", default=None)
@@ -417,6 +498,8 @@ def main():
                 cv=args.cv_folds,
                 pairs_per_pos=args.pairs_per_pos,
                 n_jobs=args.n_jobs,
+                holdout_frac=args.holdout_frac,
+                use_holdout_as_test=args.use_holdout_as_test,
             )
             prop_results[prop_name] = layer_accs
 

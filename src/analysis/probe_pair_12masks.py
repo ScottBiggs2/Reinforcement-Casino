@@ -91,6 +91,13 @@ def parse_args():
     p.add_argument("--pairs_per_pos", type=int, default=2)
     p.add_argument("--n_jobs", type=int, default=8,
                    help="Parallel workers for per-layer probe training (default: 8)")
+    p.add_argument("--holdout_frac", type=float, default=0.0,
+                   help="Stratified per-class fraction reserved as untouched "
+                        "holdout before CV (default: 0.0 = CV only)")
+    p.add_argument("--use_holdout_as_test", action="store_true",
+                   help="When --holdout_frac > 0, use holdout accuracy as the "
+                        "primary 'test' value used by summaries and plots. "
+                        "CV diagnostics remain in cv_* fields.")
     p.add_argument("--samples_per_class", type=int, default=None)
     p.add_argument("--dataset_cache_dir", default=None)
     p.add_argument("--probe_cache", default=None)
@@ -180,12 +187,18 @@ def evaluate_config(model, tokenizer, extractor, all_texts, args,
             cv=args.cv_folds,
             pairs_per_pos=args.pairs_per_pos,
             n_jobs=args.n_jobs,
+            holdout_frac=args.holdout_frac,
+            use_holdout_as_test=args.use_holdout_as_test,
         )
         prop_results[prop_name] = layer_accs
         prop_dt = time.time() - prop_t0
 
         test_vals = [v["test"] for v in layer_accs.values()]
         train_vals = [v["train"] for v in layer_accs.values()]
+        holdout_vals = [
+            v.get("holdout_test") for v in layer_accs.values()
+            if v.get("holdout_test") is not None
+        ]
         n_notconv = sum(1 for v in layer_accs.values() if not v["converged"])
         n_degen = sum(1 for v in layer_accs.values() if v["degenerate"])
         nonfinite_total = int(sum(v.get("nonfinite_count", 0) for v in layer_accs.values()))
@@ -204,15 +217,22 @@ def evaluate_config(model, tokenizer, extractor, all_texts, args,
         reason_msg = ", ".join(f"{k}:{v}" for k, v in sorted(reasons.items()))
         if not reason_msg:
             reason_msg = "none"
-        print(
+        metric_msg = (
             f"  {prop_name:12s} ({prop_dt:5.1f}s): "
             f"test={np.nanmean(test_vals):.3f}  "
             f"train={np.nanmean(train_vals):.3f}  "
             f"gap={np.nanmean(train_vals) - np.nanmean(test_vals):+.3f}  "
+        )
+        if holdout_vals:
+            metric_msg += f"holdout={np.nanmean(holdout_vals):.3f}  "
+        metric_msg += (
             f"non_conv={n_notconv}/{len(layer_accs)}  "
             f"degen={n_degen}/{len(layer_accs)}  "
             f"nonfinite={nonfinite_total}  "
-            f"reasons={reason_msg}",
+            f"reasons={reason_msg}"
+        )
+        print(
+            metric_msg,
             flush=True,
         )
     cfg_reason_msg = ", ".join(

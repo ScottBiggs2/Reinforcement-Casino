@@ -68,6 +68,8 @@ MAX_LENGTH="${MAX_LENGTH:-256}"
 CV_FOLDS="${CV_FOLDS:-5}"
 PAIRS_PER_POS="${PAIRS_PER_POS:-2}"
 N_JOBS="${N_JOBS:-8}"
+HOLDOUT_FRAC="${HOLDOUT_FRAC:-0}"
+USE_HOLDOUT_AS_TEST="${USE_HOLDOUT_AS_TEST:-0}"
 MASKS_JSON="${MASKS_JSON:-}"           # optional subset of masks
 SKIP_BASELINE="${SKIP_BASELINE:-0}"    # 1 = skip unmasked baseline
 
@@ -78,12 +80,20 @@ fi
 if [ "$SKIP_BASELINE" = "1" ]; then
     EXTRA_ARGS="$EXTRA_ARGS --skip_baseline"
 fi
+if [ "$HOLDOUT_FRAC" != "0" ] && [ "$HOLDOUT_FRAC" != "0.0" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --holdout_frac $HOLDOUT_FRAC"
+fi
+if [ "$USE_HOLDOUT_AS_TEST" = "1" ]; then
+    EXTRA_ARGS="$EXTRA_ARGS --use_holdout_as_test"
+fi
 
 echo "[config] MODEL=$MODEL"
 echo "[config] OUTPUT_DIR=$OUTPUT_DIR"
 echo "[config] LAYER_STRIDE=$LAYER_STRIDE"
 echo "[config] BATCH_SIZE=$BATCH_SIZE"
 echo "[config] PAIRS_PER_POS=$PAIRS_PER_POS"
+echo "[config] HOLDOUT_FRAC=$HOLDOUT_FRAC"
+echo "[config] USE_HOLDOUT_AS_TEST=$USE_HOLDOUT_AS_TEST"
 echo "[config] MASKS_JSON=${MASKS_JSON:-<default-12>}"
 echo "[config] SKIP_BASELINE=$SKIP_BASELINE"
 
