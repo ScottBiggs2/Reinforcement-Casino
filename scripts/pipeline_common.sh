@@ -91,6 +91,10 @@ EVAL_FORCE_HF_BACKEND="${EVAL_FORCE_HF_BACKEND:-0}"
 COLD_FISHER_N_CALIB="${COLD_FISHER_N_CALIB:-256}"
 COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-256}"
 COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-16}"
+# Optional cold SNIP (GPU): off by default — set PIPELINE_COLD_SNIP=1 to generate masks via inference_mask_finder.py
+PIPELINE_COLD_SNIP="${PIPELINE_COLD_SNIP:-0}"
+# lm | dpo_preference — must match filename suffix for run_mask_comparisons anchor (cold_snip_*_${COLD_SNIP_OBJECTIVE}.pt)
+COLD_SNIP_OBJECTIVE="${COLD_SNIP_OBJECTIVE:-lm}"
 
 # Mask comparison stage: set RUN_MASK_CKA=1 for GPU-heavy activation CKA (add time budget)
 RUN_MASK_CKA="${RUN_MASK_CKA:-0}"
@@ -229,6 +233,7 @@ print(get_dataset_config(os.environ['PIPELINE_DS_KEY'])['hf_id'])
 ")
   fi
   echo "Cold-start / CKA calibration dataset (HF): ${COLD_DATASET_HF}"
+  echo "Optional cold SNIP (mask stage): PIPELINE_COLD_SNIP=${PIPELINE_COLD_SNIP:-0} COLD_SNIP_OBJECTIVE=${COLD_SNIP_OBJECTIVE:-lm}"
 }
 
 # Submit the next pipeline stage after this job finishes successfully (Slurm dependency chain).
@@ -467,6 +472,25 @@ run_masks() {
           --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
           --output_file "${mask_base}/cold_cav_${model_sanitized}_sparsity${sparsity}pct.pt"
     done
+
+    if [ "${PIPELINE_COLD_SNIP:-0}" = "1" ]; then
+      echo "Cold-start SNIP masks (inference_mask_finder; objective=${COLD_SNIP_OBJECTIVE})"
+      for sparsity in "${SPARSITY_LIST[@]}"; do
+        run_one_mask_step "cold SNIP sparsity=${sparsity} objective=${COLD_SNIP_OBJECTIVE}" \
+          "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
+            --model_name "$MODEL" \
+            --method snip \
+            --mode dpo \
+            --dataset_name "$COLD_DATASET_HF" \
+            --snip-objective "${COLD_SNIP_OBJECTIVE}" \
+            --n_samples "${COLD_CAV_SUBSET}" \
+            --sparsity "$sparsity" \
+            --batch_size 4 \
+            --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
+            --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
+            --output "${mask_base}/cold_snip_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_${COLD_SNIP_OBJECTIVE}.pt"
+      done
+    fi
   fi
 
   if [ "$phase" = "all" ] || [ "$phase" = "post" ]; then
@@ -640,6 +664,13 @@ run_mask_comparisons() {
     run_jaccard_cka_export_pair "sp${sp_safe}_wmom_vs_cf" "$warm_mom" "$cold_fish"
     run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_wmom" "$random_mask" "$warm_mom"
     run_jaccard_cka_export_pair "sp${sp_safe}_rand_vs_cc" "$random_mask" "$cold_cav"
+
+    # Optional cold SNIP (same sparsity / objective as PIPELINE_COLD_SNIP + COLD_SNIP_OBJECTIVE)
+    local cold_snip
+    cold_snip="${mask_dir}/cold_snip_${model_sanitized}_${ds_sanitized}_sparsity${sparsity}pct_${COLD_SNIP_OBJECTIVE:-lm}.pt"
+    if [ -f "$cold_snip" ]; then
+      run_jaccard_cka_export_pair "sp${sp_safe}_wm_vs_csnip" "$warm_mag" "$cold_snip"
+    fi
 
     # Complement (*_inverse.pt) masks: overlap sanity (primary vs its inverse) + cross-method pairs
     if [ "${PIPELINE_GENERATE_INVERSE_MASKS:-1}" = "1" ]; then

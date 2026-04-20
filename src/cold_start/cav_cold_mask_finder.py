@@ -21,7 +21,12 @@ from src.utils.mask_utils import (
     save_masks
 )
 from src.cold_start.utils.cav_probes import compute_cav_scores, CAVProbeScorer
-from src.cold_start.utils.snip_scorer import compute_snip_scores, dpo_style_preference_loss
+from src.cold_start.utils.snip_scorer import (
+    SNIP_OBJECTIVE_DPO_PREFERENCE,
+    build_snip_masks_from_scores,
+    compute_snip_scores,
+    dpo_style_preference_loss,
+)
 
 
 def choose_device(force_cpu: bool) -> str:
@@ -824,18 +829,29 @@ def main(args):
             device=device,
             num_batches=args.num_batches,
             mlp_only=args.mlp_only,
+            preference_beta=args.snip_preference_beta,
         )
     else:
         raise ValueError(f"Unknown method: {args.method}")
 
-    masks = create_mask_from_scores_gpu_efficient(
-        score_dict,
-        sparsity_percent=args.sparsity_percent,
-        device=device,
-        add_tie_break_noise=True,
-        min_layer_keep_ratio=args.min_layer_keep_ratio,
-        local_pool=args.local_pool,
-    )
+    if args.method == "snip":
+        masks = build_snip_masks_from_scores(
+            score_dict,
+            sparsity_percent=args.sparsity_percent,
+            device=device,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+            add_tie_break_noise=True,
+        )
+    else:
+        masks = create_mask_from_scores_gpu_efficient(
+            score_dict,
+            sparsity_percent=args.sparsity_percent,
+            device=device,
+            add_tie_break_noise=True,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+            local_pool=args.local_pool,
+        )
 
     if args.method == "cav":
         mask_sparsity_summary = summarize_mask_sparsity(masks)
@@ -865,6 +881,10 @@ def main(args):
             min_layer_keep_ratio=args.min_layer_keep_ratio,
         ),
     }
+    if args.method == "snip":
+        metadata["snip_objective"] = SNIP_OBJECTIVE_DPO_PREFERENCE
+        metadata["preference_beta"] = float(args.snip_preference_beta)
+
     if args.method == "cav":
         metadata["probe_epochs"] = args.probe_epochs
         metadata["probe_lr"] = args.probe_lr
@@ -888,7 +908,15 @@ def main(args):
         }
 
     model_sanitized = sanitize_model_name(args.model_name)
-    output_file = args.output_file or f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity_percent}pct.pt"
+    if args.output_file:
+        output_file = args.output_file
+    elif args.method == "snip":
+        output_file = (
+            f"masks/cold_{args.method}_{model_sanitized}_"
+            f"sparsity{args.sparsity_percent}pct_{SNIP_OBJECTIVE_DPO_PREFERENCE}.pt"
+        )
+    else:
+        output_file = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity_percent}pct.pt"
     save_masks(masks, output_file, metadata)
     
     if jaccard_results:
@@ -958,6 +986,12 @@ if __name__ == "__main__":
             "With --local_pool: each weight matrix independently keeps its top keep_frac elements, "
             "giving uniform sparsity per layer."
         ),
+    )
+    parser.add_argument(
+        "--snip-preference-beta",
+        type=float,
+        default=1.0,
+        help="[SNIP only] Beta for dpo_style_preference_loss (same as inference_mask_finder).",
     )
     parser.add_argument("--weight_abs", action="store_true",
                         help="Weight neuron scores by parameter magnitudes when mapping to weight scores. "

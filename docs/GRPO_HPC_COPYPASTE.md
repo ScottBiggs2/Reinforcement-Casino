@@ -90,14 +90,9 @@ python src/utils/generate_random_mask.py \
   --sparsity_percent 97.5 \
   --seed "${RANDOM_SEED}" \
   --output_file "${MASK_RANDOM}"
-
-python src/utils/generate_random_mask.py \
-  --model_name "${MODEL}" \
-  --sparsity_percent 97.5 \
-  --output_file "${MASK_RANDOM}"
 ```
 
-Do **not** pass `--mlp_only` (default: full linear coverage where the script targets weights).
+Do **not** pass `--mlp_only` (default: full linear coverage where the script targets weights). Large models use the chunked global mask selector; allow enough GPU RAM and wall time.
 
 **Step B — sparse GRPO**
 
@@ -105,7 +100,7 @@ Do **not** pass `--mlp_only` (default: full linear coverage where the script tar
 export GRPO_MODE=sparse
 export GRPO_MASK="${MASK_RANDOM}"
 export GRPO_RUN_NAME="${GRPO_RUN_NAME:-grpo_sparse_random_sp975_${MODEL_SLUG}_v1}"
-# Omit GRPO_MLP_ONLY — sparse_grpo_bsr defaults to full model where masks exist (do not pass --mlp_only)
+# Omit --mlp_only on the trainer (default: full model where mask tensors exist)
 
 sbatch scripts/grpo_openr1_llama31_slurm.sh
 ```
@@ -114,7 +109,7 @@ sbatch scripts/grpo_openr1_llama31_slurm.sh
 
 ## Deliverable 3 — CAV (GRPO) 97.5% mask + sparse GRPO (v1)
 
-CAV calibration uses **prompt + solution** vs **prompt-only** negatives (see plan: no DPO-style rejections). MLP-only mask broadcast in this repo; attention stays dense unless you extend the method later.
+CAV calibration uses **prompt + solution** vs **prompt-only** negatives. In this repo, CAV masks are **MLP-focused** (`scores_to_masks` broadcasts from down-proj neuron scores); attention stays dense unless you extend the method.
 
 **Step A — CAV mask (GPU)**
 
@@ -131,6 +126,7 @@ python src/cold_start/inference_mask_finder.py \
   --sparsity 97.5 \
   --max_length "${GRPO_MAX_PROMPT_LENGTH:-512}" \
   --batch_size 4 \
+  --seed 42 \
   --output "${MASK_CAV}"
 ```
 
@@ -146,8 +142,86 @@ sbatch scripts/grpo_openr1_llama31_slurm.sh
 
 ---
 
-## Appendix — deferred (SNIP / CAV+SNIP fusion)
+## Deliverable 4 — SNIP (GRPO) 97.5% mask + sparse GRPO
 
-Not required for v1. The main DPO pipeline and `gen_grpo_masks_and_plot.sh` produce **separate** SNIP and CAV masks and **compare** them (metrics/plots), not a single fused training mask. If you add a fusion script later, save the result under `GRPO_MASK_DIR` and point `GRPO_MASK` at it.
+SNIP ([Lee et al., 2019](https://arxiv.org/abs/1810.02340)) uses connection saliency \(|w \odot \nabla\mathcal{L}|\); this repo implements \(|w| \cdot |\nabla|\) on 2D weight matrices in [`SNIPScorer.score`](src/cold_start/utils/snip_scorer.py) and [`compute_snip_scores`](src/cold_start/utils/snip_scorer.py). Orchestration, masking, and metadata live in [`inference_mask_finder.py`](src/cold_start/inference_mask_finder.py): it loads the model, loads GRPO calibration via [`load_calibration_samples_grpo`](src/cold_start/inference_mask_finder.py) (prompt+solution vs prompt-only), then dispatches SNIP.
+
+**Saved format:** `save_masks` writes `torch.bool` masks under `{"masks": {...}, "metadata": {...}}` (see [`src/utils/mask_utils.py`](src/utils/mask_utils.py)).
+
+### Objectives (`--snip-objective`)
+
+| Value | Meaning | GRPO calibration |
+|--------|---------|-------------------|
+| `lm` (default) | One backward on **mean causal LM loss** over sequences in `chosen_texts`. | `chosen_texts` = prompt+solution; **prompt-only rows are not used** for the loss (same as standard SNIP on “chosen” completion text). |
+| `dpo_preference` | Gradients of a **pairwise preference** loss (`dpo_style_preference_loss` in `snip_scorer.py`) with separate forward passes on chosen vs rejected sequences. | Pairs **prompt+solution** vs **prompt-only** (aligned lists from the same GRPO loader). Uses [`build_preference_snip_dataloader`](src/cold_start/inference_mask_finder.py) for GRPO. Gradients accumulate over up to `--snip-num-batches` batches. |
+
+**Coverage:** For `--method snip`, the inference entrypoint scores **all** 2D `nn.Linear` weights with non-null gradients (`mlp_only=False` in code paths). This is **broader** than CAV’s MLP-broadcast masks in Deliverable 3.
+
+**Optional SNIP flags:** `--local-pool`, `--min-layer-keep-ratio` (default matches other cold masks), `--snip-preference-beta` (only for `dpo_preference`), `--snip-num-batches` (only for `dpo_preference`, default 32).
+
+### Step A — SNIP mask (`lm` — recommended default)
+
+```bash
+export MODEL_SLUG="${MODEL_SLUG:-llama31_8b_instruct}"
+export MASK_SNIP_LM="${GRPO_MASK_DIR}/grpo_snip_lm_sp975_${MODEL_SLUG}_math220k.pt"
+
+python src/cold_start/inference_mask_finder.py \
+  --model_name "${MODEL}" \
+  --mode grpo \
+  --method snip \
+  --snip-objective lm \
+  --dataset_name "open-r1/OpenR1-Math-220k" \
+  --n_samples 64 \
+  --sparsity 97.5 \
+  --max_length "${GRPO_MAX_PROMPT_LENGTH:-512}" \
+  --batch_size 4 \
+  --seed 42 \
+  --output "${MASK_SNIP_LM}"
+```
+
+### Step A — SNIP mask (`dpo_preference` — preference-gradient saliency)
+
+```bash
+export MODEL_SLUG="${MODEL_SLUG:-llama31_8b_instruct}"
+export MASK_SNIP_PREF="${GRPO_MASK_DIR}/grpo_snip_dpo_preference_sp975_${MODEL_SLUG}_math220k.pt"
+
+python src/cold_start/inference_mask_finder.py \
+  --model_name "${MODEL}" \
+  --mode grpo \
+  --method snip \
+  --snip-objective dpo_preference \
+  --dataset_name "open-r1/OpenR1-Math-220k" \
+  --n_samples 64 \
+  --sparsity 97.5 \
+  --max_length "${GRPO_MAX_PROMPT_LENGTH:-512}" \
+  --batch_size 4 \
+  --seed 42 \
+  --snip-num-batches 32 \
+  --snip-preference-beta 1.0 \
+  --output "${MASK_SNIP_PREF}"
+```
+
+### Step B — sparse GRPO (pick one mask path)
+
+```bash
+export GRPO_MODE=sparse
+# Example: LM SNIP mask
+export GRPO_MASK="${MASK_SNIP_LM}"
+export GRPO_RUN_NAME="${GRPO_RUN_NAME:-grpo_sparse_snip_lm_sp975_${MODEL_SLUG}_v1}"
+
+sbatch scripts/grpo_openr1_llama31_slurm.sh
+```
+
+For a run using `MASK_SNIP_PREF`, set `GRPO_MASK` and e.g. `GRPO_RUN_NAME=grpo_sparse_snip_pref_sp975_${MODEL_SLUG}_v1`.
+
+### Optional: batch SNIP + plots (GRPO vs DPO comparison)
+
+[`scripts/gen_grpo_masks_and_plot.sh`](../scripts/gen_grpo_masks_and_plot.sh) runs SNIP (and CAV/Fisher) for both modes and compares masks. Set `MASK_DIR`, `MODEL`, `N_SAMPLES`, `SPARSITY`, and `COLD_SNIP_OBJECTIVE="${COLD_SNIP_OBJECTIVE:-lm}"` before submitting. Output filenames there are fixed (`snip_grpo.pt`, etc.); for the scratch layout in this doc, prefer explicit `--output` paths as above.
+
+---
+
+## Appendix — CAV+SNIP fusion (optional)
+
+The main DPO pipeline and `gen_grpo_masks_and_plot.sh` produce **separate** SNIP and CAV masks and **compare** them (metrics/plots), not a single fused training mask. If you add a fusion script later, save the result under `GRPO_MASK_DIR` and point `GRPO_MASK` at it.
 
 See the project plan document *GRPO HPC launch deliverables* for paper notes, MLP coverage caveats, and optional fusion rules.

@@ -17,23 +17,34 @@ import math
 import os
 import random
 import sys
+from functools import partial
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 import torch
 from datasets import load_dataset
+from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
     save_masks,
 )
 from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_input_device
 from src.cold_start.utils.cav_probes import CAVProbeScorer
-from src.cold_start.utils.snip_scorer import SNIPScorer
+from src.cold_start.utils.snip_scorer import (
+    SNIP_OBJECTIVE_DPO_PREFERENCE,
+    SNIP_OBJECTIVE_LM,
+    SNIPScorer,
+    build_snip_masks_from_scores,
+    compute_snip_scores,
+    snip_save_metadata,
+)
+from src.utils.data_utils import concatenated_dpo_collator_fn, load_dpo_dataset
 from src.utils.dpo_text_normalize import normalize_dpo_record
 from src.utils.dataset_registry import resolve_hf_dataset_id
 
@@ -149,6 +160,61 @@ def load_calibration_samples(n_samples=64, seed=42, mode="dpo", dataset_name=Non
         return load_calibration_samples_grpo(ds, n_samples=n_samples, seed=seed)
     else:
         raise ValueError(f"Unknown mode '{mode}'. Choose 'dpo' or 'grpo'.")
+
+
+class _GrpoTextPairDataset(Dataset):
+    """Aligned (prompt+solution, prompt-only) strings for preference-gradient SNIP."""
+
+    def __init__(self, chosen_texts: List[str], rejected_texts: List[str]):
+        if len(chosen_texts) != len(rejected_texts):
+            raise ValueError("chosen/rejected lists must have the same length for preference SNIP.")
+        self._chosen = chosen_texts
+        self._rejected = rejected_texts
+
+    def __len__(self) -> int:
+        return len(self._chosen)
+
+    def __getitem__(self, idx: int):
+        return self._chosen[idx], self._rejected[idx]
+
+
+def _collate_grpo_preference_pairs(batch, tokenizer, max_length: int) -> Dict[str, torch.Tensor]:
+    chosen_texts = [b[0] for b in batch]
+    rejected_texts = [b[1] for b in batch]
+    enc_c = tokenizer(
+        chosen_texts,
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt",
+    )
+    enc_r = tokenizer(
+        rejected_texts,
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt",
+    )
+    return {
+        "chosen_input_ids": enc_c["input_ids"],
+        "chosen_attention_mask": enc_c["attention_mask"],
+        "rejected_input_ids": enc_r["input_ids"],
+        "rejected_attention_mask": enc_r["attention_mask"],
+    }
+
+
+def build_preference_snip_dataloader(args, tokenizer, chosen_texts, rejected_texts):
+    """DPO: HF dataset + concatenated collator (matches cav_cold_mask_finder). GRPO: paired tokenization."""
+    batch_size = args.batch_size
+    if args.mode == "dpo":
+        ds_key = args.dataset_name or DPO_DATASET_NAME
+        hf_id = resolve_hf_dataset_id(ds_key)
+        ds = load_dpo_dataset(hf_id, subset_size=args.n_samples, split="train")
+        collator = partial(concatenated_dpo_collator_fn, tokenizer=tokenizer)
+        return DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
+    pair_ds = _GrpoTextPairDataset(chosen_texts, rejected_texts)
+    collate_fn = partial(_collate_grpo_preference_pairs, tokenizer=tokenizer, max_length=args.max_length)
+    return DataLoader(pair_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -427,7 +493,10 @@ def main(args):
 
     device = "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     print(f"\n{'='*60}")
-    print(f"Cold-Start Mask Finder  [method={args.method}  mode={args.mode}]")
+    _hdr = f"Cold-Start Mask Finder  [method={args.method}  mode={args.mode}]"
+    if args.method == "snip":
+        _hdr += f"  [snip_objective={args.snip_objective}]"
+    print(_hdr)
     print(f"{'='*60}")
     print(f"  Model      : {args.model_name}")
     print(f"  Mode       : {args.mode}")
@@ -534,24 +603,52 @@ def main(args):
             score_variance_summary = summarize_layer_score_distribution(score_dict_for_diag)
 
     elif args.method == "snip":
-        print("[SNIP] Computing gradient saliency scores...")
-        scorer = SNIPScorer()
-        snip_scores = scorer.score(
-            model, tokenizer, chosen_texts, input_device,
-            max_length=args.max_length, batch_size=args.batch_size,
+        train_device = str(input_device)
+        if args.snip_objective == SNIP_OBJECTIVE_LM:
+            print("[SNIP] Objective=lm (standard SNIP: CE loss on chosen sequences)")
+            scorer = SNIPScorer()
+            snip_scores = scorer.score(
+                model, tokenizer, chosen_texts, train_device,
+                max_length=args.max_length, batch_size=args.batch_size,
+            )
+        else:
+            print("[SNIP] Objective=dpo_preference (gradient of pairwise preference loss)")
+            if args.mode == "grpo":
+                print("  Using prompt+solution vs prompt-only pairs (aligned with GRPO calibration).")
+            pref_loader = build_preference_snip_dataloader(args, tokenizer, chosen_texts, rejected_texts)
+            snip_scores = compute_snip_scores(
+                model,
+                pref_loader,
+                device=train_device,
+                num_batches=args.snip_num_batches,
+                mlp_only=False,
+                preference_beta=args.snip_preference_beta,
+            )
+        masks = build_snip_masks_from_scores(
+            snip_scores,
+            sparsity_percent=args.sparsity,
+            device="cpu",
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+            add_tie_break_noise=True,
         )
-        masks = scorer.scores_to_masks(
-            snip_scores, sparsity_percent=args.sparsity, local_pool=args.local_pool,
-        )
-        metadata = {
-            "method": "snip",
+        meta_extra = {
             "model_name": args.model_name,
             "mode": args.mode,
             "n_samples": args.n_samples,
-            "sparsity_percent": args.sparsity,
             "dataset": effective_dataset,
             "seed": args.seed,
         }
+        if args.snip_objective == SNIP_OBJECTIVE_DPO_PREFERENCE:
+            meta_extra["snip_num_batches"] = args.snip_num_batches
+        metadata = snip_save_metadata(
+            snip_objective=args.snip_objective,
+            sparsity_percent=args.sparsity,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+            preference_beta=args.snip_preference_beta if args.snip_objective == SNIP_OBJECTIVE_DPO_PREFERENCE else None,
+            extra=meta_extra,
+        )
 
     elif args.method == "activation":
         extractor = FeatureExtractor()
@@ -623,7 +720,13 @@ def main(args):
     output_path = args.output
     if output_path is None:
         model_sanitized = sanitize_model_name(args.model_name)
-        output_path = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity}pct.pt"
+        if args.method == "snip":
+            output_path = (
+                f"masks/cold_{args.method}_{model_sanitized}_"
+                f"sparsity{args.sparsity}pct_{args.snip_objective}.pt"
+            )
+        else:
+            output_path = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity}pct.pt"
 
     save_masks(masks, output_path, metadata)
 
@@ -704,6 +807,36 @@ if __name__ == "__main__":
     # ── Fisher-specific ───────────────────────────────────────
     parser.add_argument("--mini_batch_size", type=int, default=4,
                         help="[Fisher only] Mini-batch size for gradient smoothing.")
+
+    # ── SNIP-specific ───────────────────────────────────────────
+    parser.add_argument(
+        "--snip-objective",
+        dest="snip_objective",
+        choices=[SNIP_OBJECTIVE_LM, SNIP_OBJECTIVE_DPO_PREFERENCE],
+        default=SNIP_OBJECTIVE_LM,
+        help=(
+            "[SNIP] lm: standard SNIP (CE on chosen). "
+            "dpo_preference: gradient of pairwise preference loss (DPO-style batches)."
+        ),
+    )
+    parser.add_argument(
+        "--min-layer-keep-ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help="[SNIP] Per-tensor keep floor for global pooling (see mask_utils.pooling_metadata).",
+    )
+    parser.add_argument(
+        "--snip-preference-beta",
+        type=float,
+        default=1.0,
+        help="[SNIP dpo_preference] Beta in dpo_style_preference_loss.",
+    )
+    parser.add_argument(
+        "--snip-num-batches",
+        type=int,
+        default=32,
+        help="[SNIP dpo_preference] Maximum number of dataloader batches to accumulate.",
+    )
 
     args = parser.parse_args()
     main(args)

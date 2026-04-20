@@ -8,6 +8,12 @@
 # Examples:
 #   GRPO_MODE=dense sbatch scripts/grpo_openr1_llama31_slurm.sh
 #   GRPO_MODE=sparse GRPO_MASK=/path/to/mask.pt sbatch scripts/grpo_openr1_llama31_slurm.sh
+#
+# Sparse + SNIP mask (after generating a .pt with src/cold_start/inference_mask_finder.py --method snip):
+#   export GRPO_MASK="${GRPO_MASK_DIR}/snip_grpo.pt"
+#   export GRPO_MODE=sparse
+#   sbatch scripts/grpo_openr1_llama31_slurm.sh
+# See docs/GRPO_HPC_COPYPASTE.md for --snip-objective lm vs dpo_preference and full paths.
 # Scratch layout (override any): GRPO_MASK_DIR, GRPO_DENSE_OUTPUT_BASE, GRPO_SPARSE_OUTPUT_BASE — see docs/GRPO_HPC_COPYPASTE.md
 #   GRPO_RESUME=auto GRPO_TARGET_STEPS=5000 sbatch ...   # same run_slug / run_name as prior job
 #

@@ -1,9 +1,68 @@
-"""Score MLP weights with one backward pass of gradient saliency."""
+"""Score MLP weights with one backward pass of gradient saliency (SNIP)."""
+
+from __future__ import annotations
+
+from typing import Dict, Optional
 
 import torch
 import torch.nn.functional as F
 
-from src.utils.mask_utils import create_mask_from_scores_gpu_efficient
+from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
+    create_mask_from_scores_gpu_efficient,
+    pooling_metadata,
+)
+
+# CLI / metadata string values (match inference_mask_finder --snip-objective)
+SNIP_OBJECTIVE_LM = "lm"
+SNIP_OBJECTIVE_DPO_PREFERENCE = "dpo_preference"
+
+
+def build_snip_masks_from_scores(
+    scores: Dict[str, torch.Tensor],
+    *,
+    sparsity_percent: float,
+    device: str = "cpu",
+    local_pool: bool = False,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+    add_tie_break_noise: bool = True,
+) -> Dict[str, torch.Tensor]:
+    """Top-k binary masks from SNIP saliency scores; same pooling rules as other cold-start masks."""
+    return create_mask_from_scores_gpu_efficient(
+        scores,
+        sparsity_percent=sparsity_percent,
+        device=device,
+        add_tie_break_noise=add_tie_break_noise,
+        tie_break_noise_scale=1e-6,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+        local_pool=local_pool,
+    )
+
+
+def snip_save_metadata(
+    *,
+    snip_objective: str,
+    sparsity_percent: float,
+    local_pool: bool,
+    min_layer_keep_ratio: float,
+    preference_beta: Optional[float] = None,
+    extra: Optional[Dict] = None,
+) -> Dict:
+    """Metadata fields for torch.save alongside masks (reproducibility)."""
+    meta = {
+        "method": "snip",
+        "snip_objective": snip_objective,
+        "sparsity_percent": float(sparsity_percent),
+        **pooling_metadata(
+            local_pool=local_pool,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+        ),
+    }
+    if preference_beta is not None:
+        meta["preference_beta"] = float(preference_beta)
+    if extra:
+        meta.update(extra)
+    return meta
 
 
 class SNIPScorer:
@@ -59,25 +118,27 @@ class SNIPScorer:
         print(f"[SNIPScorer] Scored {len(scores)} weight matrices.")
         return scores
 
-    def scores_to_masks(self, scores, sparsity_percent=90.0, local_pool=False):
-        """Keep top-k saliency weights.
-
-        Args:
-            local_pool: If False (default), one global threshold across all layers.
-                        If True, each weight matrix independently keeps keep_frac elements.
-        """
-        masks = create_mask_from_scores_gpu_efficient(
+    def scores_to_masks(
+        self,
+        scores,
+        sparsity_percent=90.0,
+        local_pool=False,
+        min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+    ):
+        """Keep top-k saliency weights (delegates to shared pooling logic)."""
+        masks = build_snip_masks_from_scores(
             scores,
             sparsity_percent=sparsity_percent,
             device="cpu",
             local_pool=local_pool,
-            min_layer_keep_ratio=0.0,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+            add_tie_break_noise=True,
         )
 
-        total  = sum(m.numel() for m in masks.values())
-        kept   = sum(m.sum().item() for m in masks.values())
+        total = sum(m.numel() for m in masks.values())
+        kept = sum(m.sum().item() for m in masks.values())
         actual = 100.0 * (1.0 - kept / total) if total > 0 else 0.0
-        mode   = "local (per-layer)" if local_pool else "global (cross-layer)"
+        mode = "local (per-layer)" if local_pool else "global (cross-layer)"
         print(f"[SNIPScorer] {len(masks)} masks ({mode}), actual sparsity={actual:.2f}%")
         return masks
 
@@ -117,8 +178,9 @@ def compute_snip_scores(
     device: str,
     num_batches: int,
     mlp_only: bool = False,
+    preference_beta: float = 1.0,
 ):
-    """Compute SNIP scores for model weights from DPO-style preference gradients."""
+    """Compute SNIP scores from gradients of ``dpo_style_preference_loss`` (pairwise preference)."""
     model.train()
     model.zero_grad(set_to_none=True)
 
@@ -142,6 +204,7 @@ def compute_snip_scores(
             rejected_logits=rejected_logits,
             rejected_ids=rejected_ids,
             rejected_mask=rejected_mask,
+            beta=preference_beta,
         )
         loss.backward()
         seen += 1

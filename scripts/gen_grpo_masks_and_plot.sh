@@ -73,11 +73,15 @@ DPO_SNIP_MASK="${DPO_SNIP_MASK:-$MASK_DIR/snip_dpo.pt}"
 DPO_CAV_MASK="${DPO_CAV_MASK:-$MASK_DIR/cav_dpo.pt}"
 DPO_FISHER_MASK="${DPO_FISHER_MASK:-$MASK_DIR/fisher_dpo.pt}"
 
+# lm | dpo_preference — passed to inference_mask_finder --snip-objective (see src/cold_start/utils/snip_scorer.py)
+COLD_SNIP_OBJECTIVE="${COLD_SNIP_OBJECTIVE:-lm}"
+
 echo "[config] MODEL=$MODEL"
 echo "[config] N_SAMPLES=$N_SAMPLES"
 echo "[config] SPARSITY=$SPARSITY"
 echo "[config] MASK_DIR=$MASK_DIR"
 echo "[config] SKIP_DPO=$SKIP_DPO"
+echo "[config] COLD_SNIP_OBJECTIVE=$COLD_SNIP_OBJECTIVE"
 if [ -n "$CPU_THREADS" ]; then
     export OMP_NUM_THREADS="$CPU_THREADS"
     export MKL_NUM_THREADS="$CPU_THREADS"
@@ -137,6 +141,7 @@ echo "=== [1/6] SNIP GRPO mask ==="
     --model_name $MODEL \
     --method snip \
     --mode grpo \
+    --snip-objective "$COLD_SNIP_OBJECTIVE" \
     --n_samples $N_SAMPLES \
     --sparsity $SPARSITY \
     --batch_size $BATCH_SIZE \
@@ -152,6 +157,7 @@ else
         --model_name $MODEL \
         --method snip \
         --mode dpo \
+        --snip-objective "$COLD_SNIP_OBJECTIVE" \
         --n_samples $N_SAMPLES \
         --sparsity $SPARSITY \
         --batch_size $BATCH_SIZE \

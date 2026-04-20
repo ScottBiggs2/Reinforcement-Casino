@@ -64,6 +64,7 @@ python src/cold_start/inference_mask_finder.py \
     --model_name $MODEL \
     --method snip \
     --mode grpo \
+    --snip-objective lm \
     --n_samples 8 \
     --sparsity 90.0 \
     --output /tmp/grpo_verify/mask_grpo.pt
@@ -72,6 +73,7 @@ python src/cold_start/inference_mask_finder.py \
     --model_name $MODEL \
     --method snip \
     --mode dpo \
+    --snip-objective lm \
     --n_samples 8 \
     --sparsity 90.0 \
     --output /tmp/grpo_verify/mask_dpo.pt
@@ -86,9 +88,10 @@ for path, label in [("/tmp/grpo_verify/mask_grpo.pt", "GRPO"),
     masks = d["masks"]
     total = sum(v.numel() for v in masks.values())
     kept  = sum(v.sum().item() for v in masks.values())
-    print(f"[{label}]  mode={m['mode']}  dataset={m['dataset']}")
+    print(f"[{label}]  mode={m['mode']}  dataset={m['dataset']}  snip_objective={m.get('snip_objective')}")
     print(f"         sparsity={100*(1-kept/total):.1f}%  tensors={len(masks)}")
     assert m["mode"] == label.lower(), f"{label}: metadata mode 不对"
+    assert m.get("snip_objective") == "lm", f"{label}: expected snip_objective lm"
 
 print("第二层 PASSED")
 EOF
