@@ -3,7 +3,7 @@
 
 Usage:
     python scripts/inspect_probe_pair_results.py \
-        --results /scratch/$USER/probe_pair_12masks/probe_pair_results.json
+        --results /scratch/$USER/probe_pair_masks/probe_pair_results.json
 """
 
 import argparse

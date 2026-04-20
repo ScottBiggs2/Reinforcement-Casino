@@ -16,15 +16,13 @@ Effective rank (Roy & Vetterli, 2007):
 Usage:
     # Structural (no model needed, but SVD on each mask)
     python src/analysis/inspect_mask_erank.py \\
-        --masks_json scripts/probe_pair_masks_dpo.json \\
-                     scripts/probe_pair_masks_grpo.json \\
+        --masks_json scripts/probe_pair_masks_cav_random_oracle.json.example \\
         --mode structural \\
         --output_json /scratch/$USER/mask_erank.json
 
     # Weighted (with base model)
     python src/analysis/inspect_mask_erank.py \\
-        --masks_json scripts/probe_pair_masks_dpo.json \\
-                     scripts/probe_pair_masks_grpo.json \\
+        --masks_json scripts/probe_pair_masks_cav_random_oracle.json.example \\
         --mode weighted \\
         --model meta-llama/Llama-3.1-8B-Instruct \\
         --output_json /scratch/$USER/mask_erank_weighted.json

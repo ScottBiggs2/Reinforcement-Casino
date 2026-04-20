@@ -8,8 +8,8 @@ Checks included:
 
 Usage example:
     python scripts/sanity_probe_dataset.py \
-        --probe_cache /scratch/$USER/probe_pair_12masks/probe_dataset_cache_v2_nall_seed42.json \
-        --output_dir /scratch/$USER/probe_pair_12masks_sanity
+        --probe_cache /scratch/$USER/probe_pair_masks/probe_dataset_cache_v2_nall_seed42.json \
+        --output_dir /scratch/$USER/probe_pair_masks_sanity
 """
 
 import argparse

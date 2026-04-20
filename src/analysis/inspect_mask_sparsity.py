@@ -8,7 +8,7 @@ to near-zero density (which then shows up as near_constant in probe runs).
 
 Usage:
     python src/analysis/inspect_mask_sparsity.py \\
-        --masks_json scripts/probe_pair_masks_dpo.json scripts/probe_pair_masks_grpo.json
+        --masks_json scripts/probe_pair_masks_cav_random_oracle.json.example
 
 Prints a summary table to stdout and optionally writes a JSON with per-layer
 densities to --output_json.

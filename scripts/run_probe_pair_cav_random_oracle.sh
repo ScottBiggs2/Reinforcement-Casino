@@ -118,7 +118,7 @@ if [ "${USE_HOLDOUT_AS_TEST:-1}" = "1" ]; then
     EXTRA_ARGS+=(--use_holdout_as_test)
 fi
 
-"$PYTHON_BIN" src/analysis/probe_pair_12masks.py \
+"$PYTHON_BIN" src/analysis/probe_pair_masks.py \
     --model "$MODEL" \
     --masks_json "$MASKS_JSON" \
     --output_dir "$OUTPUT_DIR" \
