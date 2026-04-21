@@ -1,41 +1,17 @@
 #!/usr/bin/env bash
-# One short GPU job that:
-#   1) generates masks (shared random baseline + per-task CAV/SNIP for Tulu3, Light-R1, GRPO)
-#   2) submits downstream training jobs with Slurm afterok dependencies:
-#      Tulu3 DPO (dense + 3 sparse), Light-R1 DPO (dense + 3 sparse), GRPO (dense + 3 sparse)
+# Re-queue the 12 downstream training jobs from an *existing* mask run (no mask generation, no GPU).
+# Use when masks already exist under MASK_DIR but training submissions failed, were cancelled, or you
+# need to drop the afterok dependency on the orchestrator job.
 #
-# The random global mask is generated once and reused for DPO (Tulu3) sparse-random, DPO (Light-R1)
-# sparse-random, and GRPO sparse-random.
-#
-# Submit from repo root:
-#   cd /path/to/rl_casino && sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
-#
-# If masks already exist and you only need to (re)submit the 12 training jobs (no GPU, no afterok):
-#   export MASK_RUN_ID=orch_masks_<jobid>
+# From repo root on a login node (Explorer):
+#   export MASK_RUN_ID=orch_masks_6262915   # required; must match the directory under rl_casino_masks
+#   export ORCH_USE_TRAIN_AUTO_RESUME=1
+#   # match whatever you used for the full orchestrator (paths, steps, ORCH_TRAIN_* , etc.)
 #   bash scripts/orchestrate_queue_training_only.sh
 #
-# Override any knobs by exporting env vars before sbatch (see "Config" section below).
-# Orchestrator-only: ORCH_USE_TRAIN_AUTO_RESUME, ORCH_TRAIN_SOFT_SECONDS, ORCH_TRAIN_* resource overrides.
+# Optional: ORCH_SBATCH_DEPENDENCY=afterok:12345   # only if you want an explicit dependency
 #
-# Long training jobs: optional automatic resume (soft timeout + chained sbatch) is documented in
-# scripts/README.md ("Automatic wall-time resume"). For this orchestrator, export ORCH_USE_TRAIN_AUTO_RESUME=1
-# (and optionally ORCH_TRAIN_SOFT_SECONDS, ORCH_TRAIN_PARTITION, …) so queued children use
-# scripts/orchestrate_training_child_entry.sh → train_with_auto_resume.sh with Slurm resources on the CLI.
-# Or submit pipeline_stage_01_dense.sh, pipeline_sparse_one_mask.sh, or grpo_openr1_llama31_slurm.sh
-# directly with USE_TRAIN_WITH_AUTO_RESUME=1 as in the README.
-#
-#SBATCH --partition=gpu
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --gres=gpu:h200:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
-# (Host RAM for the Python process — not GPU VRAM. Mask OOM is typically CUDA OOM, not this limit.)
-#SBATCH --time=02:00:00
-#SBATCH --job-name=orch_masks_queue
-#SBATCH --output=logs/orch_masks_queue_%j.out
-#SBATCH --error=logs/orch_masks_queue_%j.err
-
+# Keep defaults in sync with scripts/orchestrate_masks_then_queue_dpo_grpo.slurm.
 set -euo pipefail
 
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
@@ -47,11 +23,14 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
-########################################
-# Config (override before sbatch)
-########################################
+if [ -z "${MASK_RUN_ID:-}" ]; then
+  echo "ERROR: export MASK_RUN_ID=orch_masks_<jobid> (directory name under rl_casino_masks)." >&2
+  exit 1
+fi
 
-# Scratch / env
+########################################
+# Config — mirror orchestrate_masks_then_queue_dpo_grpo.slurm
+########################################
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
@@ -61,62 +40,34 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${RL_CASINO_SCRATCH_ROOT}/hf_cache/datasets}"
-
-# Training output roots (pipeline_common.sh / grpo_openr1_llama31_slurm.sh). Export before queueing
-# children so training_resume_probe in train_with_auto_resume.sh can resolve checkpoint paths.
 export TRAIN_OUT_BASE="${TRAIN_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_train}"
 export SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train}"
 export GRPO_DENSE_OUTPUT_BASE="${GRPO_DENSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense}"
 export GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/sparse}"
 
-# Model + datasets
-export HF_TOKEN="${HF_TOKEN:-}" # required for gated models (e.g. Llama). If unset, HF may still work if token is cached.
+export HF_TOKEN="${HF_TOKEN:-}"
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 
-# DPO mask generation config (tulu3 defaults)
-export DPO_DS_KEY="${DPO_DS_KEY:-tulu3}"  # dataset registry key for DPO mode
+export DPO_DS_KEY="${DPO_DS_KEY:-tulu3}"
 export COLD_DATASET_HF="${COLD_DATASET_HF:-allenai/llama-3.1-tulu-3-8b-preference-mixture}"
-
-# Light-R1 DPO (same model + hyperparameters; separate CAV/SNIP calibration — random mask shared)
 export DPO_DS_KEY_LIGHT_R1="${DPO_DS_KEY_LIGHT_R1:-light-r1}"
 export COLD_DATASET_HF_LIGHT_R1="${COLD_DATASET_HF_LIGHT_R1:-qihoo360/Light-R1-DPOData}"
-
-# GRPO mask generation config (OpenR1 math defaults)
 export GRPO_DATASET_HF="${GRPO_DATASET_HF:-open-r1/OpenR1-Math-220k}"
 
-# Mask knobs
 export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
-
-# inference_mask_finder batch size (all mask methods that pass --batch_size). Lower if SNIP/CAV OOMs.
-# Sequence caps for masks follow DPO_MAX_LENGTH / GRPO_MAX_PROMPT_LENGTH (exported below for downstream;
-# mask steps use the same vars in the commands in section "1) Mask generation").
-export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-4}"
-
-# Calibration sizes
-export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-256}"
-export COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-16}"
-export GRPO_N_SAMPLES="${GRPO_N_SAMPLES:-64}"
-
-# SNIP objectives
 export DPO_SNIP_OBJECTIVE="${DPO_SNIP_OBJECTIVE:-dpo_preference}"
 export GRPO_SNIP_OBJECTIVE="${GRPO_SNIP_OBJECTIVE:-lm}"
-
-# DPO preference beta for SNIP (objective=dpo_preference)
 export DPO_BETA="${DPO_BETA:-0.1}"
 export GRPO_SNIP_PREFERENCE_BETA="${GRPO_SNIP_PREFERENCE_BETA:-1.0}"
 
-# Output locations for masks
-export MASK_RUN_ID="${MASK_RUN_ID:-orch_masks_${SLURM_JOB_ID:-manual}}"
 export MASK_DIR="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}/${MASK_RUN_ID}"
 export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/masks}"
 
-# Downstream run ids (stable names recommended for resume)
 export DPO_DENSE_RUN_ID="${DPO_DENSE_RUN_ID:-dpo5k_dense_${DPO_DS_KEY}}"
 export DPO_SPARSE_RANDOM_RUN_ID="${DPO_SPARSE_RANDOM_RUN_ID:-dpo5k_sparse_random_${DPO_DS_KEY}}"
 export DPO_SPARSE_CAV_RUN_ID="${DPO_SPARSE_CAV_RUN_ID:-dpo5k_sparse_cav_${DPO_DS_KEY}}"
 export DPO_SPARSE_SNIP_RUN_ID="${DPO_SPARSE_SNIP_RUN_ID:-dpo5k_sparse_snip_${DPO_DS_KEY}}"
-
 export DPO_DENSE_RUN_ID_LIGHT_R1="${DPO_DENSE_RUN_ID_LIGHT_R1:-dpo5k_dense_${DPO_DS_KEY_LIGHT_R1}}"
 export DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1="${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1:-dpo5k_sparse_random_${DPO_DS_KEY_LIGHT_R1}}"
 export DPO_SPARSE_CAV_RUN_ID_LIGHT_R1="${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1:-dpo5k_sparse_cav_${DPO_DS_KEY_LIGHT_R1}}"
@@ -127,7 +78,6 @@ export GRPO_SPARSE_RANDOM_RUN_NAME="${GRPO_SPARSE_RANDOM_RUN_NAME:-grpo_sparse_r
 export GRPO_SPARSE_CAV_RUN_NAME="${GRPO_SPARSE_CAV_RUN_NAME:-grpo_sparse_cav_sp975_v1}"
 export GRPO_SPARSE_SNIP_RUN_NAME="${GRPO_SPARSE_SNIP_RUN_NAME:-grpo_sparse_snip_${GRPO_SNIP_OBJECTIVE}_sp975_v1}"
 
-# Downstream training knobs (DPO doc defaults)
 export NUM_STEPS_DPO="${NUM_STEPS_DPO:-5000}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
@@ -138,7 +88,6 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
 export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-50}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-3}"
 
-# Downstream training knobs (GRPO doc defaults)
 export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
 export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-5000}"
 export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
@@ -147,7 +96,6 @@ export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
 export GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-50}"
 export GRPO_SAVE_TOTAL_LIMIT="${GRPO_SAVE_TOTAL_LIMIT:-3}"
 
-# Queued training jobs: opt-in soft timeout + chained sbatch (see scripts/README.md).
 export ORCH_USE_TRAIN_AUTO_RESUME="${ORCH_USE_TRAIN_AUTO_RESUME:-0}"
 export MAX_AUTO_RESUME="${MAX_AUTO_RESUME:-8}"
 export ORCH_TRAIN_PARTITION="${ORCH_TRAIN_PARTITION:-gpu}"
@@ -159,36 +107,13 @@ export ORCH_TRAIN_TIME_GRPO="${ORCH_TRAIN_TIME_GRPO:-08:00:00}"
 if [ "${ORCH_USE_TRAIN_AUTO_RESUME}" = "1" ] && [ -n "${ORCH_TRAIN_SOFT_SECONDS:-}" ]; then
   export AUTO_RESUME_SOFT_SECONDS="${ORCH_TRAIN_SOFT_SECONDS}"
 fi
-# When ORCH_USE_TRAIN_AUTO_RESUME=1, downstream sbatch uses orchestrate_training_child_entry.sh with
-# ORCH_TRAIN_PARTITION (default gpu), ORCH_TRAIN_GRES (default gpu:h200:1), ORCH_TRAIN_MEM (128G),
-# ORCH_TRAIN_TIME_DPO (07:45:00), ORCH_TRAIN_TIME_GRPO (08:00:00), ORCH_TRAIN_CPUS (8 for GRPO jobs).
 
-# W&B off by default for orchestrated cluster jobs unless you explicitly opt in
 export WANDB_MODE="${WANDB_MODE:-disabled}"
 export WANDB_DISABLED="${WANDB_DISABLED:-true}"
 export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
 export GRPO_USE_WANDB="${GRPO_USE_WANDB:-0}"
 
-########################################
-# Preflight
-########################################
-
-if [ ! -x "$TRAIN_PY" ]; then
-  echo "ERROR: TRAIN_PY not found/executable: ${TRAIN_PY}" >&2
-  exit 1
-fi
-
-"$TRAIN_PY" - <<'PY'
-import sys
-import torch
-if not torch.cuda.is_available():
-    print("ERROR: CUDA is not available in this job; masks require a GPU allocation.", file=sys.stderr)
-    sys.exit(1)
-print(f"CUDA OK: device_count={torch.cuda.device_count()} device0={torch.cuda.get_device_name(0)!r}")
-PY
-
 sanitize_model_name() {
-  # Must match the repo’s sanitize conventions (see inference_mask_finder.py / pipeline_common.sh).
   local s="$1"
   s="${s//\//_}"
   s="${s//-/_}"
@@ -201,156 +126,32 @@ sanitize_model_name() {
 }
 
 MODEL_SANITIZED="$(sanitize_model_name "$MODEL")"
-
-mkdir -p "$MASK_DIR" "$GRPO_MASK_DIR"
-echo "REPO_ROOT=${REPO_ROOT}"
-echo "TRAIN_PY=${TRAIN_PY}"
-echo "SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}"
-echo "MASK_DIR=${MASK_DIR}"
-echo "GRPO_MASK_DIR=${GRPO_MASK_DIR}"
-echo "MODEL=${MODEL} (sanitized=${MODEL_SANITIZED})"
-echo "DPO_DS_KEY=${DPO_DS_KEY}  COLD_DATASET_HF=${COLD_DATASET_HF}"
-echo "GRPO_DATASET_HF=${GRPO_DATASET_HF}  GRPO_DATASET=${GRPO_DATASET}"
-echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}  MIN_LAYER_KEEP_RATIO=${MIN_LAYER_KEEP_RATIO}"
-echo "DPO_SNIP_OBJECTIVE=${DPO_SNIP_OBJECTIVE}  GRPO_SNIP_OBJECTIVE=${GRPO_SNIP_OBJECTIVE}"
-
-########################################
-# 1) Mask generation (GPU)
-########################################
-# Random baseline: one file reused for DPO (Tulu3), DPO (Light-R1), and GRPO sparse-random.
 export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 
-# DPO masks — Tulu3 calibration (scripts/dpo_5k_hpc_copypaste.md)
 export MASK_RANDOM="${MASK_DIR}/random_${MODEL//\//_}_sparsity${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 export MASK_CAV="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_SNIP="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_${DPO_DS_KEY}_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
-
-# DPO masks — Light-R1 (same model/sparsity; CAV/SNIP calibrated on Light-R1)
 export MASK_CAV_LIGHT_R1="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_SNIP_LIGHT_R1="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
-
-# GRPO: reuse MASK_RANDOM for sparse-random; only CAV + SNIP are GRPO-specific paths
 export MASK_GRPO_RANDOM="${MASK_RANDOM}"
 export MASK_GRPO_CAV="${GRPO_MASK_DIR}/grpo_cav_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
 export MASK_GRPO_SNIP="${GRPO_MASK_DIR}/grpo_snip_${GRPO_SNIP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
 
-echo ""
-echo "=== Generating shared random mask (DPO + GRPO) → ${MASK_RANDOM}"
-"$TRAIN_PY" src/utils/generate_random_mask.py \
-  --model_name "${MODEL}" \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --seed "${RANDOM_MASK_SEED}" \
-  --output_file "${MASK_RANDOM}"
+for f in "$MASK_RANDOM" "$MASK_CAV" "$MASK_SNIP" "$MASK_CAV_LIGHT_R1" "$MASK_SNIP_LIGHT_R1" "$MASK_GRPO_CAV" "$MASK_GRPO_SNIP"; do
+  if [ ! -f "$f" ]; then
+    echo "ERROR: expected mask file missing: $f" >&2
+    exit 1
+  fi
+done
 
-echo ""
-echo "=== Generating DPO CAV cold mask (Tulu3) → ${MASK_CAV}"
-"$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
-  --model_name "${MODEL}" \
-  --dataset_name "${COLD_DATASET_HF}" \
-  --method cav \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --subset_size "${COLD_CAV_SUBSET}" \
-  --num_batches "${COLD_CAV_NUM_BATCHES}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --output_file "${MASK_CAV}"
+echo "=== Queue training only (masks OK under MASK_DIR=${MASK_DIR}) ==="
+echo "ORCH_SBATCH_DEPENDENCY=${ORCH_SBATCH_DEPENDENCY:-<none>}"
 
-echo ""
-echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
-"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-  --model_name "${MODEL}" \
-  --method snip \
-  --mode dpo \
-  --dataset_name "${DPO_DS_KEY}" \
-  --snip-objective "${DPO_SNIP_OBJECTIVE}" \
-  --n_samples "${COLD_CAV_SUBSET}" \
-  --sparsity "${SPARSITY_PERCENT}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --max_length "${DPO_MAX_LENGTH}" \
-  --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
-  --snip-preference-beta "${DPO_BETA}" \
-  --output "${MASK_SNIP}"
+ORCH_TRAIN_ENTRY="${REPO_ROOT}/scripts/orchestrate_training_child_entry.sh"
 
-echo ""
-echo "=== Generating DPO CAV cold mask (Light-R1) → ${MASK_CAV_LIGHT_R1}"
-"$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
-  --model_name "${MODEL}" \
-  --dataset_name "${COLD_DATASET_HF_LIGHT_R1}" \
-  --method cav \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --subset_size "${COLD_CAV_SUBSET}" \
-  --num_batches "${COLD_CAV_NUM_BATCHES}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --output_file "${MASK_CAV_LIGHT_R1}"
-
-echo ""
-echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
-"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-  --model_name "${MODEL}" \
-  --method snip \
-  --mode dpo \
-  --dataset_name "${DPO_DS_KEY_LIGHT_R1}" \
-  --snip-objective "${DPO_SNIP_OBJECTIVE}" \
-  --n_samples "${COLD_CAV_SUBSET}" \
-  --sparsity "${SPARSITY_PERCENT}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --max_length "${DPO_MAX_LENGTH}" \
-  --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
-  --snip-preference-beta "${DPO_BETA}" \
-  --output "${MASK_SNIP_LIGHT_R1}"
-
-echo ""
-echo "=== Generating GRPO CAV mask → ${MASK_GRPO_CAV}"
-"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-  --model_name "${MODEL}" \
-  --mode grpo \
-  --method cav \
-  --dataset_name "${GRPO_DATASET_HF}" \
-  --n_samples "${GRPO_N_SAMPLES}" \
-  --sparsity "${SPARSITY_PERCENT}" \
-  --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --seed 42 \
-  --output "${MASK_GRPO_CAV}"
-
-echo ""
-echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNIP}"
-"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-  --model_name "${MODEL}" \
-  --mode grpo \
-  --method snip \
-  --snip-objective "${GRPO_SNIP_OBJECTIVE}" \
-  --dataset_name "${GRPO_DATASET_HF}" \
-  --n_samples "${GRPO_N_SAMPLES}" \
-  --sparsity "${SPARSITY_PERCENT}" \
-  --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --seed 42 \
-  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
-  --snip-preference-beta "${GRPO_SNIP_PREFERENCE_BETA}" \
-  --output "${MASK_GRPO_SNIP}"
-
-echo ""
-echo "=== Mask outputs written ==="
-ls -lh "${MASK_RANDOM}" "${MASK_CAV}" "${MASK_SNIP}" "${MASK_CAV_LIGHT_R1}" "${MASK_SNIP_LIGHT_R1}" "${MASK_GRPO_CAV}" "${MASK_GRPO_SNIP}"
-echo "(GRPO sparse-random uses same file as DPO random: ${MASK_GRPO_RANDOM})"
-
-########################################
-# 2) Queue downstream jobs (afterok)
-########################################
-
-if [ -z "${SLURM_JOB_ID:-}" ]; then
-  echo "ERROR: expected SLURM_JOB_ID to be set (this script must be run via sbatch)." >&2
-  exit 1
-fi
-
-dep="afterok:${SLURM_JOB_ID}"
-echo ""
-echo "=== Submitting downstream jobs with dependency: ${dep}"
-echo "ORCH_USE_TRAIN_AUTO_RESUME=${ORCH_USE_TRAIN_AUTO_RESUME:-0}  TRAIN_OUT_BASE=${TRAIN_OUT_BASE}  SPARSE_OUT_BASE=${SPARSE_OUT_BASE}"
-echo "GRPO_DENSE_OUTPUT_BASE=${GRPO_DENSE_OUTPUT_BASE}  GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE}"
+_orch_train_bases_export() {
+  echo "NUM_STEPS_DPO=${NUM_STEPS_DPO},GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS},TRAIN_OUT_BASE=${TRAIN_OUT_BASE},SPARSE_OUT_BASE=${SPARSE_OUT_BASE},GRPO_DENSE_OUTPUT_BASE=${GRPO_DENSE_OUTPUT_BASE},GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE},GRPO_SAVE_STEPS=${GRPO_SAVE_STEPS},GRPO_SAVE_TOTAL_LIMIT=${GRPO_SAVE_TOTAL_LIMIT}"
+}
 
 orch_sanitize_job_name() {
   local s="$1"
@@ -358,12 +159,6 @@ orch_sanitize_job_name() {
   s="${s// /_}"
   s="$(echo "$s" | tr -cd '[:alnum:]_.-')"
   printf '%.64s' "$s"
-}
-
-ORCH_TRAIN_ENTRY="${REPO_ROOT}/scripts/orchestrate_training_child_entry.sh"
-
-_orch_train_bases_export() {
-  echo "NUM_STEPS_DPO=${NUM_STEPS_DPO},GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS},TRAIN_OUT_BASE=${TRAIN_OUT_BASE},SPARSE_OUT_BASE=${SPARSE_OUT_BASE},GRPO_DENSE_OUTPUT_BASE=${GRPO_DENSE_OUTPUT_BASE},GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE},GRPO_SAVE_STEPS=${GRPO_SAVE_STEPS},GRPO_SAVE_TOTAL_LIMIT=${GRPO_SAVE_TOTAL_LIMIT}"
 }
 
 submit_training_job() {
@@ -375,9 +170,13 @@ submit_training_job() {
 
   local bases_steps jid
   bases_steps="$(_orch_train_bases_export)"
+  local -a dep_args=()
+  if [ -n "${ORCH_SBATCH_DEPENDENCY:-}" ]; then
+    dep_args=( --dependency="${ORCH_SBATCH_DEPENDENCY}" )
+  fi
 
   if [ "${ORCH_USE_TRAIN_AUTO_RESUME:-0}" != "1" ]; then
-    jid=$(sbatch --parsable --dependency="${dep}" \
+    jid=$(sbatch --parsable "${dep_args[@]}" \
       --export=ALL,"${export_extra},${bases_steps}" \
       "${inner_script}")
     echo "${label}: ${jid}"
@@ -427,7 +226,7 @@ submit_training_job() {
 
   jname="$(orch_sanitize_job_name "orch_${job_tag}")"
 
-  jid=$(sbatch --parsable --dependency="${dep}" \
+  jid=$(sbatch --parsable "${dep_args[@]}" \
     --partition="${part}" --nodes=1 --ntasks=1 \
     --gres="${gres}" --mem="${mem}" --time="${time_wall}" \
     "${cpus_args[@]}" \
@@ -447,7 +246,7 @@ submit_training_job "DPO dense (stage 1 only) RUN_ID=${DPO_DENSE_RUN_ID}" \
   "dpo_dense_${DPO_DENSE_RUN_ID}"
 
 echo ""
-echo "--- DPO sparse Tulu3 (3 masks; random = shared baseline file) ---"
+echo "--- DPO sparse Tulu3 ---"
 submit_training_job "DPO sparse random RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID}" \
   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
   sparse_dpo \
@@ -467,7 +266,7 @@ submit_training_job "DPO sparse SNIP RUN_ID=${DPO_SPARSE_SNIP_RUN_ID}" \
   "dpo_sp_snip_${DPO_SPARSE_SNIP_RUN_ID}"
 
 echo ""
-echo "--- DPO dense + sparse (Light-R1, same hyperparameters; shared random mask) ---"
+echo "--- DPO dense + sparse (Light-R1) ---"
 submit_training_job "DPO dense Light-R1 RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1}" \
   "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
   dense_dpo \
@@ -501,7 +300,7 @@ submit_training_job "GRPO dense slug=${GRPO_DENSE_RUN_SLUG}" \
   "grpo_dense_${GRPO_DENSE_RUN_SLUG}"
 
 echo ""
-echo "--- GRPO sparse (3 masks) ---"
+echo "--- GRPO sparse ---"
 submit_training_job "GRPO sparse random name=${GRPO_SPARSE_RANDOM_RUN_NAME}" \
   "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
   sparse_grpo \
@@ -521,5 +320,4 @@ submit_training_job "GRPO sparse SNIP name=${GRPO_SPARSE_SNIP_RUN_NAME}" \
   "grpo_sp_snip_${GRPO_SPARSE_SNIP_RUN_NAME}"
 
 echo ""
-echo "=== Done. Monitor with: squeue -u ${USER:-<user>} ==="
-
+echo "=== Done. Monitor: squeue -u \$USER ==="
