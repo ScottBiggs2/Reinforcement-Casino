@@ -608,8 +608,14 @@ def main(args):
             print("[SNIP] Objective=lm (standard SNIP: CE loss on chosen sequences)")
             scorer = SNIPScorer()
             snip_scores = scorer.score(
-                model, tokenizer, chosen_texts, train_device,
-                max_length=args.max_length, batch_size=args.batch_size,
+                model,
+                tokenizer,
+                chosen_texts,
+                train_device,
+                max_length=args.max_length,
+                batch_size=args.batch_size,
+                gradient_checkpointing=args.snip_lm_gradient_checkpointing,
+                use_autocast=not args.snip_lm_no_autocast,
             )
         else:
             print("[SNIP] Objective=dpo_preference (gradient of pairwise preference loss)")
@@ -641,6 +647,9 @@ def main(args):
             "dataset": effective_dataset,
             "seed": args.seed,
         }
+        if args.snip_objective == SNIP_OBJECTIVE_LM:
+            meta_extra["snip_lm_gradient_checkpointing"] = bool(args.snip_lm_gradient_checkpointing)
+            meta_extra["snip_lm_autocast"] = not bool(args.snip_lm_no_autocast)
         if args.snip_objective == SNIP_OBJECTIVE_DPO_PREFERENCE:
             meta_extra["snip_num_batches"] = args.snip_num_batches
             meta_extra["snip_preference_batch_size"] = args.snip_preference_batch_size
@@ -862,6 +871,19 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="[SNIP dpo_preference] Disable CUDA bf16 autocast around forward+loss.",
+    )
+    parser.add_argument(
+        "--no-snip-lm-gradient-checkpointing",
+        dest="snip_lm_gradient_checkpointing",
+        action="store_false",
+        default=True,
+        help="[SNIP lm] Disable gradient checkpointing (faster, higher VRAM).",
+    )
+    parser.add_argument(
+        "--snip-lm-no-autocast",
+        action="store_true",
+        default=False,
+        help="[SNIP lm] Disable CUDA bf16 autocast around forward+loss.",
     )
 
     args = parser.parse_args()

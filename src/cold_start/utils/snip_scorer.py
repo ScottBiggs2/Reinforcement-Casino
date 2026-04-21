@@ -1,4 +1,4 @@
-"""Score MLP weights with one backward pass of gradient saliency (SNIP)."""
+"""Score MLP weights from gradient saliency (SNIP): mean-loss gradients via per-step backward."""
 
 from __future__ import annotations
 
@@ -71,38 +71,91 @@ def snip_save_metadata(
 class SNIPScorer:
     """Compute `|grad * weight|` for each MLP weight matrix."""
 
-    def score(self, model, tokenizer, chosen_texts, device, max_length=512, batch_size=8,
-              mlp_only=False):
-        """Return per-parameter saliency scores without updating weights."""
-        model.eval()
+    def score(
+        self,
+        model,
+        tokenizer,
+        chosen_texts,
+        device,
+        max_length=512,
+        batch_size=8,
+        mlp_only=False,
+        *,
+        gradient_checkpointing: bool = True,
+        use_autocast: bool = True,
+    ):
+        """Return per-parameter SNIP saliency (|grad * w|) for the mean CE loss over batches.
+
+        Uses **per-batch backward** with scale ``1/K`` so gradients match mean loss **without**
+        fusing all forwards into one autograd graph (which would scale VRAM with batch count).
+        """
+        dev = torch.device(device)
+        use_cuda = dev.type == "cuda" and torch.cuda.is_available()
+
+        n_batches = (len(chosen_texts) + batch_size - 1) // batch_size if chosen_texts else 0
+        if n_batches == 0:
+            print("[SNIPScorer] No calibration texts; returning empty scores.")
+            return {}
+
+        gc_was_on = bool(getattr(model, "is_gradient_checkpointing", False))
+        we_turned_gc_on = False
+        if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable") and not gc_was_on:
+            model.gradient_checkpointing_enable()
+            we_turned_gc_on = True
+
+        model.train()
         model.zero_grad(set_to_none=True)
 
-        total_loss = torch.tensor(0.0, device=device)
-        n_batches  = 0
+        amp_dtype = torch.bfloat16
+        if use_cuda:
+            try:
+                p0 = next(model.parameters())
+                if p0.dtype == torch.float16:
+                    amp_dtype = torch.float16
+            except StopIteration:
+                pass
 
-        for i in range(0, len(chosen_texts), batch_size):
-            batch = chosen_texts[i : i + batch_size]
-            enc = tokenizer(
-                batch,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=max_length,
-            )
-            input_ids      = enc["input_ids"].to(device)
-            attention_mask = enc["attention_mask"].to(device)
-            labels = input_ids.clone()
-            labels[attention_mask == 0] = -100
+        ctx = (
+            torch.amp.autocast(device_type="cuda", dtype=amp_dtype, enabled=bool(use_autocast))
+            if use_cuda and use_autocast
+            else nullcontext()
+        )
 
-            out = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-            )
-            total_loss = total_loss + out.loss
-            n_batches  += 1
+        k = float(n_batches)
+        seen = 0
+        try:
+            for i in range(0, len(chosen_texts), batch_size):
+                batch = chosen_texts[i : i + batch_size]
+                enc = tokenizer(
+                    batch,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=max_length,
+                )
+                input_ids = enc["input_ids"].to(device, non_blocking=True)
+                attention_mask = enc["attention_mask"].to(device, non_blocking=True)
+                labels = input_ids.clone()
+                labels[attention_mask == 0] = -100
 
-        (total_loss / max(n_batches, 1)).backward()
+                with ctx:
+                    out = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                    )
+                    loss_scaled = out.loss / k
+
+                loss_scaled.backward()
+
+                del out, loss_scaled, input_ids, attention_mask, labels, enc, batch
+                if use_cuda:
+                    torch.cuda.empty_cache()
+
+                seen += 1
+        finally:
+            if we_turned_gc_on and hasattr(model, "gradient_checkpointing_disable"):
+                model.gradient_checkpointing_disable()
 
         scores = {}
         with torch.no_grad():
@@ -118,7 +171,10 @@ class SNIPScorer:
         model.zero_grad(set_to_none=True)
         model.eval()
 
-        print(f"[SNIPScorer] Scored {len(scores)} weight matrices.")
+        print(
+            f"[SNIPScorer] Scored {len(scores)} weight matrices over {seen} batches "
+            f"(K={n_batches}, grad_ckpt={gradient_checkpointing}, autocast={use_autocast and use_cuda})."
+        )
         return scores
 
     def scores_to_masks(

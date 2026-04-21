@@ -26,6 +26,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
+# (Host RAM for the Python process — not GPU VRAM. Mask OOM is typically CUDA OOM, not this limit.)
 #SBATCH --time=02:00:00
 #SBATCH --job-name=orch_masks_queue
 #SBATCH --output=logs/orch_masks_queue_%j.out
@@ -82,6 +83,11 @@ export GRPO_DATASET_HF="${GRPO_DATASET_HF:-open-r1/OpenR1-Math-220k}"
 # Mask knobs
 export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
+
+# inference_mask_finder batch size (all mask methods that pass --batch_size). Lower if SNIP/CAV OOMs.
+# Sequence caps for masks follow DPO_MAX_LENGTH / GRPO_MAX_PROMPT_LENGTH (exported below for downstream;
+# mask steps use the same vars in the commands in section "1) Mask generation").
+export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-4}"
 
 # Calibration sizes
 export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-256}"
@@ -255,7 +261,7 @@ echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
   --snip-objective "${DPO_SNIP_OBJECTIVE}" \
   --n_samples "${COLD_CAV_SUBSET}" \
   --sparsity "${SPARSITY_PERCENT}" \
-  --batch_size 4 \
+  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
   --max_length "${DPO_MAX_LENGTH}" \
   --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
@@ -284,7 +290,7 @@ echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
   --snip-objective "${DPO_SNIP_OBJECTIVE}" \
   --n_samples "${COLD_CAV_SUBSET}" \
   --sparsity "${SPARSITY_PERCENT}" \
-  --batch_size 4 \
+  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
   --max_length "${DPO_MAX_LENGTH}" \
   --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
@@ -301,7 +307,7 @@ echo "=== Generating GRPO CAV mask → ${MASK_GRPO_CAV}"
   --n_samples "${GRPO_N_SAMPLES}" \
   --sparsity "${SPARSITY_PERCENT}" \
   --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-  --batch_size 4 \
+  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
   --seed 42 \
   --output "${MASK_GRPO_CAV}"
 
@@ -316,7 +322,7 @@ echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNI
   --n_samples "${GRPO_N_SAMPLES}" \
   --sparsity "${SPARSITY_PERCENT}" \
   --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-  --batch_size 4 \
+  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
   --seed 42 \
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
   --snip-preference-beta "${GRPO_SNIP_PREFERENCE_BETA}" \
