@@ -19,6 +19,13 @@ else
 fi
 cd "$REPO_ROOT"
 
+# Optional: wrap in scripts/train_with_auto_resume.sh (soft timeout + chained sbatch).
+# export USE_TRAIN_WITH_AUTO_RESUME=1 AUTO_RESUME_MODE=dense_dpo AUTO_RESUME_SOFT_SECONDS=... before sbatch.
+if [ "${USE_TRAIN_WITH_AUTO_RESUME:-0}" = "1" ]; then
+  export AUTO_RESUME_MODE="${AUTO_RESUME_MODE:-dense_dpo}"
+  exec bash "${REPO_ROOT}/scripts/train_with_auto_resume.sh" "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh"
+fi
+
 # shellcheck source=/dev/null
 source "${REPO_ROOT}/scripts/pipeline_common.sh"
 pipeline_setup

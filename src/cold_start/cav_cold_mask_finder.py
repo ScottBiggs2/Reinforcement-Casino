@@ -748,9 +748,10 @@ def main(args):
     )
 
     collator = partial(concatenated_dpo_collator_fn, tokenizer=tokenizer)
+    loader_batch = args.snip_preference_batch_size if args.method == "snip" else args.batch_size
     dataloader = DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=loader_batch,
         shuffle=False,
         collate_fn=collator,
     )
@@ -830,6 +831,8 @@ def main(args):
             num_batches=args.num_batches,
             mlp_only=args.mlp_only,
             preference_beta=args.snip_preference_beta,
+            gradient_checkpointing=args.snip_gradient_checkpointing,
+            use_autocast=not args.snip_no_autocast,
         )
     else:
         raise ValueError(f"Unknown method: {args.method}")
@@ -872,7 +875,7 @@ def main(args):
         "split": args.split,
         "subset_size": args.subset_size,
         "num_batches": args.num_batches,
-        "batch_size": args.batch_size,
+        "batch_size": args.snip_preference_batch_size if args.method == "snip" else args.batch_size,
         "mlp_only": args.mlp_only,
         "device": device,
         "min_layer_keep_ratio": args.min_layer_keep_ratio,
@@ -884,6 +887,9 @@ def main(args):
     if args.method == "snip":
         metadata["snip_objective"] = SNIP_OBJECTIVE_DPO_PREFERENCE
         metadata["preference_beta"] = float(args.snip_preference_beta)
+        metadata["snip_preference_batch_size"] = int(args.snip_preference_batch_size)
+        metadata["snip_gradient_checkpointing"] = bool(args.snip_gradient_checkpointing)
+        metadata["snip_autocast"] = not bool(args.snip_no_autocast)
 
     if args.method == "cav":
         metadata["probe_epochs"] = args.probe_epochs
@@ -992,6 +998,25 @@ if __name__ == "__main__":
         type=float,
         default=1.0,
         help="[SNIP only] Beta for dpo_style_preference_loss (same as inference_mask_finder).",
+    )
+    parser.add_argument(
+        "--snip-preference-batch-size",
+        type=int,
+        default=1,
+        help="[SNIP only] DataLoader batch size (default 1 reduces VRAM).",
+    )
+    parser.add_argument(
+        "--no-snip-gradient-checkpointing",
+        dest="snip_gradient_checkpointing",
+        action="store_false",
+        default=True,
+        help="[SNIP only] Disable gradient checkpointing (higher VRAM).",
+    )
+    parser.add_argument(
+        "--snip-no-autocast",
+        action="store_true",
+        default=False,
+        help="[SNIP only] Disable CUDA bf16 autocast for preference SNIP.",
     )
     parser.add_argument("--weight_abs", action="store_true",
                         help="Weight neuron scores by parameter magnitudes when mapping to weight scores. "

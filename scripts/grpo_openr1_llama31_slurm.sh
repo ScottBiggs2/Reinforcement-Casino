@@ -44,6 +44,17 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
+# Optional: scripts/train_with_auto_resume.sh — export USE_TRAIN_WITH_AUTO_RESUME=1 AUTO_RESUME_SOFT_SECONDS=...
+# AUTO_RESUME_MODE defaults from GRPO_MODE (dense_grpo vs sparse_grpo).
+if [ "${USE_TRAIN_WITH_AUTO_RESUME:-0}" = "1" ]; then
+  if [ "${GRPO_MODE:-dense}" = "sparse" ]; then
+    export AUTO_RESUME_MODE="${AUTO_RESUME_MODE:-sparse_grpo}"
+  else
+    export AUTO_RESUME_MODE="${AUTO_RESUME_MODE:-dense_grpo}"
+  fi
+  exec bash "${REPO_ROOT}/scripts/train_with_auto_resume.sh" "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh"
+fi
+
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
 # GRPO artifacts (separate from DPO pipeline's rl_casino_masks / rl_casino_train); see docs/GRPO_HPC_COPYPASTE.md

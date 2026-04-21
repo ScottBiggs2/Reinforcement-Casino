@@ -33,6 +33,37 @@ Operational shell scripts live here so the repository root stays focused on sour
 - `h200_sparse_dpo_bsr_benchmark.sh` - **single H200 GPU** Slurm job: multi-phase BSR DPO throughput benchmark (dense AdamW + random-mask sparse phases). See [H200 BSR DPO benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) below.
 - `grpo_openr1_llama31_slurm.sh` - **Open-R1 Math GRPO** for `meta-llama/Llama-3.1-8B-Instruct` (dense `GRPO_train.py` or sparse `sparse_grpo_bsr.py`). Hyperparameters and env vars: [`docs/hyperparams/open_r1_llama31.yaml`](../docs/hyperparams/open_r1_llama31.yaml); runbook: [`docs/GRPO_OPEN_R1_RUNBOOK.md`](../docs/GRPO_OPEN_R1_RUNBOOK.md).
 - `plot_h200_bsr_benchmark.py` - **plots** `benchmark_training_log.csv` from that benchmark (throughput, loss, summary bars). Run locally or on a login node with pandas/matplotlib.
+- `training_resume_probe.py` - read the latest HF `checkpoint-*` under a run’s `checkpoints/` dir, compare `trainer_state.json` `global_step` to `NUM_STEPS_DPO` / `GRPO_TARGET_STEPS` (or `--target-steps`). Modes: `dense_dpo`, `sparse_dpo`, `dense_grpo`, `sparse_grpo`. Optional: `TRAINING_RESUME_CHECKPOINTS_DIR` to override path resolution.
+- `train_with_auto_resume.sh` - optional soft `timeout` around dense/sparse DPO or GRPO batch scripts; on timeout/SIGTERM, if the probe reports a resumable checkpoint, `sbatch` a continuation with `DPO_RESUME=auto` or `GRPO_RESUME=auto` (same `PIPELINE_RUN_ID` / `GRPO_RUN_NAME` / mask paths as the parent job). See [Automatic wall-time resume](#automatic-wall-time-resume) below.
+
+## Automatic wall-time resume
+
+Training scripts already support Hugging Face Trainer resume (`--resume_from_checkpoint auto`); shared helpers live in [`src/utils/grpo_checkpoint_utils.py`](../src/utils/grpo_checkpoint_utils.py). Sparse DPO (`sparse_dpo_efficiency.py`) and sparse GRPO (`sparse_grpo_bsr.py`) must keep the **same** mask path and run directory on every chunk; the smoke test [`sparse_grpo_resume_smoke.sh`](sparse_grpo_resume_smoke.sh) covers sparse GRPO resume.
+
+**Safety**
+
+- Set **`DPO_SAVE_STEPS`** / **`GRPO_SAVE_STEPS`** (and total limits) so checkpoints exist before a wall kill. If the job hits the Slurm wall **without** an inner soft `timeout`, the scheduler may **SIGKILL** the process — you can lose the last partial step and risk a truncated checkpoint. Prefer **`AUTO_RESUME_SOFT_SECONDS`** a few minutes **below** `#SBATCH --time`, similar in spirit to `TRAIN_TIMEOUT_PER_DATASET` in [`pipeline_common.sh`](pipeline_common.sh).
+- **`AUTO_RESUME_SOFT_SECONDS`** wraps the inner script with `timeout(1)` sending **SIGTERM** first (`--kill-after` allows a short grace window for the Trainer).
+
+**Sparse invariants**
+
+- Keep **`PIPELINE_MASK_FILE`** / **`GRPO_MASK`**, **`PIPELINE_RUN_ID`** / **`RUN_ID`**, and sparse **`run_name`** (`GRPO_RUN_NAME`) **identical** across continuation jobs. Do not change **`NUM_STEPS_DPO`** / **`GRPO_TARGET_STEPS`** between chunks (Trainer resumes `global_step` toward the same `max_steps`).
+
+**Integration (optional)**
+
+- Export **`USE_TRAIN_WITH_AUTO_RESUME=1`** and (for DPO dense) **`AUTO_RESUME_MODE=dense_dpo`**, **`AUTO_RESUME_SOFT_SECONDS=...`** before `sbatch` on [`pipeline_stage_01_dense.sh`](pipeline_stage_01_dense.sh), [`pipeline_sparse_one_mask.sh`](pipeline_sparse_one_mask.sh), or [`grpo_openr1_llama31_slurm.sh`](grpo_openr1_llama31_slurm.sh). Those scripts re-exec through `train_with_auto_resume.sh` at startup. For GRPO, **`AUTO_RESUME_MODE`** defaults from **`GRPO_MODE`** (`dense_grpo` vs `sparse_grpo`) if unset.
+- Or invoke the wrapper explicitly: `bash scripts/train_with_auto_resume.sh scripts/pipeline_stage_01_dense.sh` with the same environment you would pass to the inner script.
+- **`MAX_AUTO_RESUME`** (default 8) caps continuation jobs. Continuations increment **`AUTO_RESUME_CONTINUE`**.
+
+**Orchestrated queue** ([`orchestrate_masks_then_queue_dpo_grpo.slurm`](orchestrate_masks_then_queue_dpo_grpo.slurm))
+
+- **`ORCH_USE_TRAIN_AUTO_RESUME=1`** (default **0**): submit each downstream training job via [`orchestrate_training_child_entry.sh`](orchestrate_training_child_entry.sh), which runs [`train_with_auto_resume.sh`](train_with_auto_resume.sh) with the correct inner script (`pipeline_stage_01_dense.sh`, `pipeline_sparse_one_mask.sh`, or `grpo_openr1_llama31_slurm.sh`). Slurm **partition / GRES / wall / mem / log paths** are passed on the `sbatch` command line so they are not lost (embedded `#SBATCH` in the inner script is ignored for that submission path).
+- **`ORCH_TRAIN_SOFT_SECONDS`**: mapped to **`AUTO_RESUME_SOFT_SECONDS`** for the wrapper when opt-in is on; omit to run the inner script without a soft `timeout` (continuations still work if you set **`DPO_RESUME`** / **`GRPO_RESUME`** manually elsewhere).
+- **Scratch / probe**: the orchestrator exports **`TRAIN_OUT_BASE`**, **`SPARSE_OUT_BASE`**, **`GRPO_DENSE_OUTPUT_BASE`**, and **`GRPO_SPARSE_OUTPUT_BASE`** with defaults aligned to [`pipeline_common.sh`](pipeline_common.sh) and [`grpo_openr1_llama31_slurm.sh`](grpo_openr1_llama31_slurm.sh), plus explicit **`NUM_STEPS_DPO`** / **`GRPO_TARGET_STEPS`** (and GRPO save knobs), so [`training_resume_probe.py`](training_resume_probe.py) can resolve checkpoint directories after the inner job exits.
+- **Resources**: **`ORCH_TRAIN_PARTITION`**, **`ORCH_TRAIN_GRES`**, **`ORCH_TRAIN_MEM`**, **`ORCH_TRAIN_CPUS`** (GRPO only), **`ORCH_TRAIN_TIME_DPO`**, **`ORCH_TRAIN_TIME_GRPO`** override the cluster without editing the inner scripts.
+- Keep **`DPO_SAVE_STEPS`** / **`GRPO_SAVE_STEPS`** frequent enough relative to **`ORCH_TRAIN_SOFT_SECONDS`** and the requested Slurm wall so checkpoints exist before a soft timeout or scheduler kill.
+
+**Manual resume** (unchanged): re-`sbatch` with **`DPO_RESUME=auto`** or **`GRPO_RESUME=auto`** and the same run identifiers; see [`dpo_5k_hpc_copypaste.md`](dpo_5k_hpc_copypaste.md) and [`docs/GRPO_HPC_COPYPASTE.md`](../docs/GRPO_HPC_COPYPASTE.md).
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
 

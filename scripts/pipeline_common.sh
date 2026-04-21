@@ -53,7 +53,9 @@ echo "Scratch: SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}  TRAIN_OUT_BASE=${TRAIN_OU
 
 # Model / dataset (export HF_TOKEN for gated Llama; Tulu3 = allenai/llama-3.1-tulu-3-8b-preference-mixture)
 MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
-DPO_DATASETS=("tulu3")       # dataset registry keys; drives cold masks + sparse DPO
+# Registry key for DPO dense/sparse (override for e.g. light-r1). Nested sbatch jobs must export DPO_DATASET_KEY.
+DPO_DATASET_KEY="${DPO_DATASET_KEY:-tulu3}"
+DPO_DATASETS=("${DPO_DATASET_KEY}")
 # Dense DPO (--num_steps) and sparse DPO (--n_steps) both use this (paper defaults: scripts/README.md).
 NUM_STEPS_DPO="${NUM_STEPS_DPO:-250}"
 # Peak LR: passed explicitly to dense + sparse so magnitudes always match (default paper 5e-7).
@@ -71,6 +73,7 @@ DELTA_LOG_INTERVAL="${DELTA_LOG_INTERVAL:-50}"
 DELTA_LOG_END_STEP="${DELTA_LOG_END_STEP:-200}"
 
 # Slurm sbatch children only inherit exported variables — export training knobs so sparse GPU jobs match dense.
+export DPO_DATASET_KEY
 export NUM_STEPS_DPO
 export DPO_LEARNING_RATE
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE

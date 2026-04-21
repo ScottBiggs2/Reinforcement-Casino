@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from contextlib import nullcontext
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -27,8 +28,8 @@ def build_snip_masks_from_scores(
     min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
     add_tie_break_noise: bool = True,
 ) -> Dict[str, torch.Tensor]:
-    """Top-k binary masks from SNIP saliency scores; same pooling rules as other cold-start masks."""
-    return create_mask_from_scores_gpu_efficient(
+    """Top-k binary masks from SNIP saliency scores (``torch.bool``); same pooling rules as other cold masks."""
+    out = create_mask_from_scores_gpu_efficient(
         scores,
         sparsity_percent=sparsity_percent,
         device=device,
@@ -37,6 +38,8 @@ def build_snip_masks_from_scores(
         min_layer_keep_ratio=min_layer_keep_ratio,
         local_pool=local_pool,
     )
+    assert all(v.dtype == torch.bool for v in out.values()), "SNIP masks must be torch.bool"
+    return out
 
 
 def snip_save_metadata(
@@ -172,6 +175,16 @@ def dpo_style_preference_loss(
     return -F.logsigmoid(beta * margin).mean()
 
 
+def _collect_preference_batch_sizes(dataloader, num_batches: int) -> List[int]:
+    """First pass: batch sizes only (for global-mean gradient scaling)."""
+    sizes: List[int] = []
+    for idx, batch in enumerate(dataloader):
+        if idx >= num_batches:
+            break
+        sizes.append(int(batch["chosen_input_ids"].shape[0]))
+    return sizes
+
+
 def compute_snip_scores(
     model,
     dataloader,
@@ -179,35 +192,94 @@ def compute_snip_scores(
     num_batches: int,
     mlp_only: bool = False,
     preference_beta: float = 1.0,
+    *,
+    gradient_checkpointing: bool = True,
+    use_autocast: bool = True,
 ):
-    """Compute SNIP scores from gradients of ``dpo_style_preference_loss`` (pairwise preference)."""
+    """Compute SNIP scores from gradients of ``dpo_style_preference_loss`` (pairwise preference).
+
+    Uses gradient checkpointing (optional) and bf16 autocast on CUDA to limit activation memory.
+    Micro-batches should use small ``batch_size`` in the DataLoader (default 1 in callers) so each
+    step only builds one chosen+rejected graph at moderate width.
+
+    Gradients are accumulated with weights ``batch_size / N_total`` so ``.grad`` matches the gradient
+    of the **global mean** loss over all processed pairs (same as one backward on mean loss).
+    """
+    dev = torch.device(device)
+    use_cuda = dev.type == "cuda" and torch.cuda.is_available()
+
+    batch_sizes = _collect_preference_batch_sizes(dataloader, num_batches)
+    if not batch_sizes:
+        print("[compute_snip_scores] Warning: no batches; returning empty scores.")
+        return {}
+
+    n_total = sum(batch_sizes)
+    gc_was_on = bool(getattr(model, "is_gradient_checkpointing", False))
+    we_turned_gc_on = False
+    if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable") and not gc_was_on:
+        model.gradient_checkpointing_enable()
+        we_turned_gc_on = True
+
     model.train()
     model.zero_grad(set_to_none=True)
 
+    amp_dtype = torch.bfloat16
+    if use_cuda:
+        try:
+            p0 = next(model.parameters())
+            if p0.dtype == torch.float16:
+                amp_dtype = torch.float16
+        except StopIteration:
+            pass
+
     seen = 0
-    for idx, batch in enumerate(dataloader):
-        if idx >= num_batches:
-            break
+    try:
+        step_idx = 0
+        for batch in dataloader:
+            if step_idx >= num_batches:
+                break
+            bs = batch_sizes[step_idx]
+            scale = float(bs) / float(n_total)
 
-        chosen_ids = batch["chosen_input_ids"].to(device)
-        chosen_mask = batch["chosen_attention_mask"].to(device)
-        rejected_ids = batch["rejected_input_ids"].to(device)
-        rejected_mask = batch["rejected_attention_mask"].to(device)
+            chosen_ids = batch["chosen_input_ids"].to(device, non_blocking=True)
+            chosen_mask = batch["chosen_attention_mask"].to(device, non_blocking=True)
+            rejected_ids = batch["rejected_input_ids"].to(device, non_blocking=True)
+            rejected_mask = batch["rejected_attention_mask"].to(device, non_blocking=True)
 
-        chosen_logits = model(input_ids=chosen_ids, attention_mask=chosen_mask).logits
-        rejected_logits = model(input_ids=rejected_ids, attention_mask=rejected_mask).logits
+            ctx = (
+                torch.amp.autocast(device_type="cuda", dtype=amp_dtype, enabled=bool(use_autocast))
+                if use_cuda and use_autocast
+                else nullcontext()
+            )
 
-        loss = dpo_style_preference_loss(
-            chosen_logits=chosen_logits,
-            chosen_ids=chosen_ids,
-            chosen_mask=chosen_mask,
-            rejected_logits=rejected_logits,
-            rejected_ids=rejected_ids,
-            rejected_mask=rejected_mask,
-            beta=preference_beta,
-        )
-        loss.backward()
-        seen += 1
+            with ctx:
+                chosen_logits = model(input_ids=chosen_ids, attention_mask=chosen_mask).logits
+                rejected_logits = model(input_ids=rejected_ids, attention_mask=rejected_mask).logits
+
+                loss = dpo_style_preference_loss(
+                    chosen_logits=chosen_logits,
+                    chosen_ids=chosen_ids,
+                    chosen_mask=chosen_mask,
+                    rejected_logits=rejected_logits,
+                    rejected_ids=rejected_ids,
+                    rejected_mask=rejected_mask,
+                    beta=preference_beta,
+                )
+                loss_weighted = loss * scale
+
+            loss_weighted.backward()
+
+            del chosen_logits, rejected_logits, loss, loss_weighted
+            del chosen_ids, chosen_mask, rejected_ids, rejected_mask
+            if use_cuda:
+                torch.cuda.empty_cache()
+
+            seen += 1
+            step_idx += 1
+
+    finally:
+        if we_turned_gc_on and hasattr(model, "gradient_checkpointing_disable"):
+            model.gradient_checkpointing_disable()
 
     scores = {}
     with torch.no_grad():
@@ -222,5 +294,8 @@ def compute_snip_scores(
 
     model.zero_grad(set_to_none=True)
     model.eval()
-    print(f"[compute_snip_scores] Scored {len(scores)} matrices over {seen} batches.")
+    print(
+        f"[compute_snip_scores] Scored {len(scores)} matrices over {seen} batches "
+        f"(N_total={n_total}, grad_ckpt={gradient_checkpointing}, autocast={use_autocast and use_cuda})."
+    )
     return scores

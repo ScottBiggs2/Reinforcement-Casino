@@ -23,6 +23,7 @@ def generate_random_mask(
     mlp_only=False,
     compare_mask=None,
     min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+    seed=None,
 ):
     print(f"Generating random mask for {model_name} at {sparsity_percent}% sparsity...")
     if min_layer_keep_ratio > 0:
@@ -41,11 +42,17 @@ def generate_random_mask(
         low_cpu_mem_usage=True
     )
     
+    import time
+
+    if seed is not None:
+        torch.manual_seed(int(seed))
+    else:
+        torch.manual_seed(int(time.time()))
+
     total_params = 0
     scores = {}
-    
+
     # Identify target parameters
-    target_params = []
     for name, param in model.named_parameters():
         if 'weight' not in name:
             continue
@@ -55,12 +62,8 @@ def generate_random_mask(
             continue
         total_params += param.numel()
         scores[name] = torch.rand(param.shape, dtype=torch.float32)
-    
+
     print(f"Targeting {len(scores)} layers ({total_params:,} total parameters)")
-    
-    # Random seeds for true independence
-    import time
-    torch.manual_seed(int(time.time()))
     
     masks = create_mask_from_scores_gpu_efficient(
         scores,
@@ -123,8 +126,14 @@ if __name__ == "__main__":
             "Set to 0.0 for pure global selection."
         ),
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Optional RNG seed for reproducible random masks (default: time-based).",
+    )
     args = parser.parse_args()
-    
+
     generate_random_mask(
         args.model_name,
         args.sparsity_percent,
@@ -132,4 +141,5 @@ if __name__ == "__main__":
         args.mlp_only,
         args.compare_mask,
         args.min_layer_keep_ratio,
+        args.seed,
     )

@@ -205,7 +205,7 @@ def _collate_grpo_preference_pairs(batch, tokenizer, max_length: int) -> Dict[st
 
 def build_preference_snip_dataloader(args, tokenizer, chosen_texts, rejected_texts):
     """DPO: HF dataset + concatenated collator (matches cav_cold_mask_finder). GRPO: paired tokenization."""
-    batch_size = args.batch_size
+    batch_size = args.snip_preference_batch_size
     if args.mode == "dpo":
         ds_key = args.dataset_name or DPO_DATASET_NAME
         hf_id = resolve_hf_dataset_id(ds_key)
@@ -623,6 +623,8 @@ def main(args):
                 num_batches=args.snip_num_batches,
                 mlp_only=False,
                 preference_beta=args.snip_preference_beta,
+                gradient_checkpointing=args.snip_gradient_checkpointing,
+                use_autocast=not args.snip_no_autocast,
             )
         masks = build_snip_masks_from_scores(
             snip_scores,
@@ -641,6 +643,9 @@ def main(args):
         }
         if args.snip_objective == SNIP_OBJECTIVE_DPO_PREFERENCE:
             meta_extra["snip_num_batches"] = args.snip_num_batches
+            meta_extra["snip_preference_batch_size"] = args.snip_preference_batch_size
+            meta_extra["snip_gradient_checkpointing"] = bool(args.snip_gradient_checkpointing)
+            meta_extra["snip_autocast"] = not bool(args.snip_no_autocast)
         metadata = snip_save_metadata(
             snip_objective=args.snip_objective,
             sparsity_percent=args.sparsity,
@@ -836,6 +841,27 @@ if __name__ == "__main__":
         type=int,
         default=32,
         help="[SNIP dpo_preference] Maximum number of dataloader batches to accumulate.",
+    )
+    parser.add_argument(
+        "--snip-preference-batch-size",
+        type=int,
+        default=1,
+        help=(
+            "[SNIP dpo_preference] DataLoader batch size (default 1 minimizes VRAM: two long sequences per step)."
+        ),
+    )
+    parser.add_argument(
+        "--no-snip-gradient-checkpointing",
+        dest="snip_gradient_checkpointing",
+        action="store_false",
+        default=True,
+        help="[SNIP dpo_preference] Disable gradient checkpointing (faster, much higher VRAM).",
+    )
+    parser.add_argument(
+        "--snip-no-autocast",
+        action="store_true",
+        default=False,
+        help="[SNIP dpo_preference] Disable CUDA bf16 autocast around forward+loss.",
     )
 
     args = parser.parse_args()
