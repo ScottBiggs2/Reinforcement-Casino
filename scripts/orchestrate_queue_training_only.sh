@@ -10,6 +10,9 @@
 #   bash scripts/orchestrate_queue_training_only.sh
 #
 # Optional: ORCH_SBATCH_DEPENDENCY=afterok:12345   # only if you want an explicit dependency
+# If the scheduler rejects bursts of sbatch: ORCH_SLEEP_BETWEEN_SUBMIT_SEC=3
+# Paths must match the mask job: MASK_OUT_BASE, SCRATCH_USER_ROOT, MODEL, SPARSITY_PERCENT, GRPO_DATASET_HF.
+# Override any single file: ORCH_MASK_RANDOM_FILE=/abs/path/random_....pt
 #
 # Keep defaults in sync with scripts/orchestrate_masks_then_queue_dpo_grpo.slurm.
 set -euo pipefail
@@ -128,6 +131,7 @@ sanitize_model_name() {
 MODEL_SANITIZED="$(sanitize_model_name "$MODEL")"
 export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 
+# Exact names match orchestrate_masks_then_queue_dpo_grpo.slurm (random uses MODEL with /→_ only; not full sanitize).
 export MASK_RANDOM="${MASK_DIR}/random_${MODEL//\//_}_sparsity${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 export MASK_CAV="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_SNIP="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_${DPO_DS_KEY}_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
@@ -137,10 +141,53 @@ export MASK_GRPO_RANDOM="${MASK_RANDOM}"
 export MASK_GRPO_CAV="${GRPO_MASK_DIR}/grpo_cav_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
 export MASK_GRPO_SNIP="${GRPO_MASK_DIR}/grpo_snip_${GRPO_SNIP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
 
+# Optional: absolute paths if defaults do not match (e.g. different MODEL/SPARSITY in shell than mask run).
+if [ -n "${ORCH_MASK_RANDOM_FILE:-}" ]; then export MASK_RANDOM="${ORCH_MASK_RANDOM_FILE}"; MASK_GRPO_RANDOM="${MASK_RANDOM}"; export MASK_GRPO_RANDOM; fi
+if [ -n "${ORCH_MASK_CAV_FILE:-}" ]; then export MASK_CAV="${ORCH_MASK_CAV_FILE}"; fi
+if [ -n "${ORCH_MASK_SNIP_FILE:-}" ]; then export MASK_SNIP="${ORCH_MASK_SNIP_FILE}"; fi
+if [ -n "${ORCH_MASK_CAV_LIGHT_R1_FILE:-}" ]; then export MASK_CAV_LIGHT_R1="${ORCH_MASK_CAV_LIGHT_R1_FILE}"; fi
+if [ -n "${ORCH_MASK_SNIP_LIGHT_R1_FILE:-}" ]; then export MASK_SNIP_LIGHT_R1="${ORCH_MASK_SNIP_LIGHT_R1_FILE}"; fi
+if [ -n "${ORCH_MASK_GRPO_CAV_FILE:-}" ]; then export MASK_GRPO_CAV="${ORCH_MASK_GRPO_CAV_FILE}"; fi
+if [ -n "${ORCH_MASK_GRPO_SNIP_FILE:-}" ]; then export MASK_GRPO_SNIP="${ORCH_MASK_GRPO_SNIP_FILE}"; fi
+
+# If exact random path missing, pick the lone random_*_seed<RANDOM_MASK_SEED>.pt in MASK_DIR (handles MODEL/SPARSITY env drift).
+if [ ! -f "$MASK_RANDOM" ]; then
+  _pick=""
+  shopt -s nullglob
+  _cand=( "${MASK_DIR}"/random_*_seed"${RANDOM_MASK_SEED}".pt )
+  shopt -u nullglob
+  if [ "${#_cand[@]}" -eq 1 ] && [ -f "${_cand[0]}" ]; then
+    _pick="${_cand[0]}"
+  fi
+  if [ -n "$_pick" ]; then
+    echo "NOTE: using discovered random mask (expected path missing): ${_pick}" >&2
+    MASK_RANDOM="${_pick}"
+    MASK_GRPO_RANDOM="${MASK_RANDOM}"
+    export MASK_RANDOM MASK_GRPO_RANDOM
+  fi
+fi
+
+orch_mask_precheck_fail() {
+  local missing="$1"
+  echo "ERROR: expected mask file missing: ${missing}" >&2
+  echo "  MASK_DIR=${MASK_DIR}  MODEL=${MODEL}  SPARSITY_PERCENT=${SPARSITY_PERCENT}  DPO_DS_KEY=${DPO_DS_KEY}" >&2
+  if [ ! -d "${MASK_DIR}" ]; then
+    echo "  MASK_DIR is not a directory. Set MASK_OUT_BASE and/or SCRATCH_USER_ROOT to match the orchestrator run." >&2
+  else
+    echo "  Files in MASK_DIR (random + cold_* only):" >&2
+    ls -1 "${MASK_DIR}" 2>/dev/null | grep -E '^(random_|cold_)' || ls -1 "${MASK_DIR}" >&2
+  fi
+  echo "  Fix: export MODEL, SPARSITY_PERCENT, DPO_DS_KEY, MASK_OUT_BASE to match the mask job, or set ORCH_MASK_*_FILE overrides (see script header)." >&2
+  exit 1
+}
+
+if [ ! -d "${MASK_DIR}" ]; then
+  orch_mask_precheck_fail "${MASK_DIR}/"
+fi
+
 for f in "$MASK_RANDOM" "$MASK_CAV" "$MASK_SNIP" "$MASK_CAV_LIGHT_R1" "$MASK_SNIP_LIGHT_R1" "$MASK_GRPO_CAV" "$MASK_GRPO_SNIP"; do
   if [ ! -f "$f" ]; then
-    echo "ERROR: expected mask file missing: $f" >&2
-    exit 1
+    orch_mask_precheck_fail "$f"
   fi
 done
 
@@ -180,6 +227,7 @@ submit_training_job() {
       --export=ALL,"${export_extra},${bases_steps}" \
       "${inner_script}")
     echo "${label}: ${jid}"
+    if [ -n "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC:-}" ]; then sleep "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC}"; fi
     return
   fi
 
@@ -235,6 +283,7 @@ submit_training_job() {
     --export="${full_export}" \
     "${ORCH_TRAIN_ENTRY}")
   echo "${label}: ${jid}"
+  if [ -n "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC:-}" ]; then sleep "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC}"; fi
 }
 
 echo ""
