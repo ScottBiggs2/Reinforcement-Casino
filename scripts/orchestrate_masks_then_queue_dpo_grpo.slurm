@@ -163,10 +163,17 @@ fi
 # ORCH_TRAIN_PARTITION (default gpu), ORCH_TRAIN_GRES (default gpu:h200:1), ORCH_TRAIN_MEM (128G),
 # ORCH_TRAIN_TIME_DPO (07:45:00), ORCH_TRAIN_TIME_GRPO (08:00:00), ORCH_TRAIN_CPUS (8 for GRPO jobs).
 
-# W&B off by default for orchestrated cluster jobs unless you explicitly opt in
-export WANDB_MODE="${WANDB_MODE:-disabled}"
-export WANDB_DISABLED="${WANDB_DISABLED:-true}"
-export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+# W&B: default ON for training jobs.
+# Disable explicitly for speed ablations / benchmarks by setting ORCH_DISABLE_WANDB=1.
+export ORCH_DISABLE_WANDB="${ORCH_DISABLE_WANDB:-0}"
+if [ "${ORCH_DISABLE_WANDB}" = "1" ]; then
+  export WANDB_MODE="disabled"
+  export WANDB_DISABLED="true"
+  export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+  export WANDB_SILENT="${WANDB_SILENT:-true}"
+else
+  unset WANDB_DISABLED || true
+fi
 export GRPO_USE_WANDB="${GRPO_USE_WANDB:-0}"
 
 ########################################

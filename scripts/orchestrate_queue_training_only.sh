@@ -111,9 +111,18 @@ if [ "${ORCH_USE_TRAIN_AUTO_RESUME}" = "1" ] && [ -n "${ORCH_TRAIN_SOFT_SECONDS:
   export AUTO_RESUME_SOFT_SECONDS="${ORCH_TRAIN_SOFT_SECONDS}"
 fi
 
-export WANDB_MODE="${WANDB_MODE:-disabled}"
-export WANDB_DISABLED="${WANDB_DISABLED:-true}"
-export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+# W&B: default ON for training jobs.
+# The speed-ablation / benchmark workflows should disable W&B explicitly, not globally for all jobs.
+# Set ORCH_DISABLE_WANDB=1 to force-disable for everything submitted by this orchestrator.
+export ORCH_DISABLE_WANDB="${ORCH_DISABLE_WANDB:-0}"
+if [ "${ORCH_DISABLE_WANDB}" = "1" ]; then
+  export WANDB_MODE="disabled"
+  export WANDB_DISABLED="true"
+  export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
+  export WANDB_SILENT="${WANDB_SILENT:-true}"
+else
+  unset WANDB_DISABLED || true
+fi
 export GRPO_USE_WANDB="${GRPO_USE_WANDB:-0}"
 
 sanitize_model_name() {
