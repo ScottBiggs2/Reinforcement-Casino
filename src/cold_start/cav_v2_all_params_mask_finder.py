@@ -188,26 +188,19 @@ def _fit_l1_logreg_feature_importance(
     std = X.std(dim=0, keepdim=True, unbiased=False).clamp_min(1e-6)
     X = (X - mean) / std
 
-    # Parameters.
-    w = torch.zeros(X.shape[1], dtype=torch.float32)
-    b = torch.zeros((), dtype=torch.float32)
+    # Parameters must require grad for backward() to work.
+    w = torch.nn.Parameter(torch.zeros(X.shape[1], dtype=torch.float32))
+    b = torch.nn.Parameter(torch.zeros((), dtype=torch.float32))
+    opt = torch.optim.Adam([w, b], lr=float(lr))
 
-    # Simple optimizer loop (full-batch) on CPU.
+    # Full-batch optimization on CPU.
     for _ in range(int(epochs)):
+        opt.zero_grad(set_to_none=True)
         logits = X.mv(w) + b
-        # BCE with logits (mean)
         loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, y)
-        loss = loss + l1_lambda * w.abs().mean()
-
-        # Manual SGD/Adam isn't necessary; use autograd with a tiny Adam.
-        # Re-create grads each step to keep code simple.
+        loss = loss + float(l1_lambda) * w.abs().mean()
         loss.backward()
-        with torch.no_grad():
-            # Basic Adam-like update would need moments; keep simple SGD with decay.
-            w -= lr * w.grad
-            b -= lr * b.grad
-            w.grad.zero_()
-            b.grad.zero_()
+        opt.step()
 
     cav = w.detach().abs()
     cmin = float(cav.min().item())
@@ -355,7 +348,13 @@ def main(args) -> None:
     for k in keys:
         Xp = torch.cat(pos_acts[k], dim=0)
         Xn = torch.cat(neg_acts[k], dim=0)
-        s = _fit_l1_logreg_feature_importance(Xp, Xn)
+        s = _fit_l1_logreg_feature_importance(
+            Xp,
+            Xn,
+            epochs=args.probe_epochs,
+            lr=args.probe_lr,
+            l1_lambda=args.probe_l1,
+        )
         if s is None:
             continue
         feature_scores[k] = s
@@ -440,6 +439,9 @@ if __name__ == "__main__":
         action="store_true",
         help="Rank-collapse protection: multiply broadcast scores by |W|.",
     )
+    p.add_argument("--probe_epochs", type=int, default=200)
+    p.add_argument("--probe_lr", type=float, default=5e-2)
+    p.add_argument("--probe_l1", type=float, default=1e-3)
     p.add_argument("--output_file", type=str, default=None)
     p.add_argument("--coverage_gate_2d", type=float, default=0.995)
     p.add_argument("--coverage_report_out", type=str, default=None)
