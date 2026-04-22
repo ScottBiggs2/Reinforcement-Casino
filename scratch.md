@@ -58,6 +58,9 @@ Submitted batch job 6278652
            6278650       gpu orch_mas  biggs.s  R       0:25      1 d4055
 (base) [biggs.s@explorer-01 rl_casino]$ 
 
+Correct cav v2 re-launch: 6283111
+
+
 ---
 
 ### Mask-GT CSV sanity (finite CKA + effective rank before trusting PNGs)

@@ -81,6 +81,8 @@ def evaluate_coding(
     batch_size: Any = 1, # Coding tasks usually batch_size=1
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
+    max_gen_toks: Optional[int] = None,
+    max_model_len: Optional[int] = None,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -141,6 +143,14 @@ def evaluate_coding(
         explicit_value=apply_chat_template,
         verbose=verbose,
     )
+
+    # Long-CoT parity knobs (global override + per-benchmark default)
+    if max_gen_toks is None:
+        env_max = os.environ.get("EVAL_MAX_GEN_TOKS")
+        max_gen_toks = int(env_max) if env_max else 1024
+    if max_model_len is None:
+        env_len = os.environ.get("EVAL_MAX_MODEL_LEN")
+        max_model_len = int(env_len) if env_len else 4096
     
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
@@ -160,7 +170,7 @@ def evaluate_coding(
     # vLLM robustness flags
     if model == "vllm":
         # Explicit max_model_len to avoid auto-derivation bugs
-        base_model_args_parts.append("max_model_len=4096")
+        base_model_args_parts.append(f"max_model_len={max_model_len}")
         # Disable chunked prefill which can cause NoneType errors in 0.6.3
         base_model_args_parts.append("enable_chunked_prefill=False")
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
@@ -185,7 +195,7 @@ def evaluate_coding(
         "batch_size": batch_size,
         "gen_kwargs": {
             "temperature": 0.0,
-            "max_gen_toks": 512,
+            "max_gen_toks": max_gen_toks,
             "do_sample": False,
         }
     }

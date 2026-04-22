@@ -490,6 +490,14 @@ Examples:
         help="Batch size for evaluation (default: auto). Can be an integer or 'auto'."
     )
     parser.add_argument(
+        "--max_gen_toks", type=int, default=None,
+        help="Override max generation tokens (max_gen_toks) for benchmarks (recommended for long-CoT models)"
+    )
+    parser.add_argument(
+        "--max_model_len", type=int, default=None,
+        help="Override vLLM max_model_len (context length). Use higher values for long-CoT prompts/outputs."
+    )
+    parser.add_argument(
         "--use_vllm", action="store_true",
         help="Use vLLM as the backend for much faster evaluation (requires vllm package)"
     )
@@ -544,6 +552,8 @@ Examples:
         "device": args.device,
         "trust_remote_code": args.trust_remote_code,
         "apply_chat_template": args.apply_chat_template,
+        "max_gen_toks": args.max_gen_toks,
+        "max_model_len": args.max_model_len,
     }
     
     # Add benchmark-specific kwargs

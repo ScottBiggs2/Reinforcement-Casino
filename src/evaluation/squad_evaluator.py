@@ -170,18 +170,34 @@ def evaluate_squad_with_hf_evaluate(
                 prompt = f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
                 inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
                 
+                # Allow longer outputs for reasoning-heavy checkpoints, but keep bounded for SQuAD.
+                env_max = os.environ.get("EVAL_MAX_GEN_TOKS")
+                max_new_tokens = int(env_max) if env_max else 128
+                max_new_tokens = max(16, min(max_new_tokens, 256))
+
                 outputs = model.generate(
                     **inputs,
-                    max_new_tokens=50,
+                    max_new_tokens=max_new_tokens,
                     pad_token_id=tokenizer.eos_token_id,
                     do_sample=False,
                 )
                 full_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                # Extract answer (text after "Answer:")
-                if "Answer:" in full_text:
-                    prediction_text = full_text.split("Answer:")[-1].strip()
-                else:
-                    prediction_text = full_text[len(prompt):].strip()
+                # Extract answer robustly (CoT-safe): prefer explicit markers, otherwise take first non-empty line.
+                import re
+
+                tail = full_text
+                if "Answer:" in tail:
+                    tail = tail.split("Answer:")[-1]
+                m = re.search(r"(final answer|answer)\s*:\s*(.+)$", tail, flags=re.IGNORECASE | re.MULTILINE)
+                if m:
+                    tail = m.group(2)
+
+                # Prefer the first non-empty line; SQuAD expects short spans.
+                lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+                prediction_text = lines[0] if lines else tail.strip()
+
+                # Strip common wrappers.
+                prediction_text = prediction_text.strip().strip("`").strip()
             
             predictions.append({
                 "id": example["id"],
@@ -221,6 +237,8 @@ def evaluate_squad_with_lm_eval(
     batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
+    max_gen_toks: Optional[int] = None,
+    max_model_len: Optional[int] = None,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -294,6 +312,14 @@ def evaluate_squad_with_lm_eval(
     if verbose:
         print(f"Final decision: apply_chat_template = {apply_chat_template}")
 
+    # Long-CoT parity knobs (global override + per-benchmark default)
+    if max_gen_toks is None:
+        env_max = os.environ.get("EVAL_MAX_GEN_TOKS")
+        max_gen_toks = int(env_max) if env_max else 256
+    if max_model_len is None:
+        env_len = os.environ.get("EVAL_MAX_MODEL_LEN")
+        max_model_len = int(env_len) if env_len else 4096
+
     # Convert to absolute path if it's a local path (for lm-eval compatibility)
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
@@ -315,7 +341,7 @@ def evaluate_squad_with_lm_eval(
     # vLLM robustness flags
     if model == "vllm":
         # Explicit max_model_len to avoid auto-derivation bugs
-        base_model_args_parts.append("max_model_len=4096")
+        base_model_args_parts.append(f"max_model_len={max_model_len}")
         # Disable chunked prefill which can cause NoneType errors in 0.6.3
         base_model_args_parts.append("enable_chunked_prefill=False")
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
@@ -377,7 +403,7 @@ def evaluate_squad_with_lm_eval(
                         # Set generation parameters for proper evaluation
                         "gen_kwargs": {
                             "temperature": 0.0,  # Deterministic for fair evaluation
-                            "max_gen_toks": 128,  # Sufficient for SQuAD answers
+                            "max_gen_toks": max_gen_toks,
                         }
                     }
                     # Only pass device for non-vllm models (vllm handles devices internally)

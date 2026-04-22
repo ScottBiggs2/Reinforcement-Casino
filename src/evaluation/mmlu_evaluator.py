@@ -46,6 +46,8 @@ def evaluate_mmlu(
     batch_size: Any = "auto",
     trust_remote_code: bool = False,
     apply_chat_template: Optional[bool] = None,
+    max_gen_toks: Optional[int] = None,
+    max_model_len: Optional[int] = None,
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -121,6 +123,14 @@ def evaluate_mmlu(
     if verbose:
         print(f"Final decision: apply_chat_template = {apply_chat_template}")
 
+    # Long-CoT parity knobs (global override + per-benchmark default)
+    if max_gen_toks is None:
+        env_max = os.environ.get("EVAL_MAX_GEN_TOKS")
+        max_gen_toks = int(env_max) if env_max else 512
+    if max_model_len is None:
+        env_len = os.environ.get("EVAL_MAX_MODEL_LEN")
+        max_model_len = int(env_len) if env_len else 4096
+
     # Convert to absolute path if it's a local path (for lm-eval compatibility)
     if os.path.exists(model_path):
         model_path = os.path.abspath(model_path)
@@ -148,7 +158,7 @@ def evaluate_mmlu(
     # vLLM robustness flags
     if model == "vllm":
         # Explicit max_model_len to avoid auto-derivation bugs
-        base_model_args_parts.append("max_model_len=4096")
+        base_model_args_parts.append(f"max_model_len={max_model_len}")
         # Disable chunked prefill which can cause NoneType errors in 0.6.3
         base_model_args_parts.append("enable_chunked_prefill=False")
         # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
@@ -173,7 +183,7 @@ def evaluate_mmlu(
         print(f"Model: {model_path}")
         print(f"Device: {device}, Dtype: {dtype_str}")
         print(f"Chat template: {apply_chat_template}")
-        print(f"Generation params: temperature=0.0, max_gen_toks=256")
+        print(f"Generation params: temperature=0.0, max_gen_toks={max_gen_toks}")
         if limit:
             print(f"Limiting to {limit} examples per task")
     else:
@@ -201,6 +211,10 @@ def evaluate_mmlu(
                     "num_fewshot": num_fewshot,
                     "limit": limit,
                     "batch_size": batch_size,
+                    "gen_kwargs": {
+                        "temperature": 0.0,
+                        "max_gen_toks": max_gen_toks,
+                    },
                 }
                 # Only pass device for non-vllm models (vllm handles devices internally)
                 if model != "vllm":

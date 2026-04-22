@@ -1,5 +1,47 @@
 import os
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional, Tuple
+
+
+def _materialize_chat_template(tokenizer: Any, model_path: str) -> Tuple[Optional[str], str]:
+    """
+    Return a concrete chat-template string if available.
+
+    Transformers may represent chat templates as:
+    - a string (ideal)
+    - a dict-like (multiple templates)
+    - absent on local checkpoints even when `chat_template.jinja` exists
+    """
+    try:
+        raw = getattr(tokenizer, "chat_template", None)
+    except Exception:
+        raw = None
+
+    if isinstance(raw, str) and raw.strip():
+        return raw, "tokenizer.chat_template (string)"
+
+    # Some versions expose multiple templates (dict-like). Pick deterministically.
+    if isinstance(raw, dict) and raw:
+        for key in ("default", "chat", "llama-3", "llama3", "instruct"):
+            val = raw.get(key)
+            if isinstance(val, str) and val.strip():
+                return val, f"tokenizer.chat_template[{key!r}]"
+        # Fall back to first non-empty string value.
+        for key, val in raw.items():
+            if isinstance(val, str) and val.strip():
+                return val, f"tokenizer.chat_template[{key!r}]"
+
+    # Local checkpoints often have a `chat_template.jinja` sidecar.
+    try:
+        template_path = Path(model_path) / "chat_template.jinja"
+        if template_path.exists():
+            text = template_path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                return text, "chat_template.jinja"
+    except Exception:
+        pass
+
+    return None, "no_chat_template"
 
 
 def has_chat_template(model_path: str) -> bool:
@@ -7,7 +49,8 @@ def has_chat_template(model_path: str) -> bool:
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-        return tokenizer.chat_template is not None
+        template, _ = _materialize_chat_template(tokenizer, model_path)
+        return template is not None
     except Exception:
         return False
 
@@ -38,16 +81,27 @@ def auto_detect_apply_chat_template(
     is_local_path = os.path.exists(model_path)
 
     if is_local_path:
-        local_has_template = has_chat_template(model_path)
-        if local_has_template:
+        try:
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+            template, source = _materialize_chat_template(tokenizer, model_path)
+        except Exception:
+            template, source = None, "tokenizer_load_failed"
+
+        if template is not None:
             if verbose:
-                print("✓ Local tokenizer exposes chat_template; enabling chat template")
+                print(f"✓ Local checkpoint has chat template ({source}); enabling chat template")
             return True
+
         if verbose:
             if path_has_instruct:
-                print("⚠ Local checkpoint path looks instruct-tuned, but tokenizer.chat_template is missing; disabling chat template")
+                print(
+                    "⚠ Local checkpoint path looks instruct-tuned, but no usable chat template was found "
+                    f"({source}); disabling chat template"
+                )
             else:
-                print("⚠ Local checkpoint tokenizer has no chat_template; disabling chat template")
+                print(f"⚠ Local checkpoint has no usable chat template ({source}); disabling chat template")
         return False
 
     if verbose:
