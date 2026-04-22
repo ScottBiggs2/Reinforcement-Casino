@@ -45,6 +45,11 @@ parser.add_argument(
 )
 parser.add_argument("--num_generations", type=int, default=8)
 parser.add_argument("--generation_batch_size", type=int, default=8)
+parser.add_argument("--max_completion_length", type=int, default=2048,
+                    help="Max generated completion length. 512 is too small for "
+                         "R1-style math reasoning (clipped_ratio hits 1.0); use 2048.")
+parser.add_argument("--max_prompt_length", type=int, default=512)
+parser.add_argument("--learning_rate", type=float, default=5e-6)
 args = parser.parse_args()
 
 os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir
@@ -99,7 +104,7 @@ cfg = GRPOConfig(
     report_to=["wandb"] if args.use_wandb else [],
     per_device_train_batch_size=1,
     gradient_accumulation_steps=8,
-    learning_rate=5e-6,
+    learning_rate=args.learning_rate,
     max_steps=NUM_STEPS,
     num_train_epochs=1,
     bf16=True, fp16=False,
@@ -111,8 +116,8 @@ cfg = GRPOConfig(
     remove_unused_columns=False,
     num_generations=args.num_generations,
     generation_batch_size=args.generation_batch_size,
-    max_completion_length=512,
-    max_prompt_length=256,
+    max_completion_length=args.max_completion_length,
+    max_prompt_length=args.max_prompt_length,
     beta=0.1,
 )
 

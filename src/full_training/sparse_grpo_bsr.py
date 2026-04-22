@@ -77,7 +77,8 @@ def train(
     block_size_adam, optimizer_type, use_wandb, max_grad_norm,
     adam_beta1, adam_beta2, adam_eps, grpo_beta, warmup_steps,
     disable_tf32, save_model, dataset_key, output_base_dir, dataset_cache_dir,
-    num_generations, generation_batch_size, grad_accum
+    num_generations, generation_batch_size, grad_accum,
+    max_completion_length=2048, max_prompt_length=512,
 ):
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
@@ -179,8 +180,8 @@ def train(
         remove_unused_columns=False,
         num_generations=num_generations,
         generation_batch_size=generation_batch_size,
-        max_completion_length=1024,
-        max_prompt_length=512,
+        max_completion_length=max_completion_length,
+        max_prompt_length=max_prompt_length,
         beta=grpo_beta,
         warmup_steps=warmup_steps,
     )
@@ -287,6 +288,10 @@ if __name__ == "__main__":
     parser.add_argument("--grpo_beta", type=float, default=0.1)
     parser.add_argument("--warmup_steps", type=int, default=0)
     parser.add_argument("--disable_tf32", action="store_true")
+    parser.add_argument("--max_completion_length", type=int, default=2048,
+                        help="Max generated completion length (default 2048). Raise if "
+                             "'completions/clipped_ratio' is close to 1.0 in logs.")
+    parser.add_argument("--max_prompt_length", type=int, default=512)
     
     args = parser.parse_args()
     
@@ -317,5 +322,7 @@ if __name__ == "__main__":
         dataset_cache_dir=args.dataset_cache_dir,
         num_generations=args.num_generations,
         generation_batch_size=args.generation_batch_size,
-        grad_accum=args.grad_accum
+        grad_accum=args.grad_accum,
+        max_completion_length=args.max_completion_length,
+        max_prompt_length=args.max_prompt_length,
     )

@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-Run the pairwise-ranking probe over baseline + 12 masks in a single job.
+Run the pairwise-ranking probe over baseline + N masks in a single job.
 
 Baseline activations are collected exactly once. Each mask re-uses the
 already-loaded model + tokenizer + cached probe dataset, so the only extra
 cost per mask is one inference pass over the probe texts.
 
-Output: one JSON with 13 configs (baseline + 12) keyed by display label,
-plus absolute and Δ heatmaps.
+Output: one JSON with (baseline + N) configs keyed by display label, plus
+absolute and Δ heatmaps.
+
+Default mask set is the 6-config oracle/cav/random study across DPO and
+GRPO sides; override with --masks_json to run any other list.
 
 Usage (cluster default paths):
-    python src/analysis/probe_pair_12masks.py \\
+    python src/analysis/probe_pair_masks.py \\
         --model meta-llama/Llama-3.1-8B-Instruct \\
-        --output_dir /scratch/$USER/probe_pair_12masks/
+        --output_dir /scratch/$USER/probe_pair_masks/
 
 Override masks via JSON list:
-    python src/analysis/probe_pair_12masks.py \\
+    python src/analysis/probe_pair_masks.py \\
         --masks_json my_masks.json ...
-where my_masks.json = [{"label": "Cold-SNIP-DPO", "path": "/.../cold_snip_dpo.pt"}, ...]
+where my_masks.json = [{"label": "Cold-CAV-DPO", "path": "/.../cold_cav_dpo.pt"}, ...]
 """
 
 import argparse
@@ -52,25 +55,18 @@ from analysis.probe_analysis_pair import train_pairwise_probes
 
 
 # ---------------------------------------------------------------------------
-# Default 12-mask layout (matches plot_12mask_probe.py panel order)
+# Default 6-mask layout: Oracle (Warm-Magnitude) / Cold-CAV / Random,
+# evaluated on both DPO and GRPO sides. Override with --masks_json.
 # ---------------------------------------------------------------------------
 DEFAULT_MASKS = [
-    # Cold-start DPO
-    {"label": "Cold-SNIP-DPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_snip_dpo.pt"},
-    {"label": "Cold-CAV-DPO",     "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_dpo.pt"},
-    {"label": "Cold-Fisher-DPO",  "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_fisher_dpo.pt"},
-    # Warm-start DPO (step50 sp97.5 files)
-    {"label": "Warm-Fisher-DPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_fisher_step50_sp97.5.pt"},
-    {"label": "Warm-Magnitude-DPO", "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_magnitude_step50_sp97.5.pt"},
-    {"label": "Warm-Momentum-DPO",  "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_momentum_step50_sp97.5.pt"},
-    # Cold-start GRPO
-    {"label": "Cold-SNIP-GRPO",   "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_snip_grpo.pt"},
-    {"label": "Cold-CAV-GRPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_grpo.pt"},
-    {"label": "Cold-Fisher-GRPO", "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_fisher_grpo.pt"},
-    # Warm-start GRPO
-    {"label": "Warm-Fisher-GRPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/warm_fisher_grpo.pt"},
-    {"label": "Warm-Magnitude-GRPO", "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/warm_magnitude_grpo.pt"},
-    {"label": "Warm-Momentum-GRPO",  "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/warm_momentum_grpo.pt"},
+    # DPO side
+    {"label": "Oracle-DPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_magnitude_step50_sp97.5.pt"},
+    {"label": "Cold-CAV-DPO",  "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_dpo.pt"},
+    {"label": "Random-DPO",    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/random_baseline_dpo_sp97.5_seed42.pt"},
+    # GRPO side
+    {"label": "Oracle-GRPO",   "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/warm_magnitude_grpo.pt"},
+    {"label": "Cold-CAV-GRPO", "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_grpo.pt"},
+    {"label": "Random-GRPO",   "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/random_baseline_grpo_sp97.5_seed42.pt"},
 ]
 
 BASELINE_KEY = "Baseline\n(no mask)"
@@ -78,12 +74,13 @@ BASELINE_KEY = "Baseline\n(no mask)"
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Pairwise ranking probe over baseline + 12 masks"
+        description="Pairwise ranking probe over baseline + N masks"
     )
     p.add_argument("--model", default="meta-llama/Llama-3.1-8B-Instruct")
     p.add_argument("--masks_json", default=None,
-                   help="Path to JSON list of {label, path}. Defaults to built-in 12.")
-    p.add_argument("--output_dir", default="probe_pair_12masks")
+                   help="Path to JSON list of {label, path}. Defaults to "
+                        "the built-in 6-mask oracle/cav/random set.")
+    p.add_argument("--output_dir", default="probe_pair_masks")
     p.add_argument("--layer_stride", type=int, default=4)
     p.add_argument("--batch_size", type=int, default=8)
     p.add_argument("--max_length", type=int, default=256)
@@ -98,7 +95,20 @@ def parse_args():
                    help="When --holdout_frac > 0, use holdout accuracy as the "
                         "primary 'test' value used by summaries and plots. "
                         "CV diagnostics remain in cv_* fields.")
-    p.add_argument("--samples_per_class", type=int, default=None)
+    p.add_argument("--probe_C", type=float, default=1.0,
+                   help="L2 regularization strength for the logistic probe. "
+                        "Lower = stronger (default: 1.0; try 0.1 when adding "
+                        "preference probes to curb overfitting).")
+    p.add_argument("--samples_per_class", type=int, default=None,
+                   help="Per-class cap for the 4 benchmark probes "
+                        "(syntax/semantics/factual/math).")
+    p.add_argument("--preference_samples_per_class", type=int, default=1000,
+                   help="Per-class cap for tulu3/open-r1 preference probes "
+                        "(scheme C). Default 1000 gives ~8000 pair rows which "
+                        "brings p/n below the overfitting threshold.")
+    p.add_argument("--no_preference", action="store_true",
+                   help="Disable tulu3/open-r1 preference probes; run only "
+                        "the original 4-benchmark setup.")
     p.add_argument("--dataset_cache_dir", default=None)
     p.add_argument("--probe_cache", default=None)
     p.add_argument("--skip_baseline", action="store_true",
@@ -111,12 +121,18 @@ def parse_args():
 def load_probe_datasets(args):
     """Load (or build + cache) the HF probe datasets — shared format with probe_analysis.py."""
     cache_dir = args.dataset_cache_dir or os.environ.get("HF_DATASETS_CACHE")
-    _CACHE_VERSION = "v2"
+    # v3: adds tulu3 dpo_preference + open-r1 grpo_preference (scheme C).
+    # Preference probes have different per-class counts than benchmarks, so
+    # old v2 caches (which required equal N across properties) aren't reusable.
+    _CACHE_VERSION = "v3"
     if args.probe_cache:
         probe_cache_path = args.probe_cache
     else:
         n_tag = args.samples_per_class if args.samples_per_class is not None else "all"
-        cache_name = f"probe_dataset_cache_{_CACHE_VERSION}_n{n_tag}_seed42.json"
+        pref_tag = "none" if args.no_preference else f"p{args.preference_samples_per_class}"
+        cache_name = (
+            f"probe_dataset_cache_{_CACHE_VERSION}_n{n_tag}_{pref_tag}_seed42.json"
+        )
         probe_cache_path = os.path.join(args.output_dir, os.pardir, cache_name)
         probe_cache_path = os.path.normpath(probe_cache_path)
 
@@ -131,22 +147,27 @@ def load_probe_datasets(args):
     else:
         datasets = _load_hf_probe_datasets(
             samples_per_class=args.samples_per_class,
+            preference_samples_per_class=args.preference_samples_per_class,
             cache_dir=cache_dir,
+            include_preference=not args.no_preference,
         )
         os.makedirs(os.path.dirname(probe_cache_path), exist_ok=True)
         with open(probe_cache_path, "w") as f:
             json.dump(datasets, f)
         print(f"[data] Cached probe dataset → {probe_cache_path}")
 
-    # Sanity: equal size, balanced labels
-    expected_n = None
+    # Sanity: each property is pos/neg balanced. Sizes may differ *across*
+    # properties now (preference probes use a higher cap than benchmarks), so
+    # we no longer require a single expected_n — each property stands alone.
     for prop_name, prop_data in datasets.items():
         n = len(prop_data["examples"])
-        if expected_n is None:
-            expected_n = n
-        assert n == expected_n, f"'{prop_name}' has {n}, expected {expected_n}"
         lbls = [l for _, l in prop_data["examples"]]
-        assert sum(1 for l in lbls if l == 1) == sum(1 for l in lbls if l == 0)
+        n_pos = sum(1 for l in lbls if l == 1)
+        n_neg = sum(1 for l in lbls if l == 0)
+        assert n_pos == n_neg, (
+            f"'{prop_name}' unbalanced: {n_pos} pos vs {n_neg} neg (n={n})"
+        )
+        print(f"[data]   {prop_name:18s}  n={n}  (pos={n_pos}, neg={n_neg})")
     return datasets
 
 
@@ -189,6 +210,7 @@ def evaluate_config(model, tokenizer, extractor, all_texts, args,
             n_jobs=args.n_jobs,
             holdout_frac=args.holdout_frac,
             use_holdout_as_test=args.use_holdout_as_test,
+            probe_C=args.probe_C,
         )
         prop_results[prop_name] = layer_accs
         prop_dt = time.time() - prop_t0

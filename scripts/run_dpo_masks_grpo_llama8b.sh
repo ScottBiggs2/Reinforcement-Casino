@@ -12,18 +12,21 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:4
 #SBATCH --mem=256G
-#SBATCH --time=08:00:00
+#SBATCH --time=07:45:00
 
-# === CONFIGURATION ===
-MODEL="meta-llama/Llama-3.1-8B-Instruct"
-DATASET="math-220k"
-N_STEPS=200
-SUBSET=512
-BATCH_SIZE=1
-NUM_GENERATIONS=8
-GEN_BATCH_SIZE=8
-LR=1e-6
-WANDB_PROJECT="huggingface"
+# === CONFIGURATION === (env-overridable for monitor auto-intervention)
+MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+DATASET="${DATASET:-math-220k}"
+N_STEPS="${N_STEPS:-60}"
+SUBSET="${SUBSET:-512}"
+BATCH_SIZE="${BATCH_SIZE:-1}"
+NUM_GENERATIONS="${NUM_GENERATIONS:-8}"
+GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-8}"
+LR="${LR:-5e-6}"
+MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
+MAX_COMPLETION_LENGTH="${MAX_COMPLETION_LENGTH:-2048}"
+MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-512}"
+WANDB_PROJECT="${WANDB_PROJECT:-huggingface}"
 
 # === STORAGE (all on /scratch) ===
 export HF_HOME="/scratch/$USER/hf_cache"
@@ -108,6 +111,9 @@ if [ -n "${MASK_PATH:-}" ] && [ -f "$MASK_PATH" ]; then
         --num_generations "$NUM_GENERATIONS" \
         --generation_batch_size "$GEN_BATCH_SIZE" \
         --lr "$LR" \
+        --max_grad_norm "$MAX_GRAD_NORM" \
+        --max_completion_length "$MAX_COMPLETION_LENGTH" \
+        --max_prompt_length "$MAX_PROMPT_LENGTH" \
         --optimizer sparse_adamw \
         --mask "$MASK_PATH" \
         --output_base_dir "$OUTPUT_DIR" \
@@ -129,6 +135,9 @@ else
         --dataset_cache_dir "$HF_DATASETS_CACHE" \
         --num_generations "$NUM_GENERATIONS" \
         --generation_batch_size "$GEN_BATCH_SIZE" \
+        --max_completion_length "$MAX_COMPLETION_LENGTH" \
+        --max_prompt_length "$MAX_PROMPT_LENGTH" \
+        --learning_rate "$LR" \
         --use_wandb \
         --run_name "$RUN_NAME" 2>&1
 fi

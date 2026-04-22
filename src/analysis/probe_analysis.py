@@ -54,17 +54,43 @@ from cold_start.utils.activation_hooks import FeatureExtractor
 # the previous 30-per-class hand-written set.
 # ---------------------------------------------------------------------------
 
+def _tulu3_extract_response(messages) -> str:
+    """Pull the last assistant turn's content from tulu3 chosen/rejected.
+
+    tulu3 chosen/rejected fields are list-of-dicts in chat-message format:
+        [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+    We want only the assistant response so probe activations aren't dominated
+    by the shared prompt tokens.
+    """
+    if not isinstance(messages, list):
+        return ""
+    asst = [m for m in messages if isinstance(m, dict) and m.get("role") == "assistant"]
+    if not asst:
+        return ""
+    return str(asst[-1].get("content", "")).strip()
+
+
 def _load_hf_probe_datasets(samples_per_class: int = None,
-                            cache_dir: str = None, seed: int = 42) -> dict:
+                            preference_samples_per_class: int = 1000,
+                            cache_dir: str = None, seed: int = 42,
+                            include_preference: bool = True) -> dict:
     """Load probe datasets from HuggingFace and return in the same format
     as the old hardcoded PROBE_DATASETS dict.
 
     Args:
-        samples_per_class: Max samples per class. None = use all available data
-                           (balanced to the smallest class across all properties).
+        samples_per_class: Max per-class cap for the 4 generic benchmark probes
+            (syntax/semantics/factual/math). They are also balanced to the
+            smallest class across benchmarks.
+        preference_samples_per_class: Per-class cap for the tulu3 / open-r1
+            preference probes (scheme C). Kept independent of the benchmark
+            cap so preference probes can use enough samples (~1000/class) to
+            push p/n below the overfitting threshold, while benchmarks stay
+            small to keep comparisons fast.
         cache_dir: HuggingFace datasets cache directory.
-        seed: Random seed for shuffling order (not for subsetting when using
-              full data).
+        seed: Random seed for shuffling order.
+        include_preference: When True, also load tulu3 (dpo_preference) and
+            open-r1 (grpo_preference). Set False to reproduce the original
+            4-property setup.
 
     Returns:
         {property_name: {"description": str, "examples": [(text, label), ...]}}
@@ -172,21 +198,114 @@ def _load_hf_probe_datasets(samples_per_class: int = None,
         }
         print(f"[data]   math (MMLU fallback): {len(classA)} classA, {len(classB)} classB")
 
-    # ── Balance: use full data, equalized to smallest class ──────────────
-    # Find the global min class size across all properties
-    global_min = min(
+    # ── 5. DPO preference: tulu3 chosen vs rejected ──────────────────────
+    pref_datasets = {}
+    if include_preference:
+        print(f"[data] Loading dpo_preference probe (tulu3)...")
+        try:
+            tulu = load_dataset(
+                "allenai/llama-3.1-tulu-3-8b-preference-mixture",
+                split="train", cache_dir=cache_dir,
+            )
+            # Avoid loading 330k rows into memory — subsample deterministically.
+            target_rows = max(preference_samples_per_class * 4, 5000)
+            tulu = tulu.shuffle(seed=seed).select(
+                range(min(target_rows, len(tulu)))
+            )
+            pos_t, neg_t = [], []
+            for row in tulu:
+                c = _tulu3_extract_response(row.get("chosen"))
+                r = _tulu3_extract_response(row.get("rejected"))
+                if not c or not r or c == r:
+                    continue
+                pos_t.append((c, 1))
+                neg_t.append((r, 0))
+                if len(pos_t) >= preference_samples_per_class * 2:
+                    break
+            if pos_t and neg_t:
+                pref_datasets["dpo_preference"] = {
+                    "description": "DPO preference (tulu3; 1=chosen response, 0=rejected response)",
+                    "pos": pos_t, "neg": neg_t,
+                }
+                print(f"[data]   dpo_preference: {len(pos_t)} chosen, {len(neg_t)} rejected")
+            else:
+                print("[data]   WARNING: tulu3 yielded no valid pairs, skipping")
+        except Exception as e:
+            print(f"[data]   WARNING: tulu3 load failed ({e}); skipping dpo_preference")
+
+        # ── 6. GRPO preference: open-r1 correct vs incorrect generation ─
+        print(f"[data] Loading grpo_preference probe (OpenR1-Math-220k)...")
+        try:
+            r1 = load_dataset(
+                "open-r1/OpenR1-Math-220k",
+                split="train", cache_dir=cache_dir,
+            )
+            target_rows = max(preference_samples_per_class * 4, 5000)
+            r1 = r1.shuffle(seed=seed).select(
+                range(min(target_rows, len(r1)))
+            )
+            pos_r, neg_r = [], []
+            for row in r1:
+                gens = row.get("generations") or []
+                # correctness_math_verify preferred (rule-based); fall back to llm
+                corr = row.get("correctness_math_verify")
+                if not corr:
+                    corr = row.get("correctness_llm") or []
+                if not gens or len(corr) != len(gens):
+                    continue
+                correct = [g for g, c in zip(gens, corr) if c and g]
+                wrong = [g for g, c in zip(gens, corr) if not c and g]
+                if not correct or not wrong:
+                    continue
+                pos_r.append((str(correct[0]), 1))
+                neg_r.append((str(wrong[0]), 0))
+                if len(pos_r) >= preference_samples_per_class * 2:
+                    break
+            if pos_r and neg_r:
+                pref_datasets["grpo_preference"] = {
+                    "description": "GRPO preference (OpenR1-Math-220k; 1=correct reasoning, 0=incorrect reasoning)",
+                    "pos": pos_r, "neg": neg_r,
+                }
+                print(f"[data]   grpo_preference: {len(pos_r)} correct, {len(neg_r)} incorrect")
+            else:
+                print("[data]   WARNING: open-r1 yielded no valid (correct, incorrect) pairs, skipping")
+        except Exception as e:
+            print(f"[data]   WARNING: open-r1 load failed ({e}); skipping grpo_preference")
+
+    # ── Balance benchmarks to cross-benchmark min, preference independently ──
+    # Benchmarks (syntax/semantics/factual/math) stay balanced to their shared
+    # min so plots align. Preference (tulu3/open-r1) balances only within
+    # itself — that lets preference use ~10x more samples than benchmarks,
+    # which is what we need to bring p/n out of overfitting territory.
+    bench_min = min(
         min(len(d["pos"]), len(d["neg"])) for d in datasets.values()
     )
     if samples_per_class is not None:
-        global_min = min(global_min, samples_per_class)
+        bench_min = min(bench_min, samples_per_class)
+    print(f"[data] Balancing benchmarks to {bench_min} per class "
+          f"({bench_min * 2} per property, {bench_min * 2 * len(datasets)} total)")
 
-    print(f"[data] Balancing all properties to {global_min} per class "
-          f"({global_min * 2} per property, {global_min * 2 * len(datasets)} total)")
+    if pref_datasets:
+        pref_min = min(
+            min(len(d["pos"]), len(d["neg"])) for d in pref_datasets.values()
+        )
+        pref_min = min(pref_min, preference_samples_per_class)
+        print(f"[data] Balancing preference probes to {pref_min} per class "
+              f"({pref_min * 2} per property, {pref_min * 2 * len(pref_datasets)} total)")
 
     result = {}
     for prop_name, d in datasets.items():
-        pos = d["pos"][:global_min]
-        neg = d["neg"][:global_min]
+        pos = d["pos"][:bench_min]
+        neg = d["neg"][:bench_min]
+        examples = pos + neg
+        rng.shuffle(examples)
+        result[prop_name] = {
+            "description": d["description"],
+            "examples": examples,
+        }
+    for prop_name, d in pref_datasets.items():
+        pos = d["pos"][:pref_min]
+        neg = d["neg"][:pref_min]
         examples = pos + neg
         rng.shuffle(examples)
         result[prop_name] = {

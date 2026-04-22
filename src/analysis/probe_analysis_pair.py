@@ -100,11 +100,11 @@ def _make_pair_dataset(X: np.ndarray, pairs: np.ndarray) -> tuple:
     return X_pair, y_pair
 
 
-def _make_pairwise_pipe(seed: int) -> Pipeline:
+def _make_pairwise_pipe(seed: int, C: float = 1.0) -> Pipeline:
     return Pipeline([
         ("scaler", StandardScaler(with_mean=False)),
         ("lr", LogisticRegression(
-            penalty="l2", solver="lbfgs", C=1.0,
+            penalty="l2", solver="lbfgs", C=C,
             max_iter=2000, fit_intercept=False, random_state=seed,
         )),
     ])
@@ -122,6 +122,7 @@ def _train_one_layer(
     pos_idx_holdout: Optional[np.ndarray] = None,
     neg_idx_holdout: Optional[np.ndarray] = None,
     use_holdout_as_test: bool = False,
+    probe_C: float = 1.0,
 ) -> tuple:
     """Fit all folds for one layer. Returned as (name, result_dict) so
     Parallel(...) output can be converted straight to a dict."""
@@ -168,7 +169,7 @@ def _train_one_layer(
         # Symmetric dataset on diffs: (h+ - h-, 1) and (h- - h+, 0).
         X_train, y_train = _make_pair_dataset(X, train_pairs)
         X_test, y_test = _make_pair_dataset(X, test_pairs)
-        pipe = _make_pairwise_pipe(seed)
+        pipe = _make_pairwise_pipe(seed, C=probe_C)
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", ConvergenceWarning)
@@ -193,7 +194,7 @@ def _train_one_layer(
         if len(train_pairs) > 0 and len(holdout_pairs) > 0:
             X_train, y_train = _make_pair_dataset(X, train_pairs)
             X_holdout, y_holdout = _make_pair_dataset(X, holdout_pairs)
-            pipe = _make_pairwise_pipe(seed)
+            pipe = _make_pairwise_pipe(seed, C=probe_C)
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", ConvergenceWarning)
                 pipe.fit(X_train, y_train)
@@ -237,6 +238,7 @@ def train_pairwise_probes(
     n_jobs: int = 8,
     holdout_frac: float = 0.0,
     use_holdout_as_test: bool = False,
+    probe_C: float = 1.0,
 ) -> dict:
     """Train a pairwise ranking probe per layer (parallel over layers).
 
@@ -309,6 +311,7 @@ def train_pairwise_probes(
                 name, X, pos_idx_cv, neg_idx_cv,
                 pos_splits, neg_splits, pairs_per_pos, seed,
                 pos_idx_holdout, neg_idx_holdout, use_holdout_as_test,
+                probe_C=probe_C,
             )
             for name, X in layer_items
         ]
@@ -318,6 +321,7 @@ def train_pairwise_probes(
                 name, X, pos_idx_cv, neg_idx_cv,
                 pos_splits, neg_splits, pairs_per_pos, seed,
                 pos_idx_holdout, neg_idx_holdout, use_holdout_as_test,
+                probe_C=probe_C,
             )
             for name, X in layer_items
         )
@@ -356,6 +360,10 @@ def parse_args():
                    help="When --holdout_frac > 0, make the JSON/plots' primary "
                         "'test' metric use holdout accuracy instead of CV mean. "
                         "CV diagnostics are still saved as cv_* fields.")
+    p.add_argument("--probe_C", type=float, default=1.0,
+                   help="L2 regularization strength for the logistic probe. "
+                        "Lower = stronger regularization (default: 1.0; "
+                        "try 0.1 or 0.01 to curb overfitting in p>>n regime).")
     p.add_argument("--samples_per_class", type=int, default=None)
     p.add_argument("--dataset_cache_dir", default=None)
     p.add_argument("--probe_cache", default=None)
@@ -500,6 +508,7 @@ def main():
                 n_jobs=args.n_jobs,
                 holdout_frac=args.holdout_frac,
                 use_holdout_as_test=args.use_holdout_as_test,
+                probe_C=args.probe_C,
             )
             prop_results[prop_name] = layer_accs
 
