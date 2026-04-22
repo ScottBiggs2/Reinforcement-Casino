@@ -295,59 +295,59 @@ submit_training_job() {
   if [ -n "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC:-}" ]; then sleep "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC}"; fi
 }
 
-echo ""
-echo "--- DPO dense (Tulu3) ---"
-submit_training_job "DPO dense (stage 1 only) RUN_ID=${DPO_DENSE_RUN_ID}" \
-  "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
-  dense_dpo \
-  "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID},RUN_ID=${DPO_DENSE_RUN_ID},DPO_DATASET_KEY=tulu3" \
-  "dpo_dense_${DPO_DENSE_RUN_ID}"
+# echo ""
+# echo "--- DPO dense (Tulu3) ---"
+# submit_training_job "DPO dense (stage 1 only) RUN_ID=${DPO_DENSE_RUN_ID}" \
+#   "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
+#   dense_dpo \
+#   "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID},RUN_ID=${DPO_DENSE_RUN_ID},DPO_DATASET_KEY=tulu3" \
+#   "dpo_dense_${DPO_DENSE_RUN_ID}"
 
-echo ""
-echo "--- DPO sparse Tulu3 ---"
-submit_training_job "DPO sparse random RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=tulu3" \
-  "dpo_sp_rand_${DPO_SPARSE_RANDOM_RUN_ID}"
+# echo ""
+# echo "--- DPO sparse Tulu3 ---"
+# submit_training_job "DPO sparse random RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID}" \
+#   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#   sparse_dpo \
+#   "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=tulu3" \
+#   "dpo_sp_rand_${DPO_SPARSE_RANDOM_RUN_ID}"
 
-submit_training_job "DPO sparse CAV RUN_ID=${DPO_SPARSE_CAV_RUN_ID}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID},RUN_ID=${DPO_SPARSE_CAV_RUN_ID},PIPELINE_MASK_FILE=${MASK_CAV},DPO_DATASET_KEY=tulu3" \
-  "dpo_sp_cav_${DPO_SPARSE_CAV_RUN_ID}"
+# submit_training_job "DPO sparse CAV RUN_ID=${DPO_SPARSE_CAV_RUN_ID}" \
+#   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#   sparse_dpo \
+#   "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID},RUN_ID=${DPO_SPARSE_CAV_RUN_ID},PIPELINE_MASK_FILE=${MASK_CAV},DPO_DATASET_KEY=tulu3" \
+#   "dpo_sp_cav_${DPO_SPARSE_CAV_RUN_ID}"
 
-submit_training_job "DPO sparse SNIP RUN_ID=${DPO_SPARSE_SNIP_RUN_ID}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_SNIP_RUN_ID},RUN_ID=${DPO_SPARSE_SNIP_RUN_ID},PIPELINE_MASK_FILE=${MASK_SNIP},DPO_DATASET_KEY=tulu3" \
-  "dpo_sp_snip_${DPO_SPARSE_SNIP_RUN_ID}"
+# submit_training_job "DPO sparse SNIP RUN_ID=${DPO_SPARSE_SNIP_RUN_ID}" \
+#   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#   sparse_dpo \
+#   "PIPELINE_RUN_ID=${DPO_SPARSE_SNIP_RUN_ID},RUN_ID=${DPO_SPARSE_SNIP_RUN_ID},PIPELINE_MASK_FILE=${MASK_SNIP},DPO_DATASET_KEY=tulu3" \
+#   "dpo_sp_snip_${DPO_SPARSE_SNIP_RUN_ID}"
 
-echo ""
-echo "--- DPO dense + sparse (Light-R1) ---"
-submit_training_job "DPO dense Light-R1 RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1}" \
-  "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
-  dense_dpo \
-  "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-  "dpo_dense_lr1_${DPO_DENSE_RUN_ID_LIGHT_R1}"
+# echo ""
+# echo "--- DPO dense + sparse (Light-R1) ---"
+# submit_training_job "DPO dense Light-R1 RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1}" \
+#   "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
+#   dense_dpo \
+#   "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+#   "dpo_dense_lr1_${DPO_DENSE_RUN_ID_LIGHT_R1}"
 
-submit_training_job "DPO sparse random Light-R1 RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-  "dpo_sp_rand_lr1_${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}"
+# submit_training_job "DPO sparse random Light-R1 RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}" \
+#   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#   sparse_dpo \
+#   "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+#   "dpo_sp_rand_lr1_${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}"
 
-submit_training_job "DPO sparse CAV Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_CAV_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-  "dpo_sp_cav_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}"
+# submit_training_job "DPO sparse CAV Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}" \
+#   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#   sparse_dpo \
+#   "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_CAV_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+#   "dpo_sp_cav_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}"
 
-submit_training_job "DPO sparse SNIP Light-R1 RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_SNIP_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-  "dpo_sp_snip_lr1_${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1}"
+# submit_training_job "DPO sparse SNIP Light-R1 RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1}" \
+#   "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#   sparse_dpo \
+#   "PIPELINE_RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_SNIP_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+#   "dpo_sp_snip_lr1_${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1}"
 
 echo ""
 echo "--- GRPO dense ---"
