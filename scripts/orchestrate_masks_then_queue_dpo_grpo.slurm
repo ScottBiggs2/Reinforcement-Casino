@@ -88,6 +88,15 @@ export GRPO_DATASET_HF="${GRPO_DATASET_HF:-open-r1/OpenR1-Math-220k}"
 export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 
+# CAV implementation + safety knobs
+# - cold_v2_all_params: unified CAV v2 (all params suspect; global selector; coverage gated)
+# - legacy: use existing scripts (DPO via cav_cold_mask_finder, GRPO via inference_mask_finder)
+export ORCH_CAV_IMPL="${ORCH_CAV_IMPL:-cold_v2_all_params}"
+# Opt-in rank-collapse protection (applies to broadcast-based scoring via * |W|).
+export ORCH_CAV_WEIGHT_ABS="${ORCH_CAV_WEIGHT_ABS:-0}"
+# Optional: also score embedding matrices (off by default; can increase CPU RAM during activation collection).
+export ORCH_CAV_INCLUDE_EMBEDS="${ORCH_CAV_INCLUDE_EMBEDS:-0}"
+
 # inference_mask_finder batch size (all mask methods that pass --batch_size). Lower if SNIP/CAV OOMs.
 # Sequence caps for masks follow DPO_MAX_LENGTH / GRPO_MAX_PROMPT_LENGTH (exported below for downstream;
 # mask steps use the same vars in the commands in section "1) Mask generation").
@@ -220,6 +229,7 @@ echo "DPO_DS_KEY=${DPO_DS_KEY}  COLD_DATASET_HF=${COLD_DATASET_HF}"
 echo "GRPO_DATASET_HF=${GRPO_DATASET_HF}  GRPO_DATASET=${GRPO_DATASET}"
 echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}  MIN_LAYER_KEEP_RATIO=${MIN_LAYER_KEEP_RATIO}"
 echo "DPO_SNIP_OBJECTIVE=${DPO_SNIP_OBJECTIVE}  GRPO_SNIP_OBJECTIVE=${GRPO_SNIP_OBJECTIVE}"
+echo "ORCH_CAV_IMPL=${ORCH_CAV_IMPL}  ORCH_CAV_WEIGHT_ABS=${ORCH_CAV_WEIGHT_ABS}  ORCH_CAV_INCLUDE_EMBEDS=${ORCH_CAV_INCLUDE_EMBEDS}"
 
 ########################################
 # 1) Mask generation (GPU)
@@ -252,15 +262,34 @@ echo "=== Generating shared random mask (DPO + GRPO) → ${MASK_RANDOM}"
 
 echo ""
 echo "=== Generating DPO CAV cold mask (Tulu3) → ${MASK_CAV}"
-"$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
-  --model_name "${MODEL}" \
-  --dataset_name "${COLD_DATASET_HF}" \
-  --method cav \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --subset_size "${COLD_CAV_SUBSET}" \
-  --num_batches "${COLD_CAV_NUM_BATCHES}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --output_file "${MASK_CAV}"
+if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
+  cav_abs_args=()
+  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
+  cav_embed_args=()
+  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
+  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode dpo \
+    --dataset_name "${COLD_DATASET_HF}" \
+    --n_samples "${COLD_CAV_SUBSET}" \
+    --max_length "${DPO_MAX_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_CAV}" \
+    "${cav_abs_args[@]}" \
+    "${cav_embed_args[@]}"
+else
+  "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
+    --model_name "${MODEL}" \
+    --dataset_name "${COLD_DATASET_HF}" \
+    --method cav \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --subset_size "${COLD_CAV_SUBSET}" \
+    --num_batches "${COLD_CAV_NUM_BATCHES}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_CAV}"
+fi
 
 echo ""
 echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
@@ -281,15 +310,34 @@ echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
 
 echo ""
 echo "=== Generating DPO CAV cold mask (Light-R1) → ${MASK_CAV_LIGHT_R1}"
-"$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
-  --model_name "${MODEL}" \
-  --dataset_name "${COLD_DATASET_HF_LIGHT_R1}" \
-  --method cav \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --subset_size "${COLD_CAV_SUBSET}" \
-  --num_batches "${COLD_CAV_NUM_BATCHES}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --output_file "${MASK_CAV_LIGHT_R1}"
+if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
+  cav_abs_args=()
+  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
+  cav_embed_args=()
+  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
+  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode dpo \
+    --dataset_name "${COLD_DATASET_HF_LIGHT_R1}" \
+    --n_samples "${COLD_CAV_SUBSET}" \
+    --max_length "${DPO_MAX_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_CAV_LIGHT_R1}" \
+    "${cav_abs_args[@]}" \
+    "${cav_embed_args[@]}"
+else
+  "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
+    --model_name "${MODEL}" \
+    --dataset_name "${COLD_DATASET_HF_LIGHT_R1}" \
+    --method cav \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --subset_size "${COLD_CAV_SUBSET}" \
+    --num_batches "${COLD_CAV_NUM_BATCHES}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_CAV_LIGHT_R1}"
+fi
 
 echo ""
 echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
@@ -310,17 +358,36 @@ echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
 
 echo ""
 echo "=== Generating GRPO CAV mask → ${MASK_GRPO_CAV}"
-"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-  --model_name "${MODEL}" \
-  --mode grpo \
-  --method cav \
-  --dataset_name "${GRPO_DATASET_HF}" \
-  --n_samples "${GRPO_N_SAMPLES}" \
-  --sparsity "${SPARSITY_PERCENT}" \
-  --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --seed 42 \
-  --output "${MASK_GRPO_CAV}"
+if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
+  cav_abs_args=()
+  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
+  cav_embed_args=()
+  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
+  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode grpo \
+    --dataset_name "${GRPO_DATASET_HF}" \
+    --n_samples "${GRPO_N_SAMPLES}" \
+    --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_GRPO_CAV}" \
+    "${cav_abs_args[@]}" \
+    "${cav_embed_args[@]}"
+else
+  "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode grpo \
+    --method cav \
+    --dataset_name "${GRPO_DATASET_HF}" \
+    --n_samples "${GRPO_N_SAMPLES}" \
+    --sparsity "${SPARSITY_PERCENT}" \
+    --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --seed 42 \
+    --output "${MASK_GRPO_CAV}"
+fi
 
 echo ""
 echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNIP}"
