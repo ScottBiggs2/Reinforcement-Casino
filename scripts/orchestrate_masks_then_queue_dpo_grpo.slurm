@@ -94,8 +94,10 @@ export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 export ORCH_CAV_IMPL="${ORCH_CAV_IMPL:-cold_v2_all_params}"
 # Opt-in rank-collapse protection (applies to broadcast-based scoring via * |W|).
 export ORCH_CAV_WEIGHT_ABS="${ORCH_CAV_WEIGHT_ABS:-0}"
-# Optional: also score embedding matrices (off by default; can increase CPU RAM during activation collection).
-export ORCH_CAV_INCLUDE_EMBEDS="${ORCH_CAV_INCLUDE_EMBEDS:-0}"
+# Also score embedding matrices.
+# We default this ON for CAV v2 so the coverage gate includes `model.embed_tokens.weight`
+# (aligns with warm-start "all params suspect" masks).
+export ORCH_CAV_INCLUDE_EMBEDS="${ORCH_CAV_INCLUDE_EMBEDS:-1}"
 
 # inference_mask_finder batch size (all mask methods that pass --batch_size). Lower if SNIP/CAV OOMs.
 # Sequence caps for masks follow DPO_MAX_LENGTH / GRPO_MAX_PROMPT_LENGTH (exported below for downstream;
