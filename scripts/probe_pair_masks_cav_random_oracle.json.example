@@ -1,0 +1,26 @@
+[
+  {
+    "label": "Random-DPO",
+    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/random_baseline_dpo_sp97.5_seed42.pt"
+  },
+  {
+    "label": "Cold-CAV-DPO",
+    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_dpo.pt"
+  },
+  {
+    "label": "Oracle-DPO",
+    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b/warm_magnitude_step50_sp97.5.pt"
+  },
+  {
+    "label": "Random-GRPO",
+    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/random_baseline_grpo_sp97.5_seed42.pt"
+  },
+  {
+    "label": "Cold-CAV-GRPO",
+    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_cold/cold_cav_grpo.pt"
+  },
+  {
+    "label": "Oracle-GRPO",
+    "path": "/scratch/xie.yiyi/rl_casino_masks/llama8b_warm_grpo/warm_magnitude_grpo.pt"
+  }
+]

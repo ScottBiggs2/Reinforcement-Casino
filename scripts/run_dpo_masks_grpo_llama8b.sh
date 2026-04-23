@@ -1,0 +1,155 @@
+#!/bin/bash
+# Run GRPO training (sparse or dense) with Llama-3.1-8B-Instruct on multi-GPU.
+# Usage:
+#   MASK_PATH=/path/to/mask.pt RUN_TAG=cav_dpo sbatch scripts/run_dpo_masks_grpo_llama8b.sh
+#   RUN_TAG=dense_baseline sbatch scripts/run_dpo_masks_grpo_llama8b.sh   # no mask = dense
+#   sbatch --gres=gpu:v100-sxm2:4 scripts/run_dpo_masks_grpo_llama8b.sh  # override GPU type
+#SBATCH --job-name=llama8b_grpo
+#SBATCH --output=logs/llama8b_grpo_%j.out
+#SBATCH --error=logs/llama8b_grpo_%j.err
+#SBATCH --partition=multigpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:h200:4
+#SBATCH --mem=256G
+#SBATCH --time=07:45:00
+
+# === CONFIGURATION === (env-overridable for monitor auto-intervention)
+MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+DATASET="${DATASET:-math-220k}"
+N_STEPS="${N_STEPS:-60}"
+SUBSET="${SUBSET:-512}"
+BATCH_SIZE="${BATCH_SIZE:-1}"
+NUM_GENERATIONS="${NUM_GENERATIONS:-8}"
+GEN_BATCH_SIZE="${GEN_BATCH_SIZE:-8}"
+LR="${LR:-5e-6}"
+MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
+MAX_COMPLETION_LENGTH="${MAX_COMPLETION_LENGTH:-2048}"
+MAX_PROMPT_LENGTH="${MAX_PROMPT_LENGTH:-512}"
+WANDB_PROJECT="${WANDB_PROJECT:-huggingface}"
+
+# === STORAGE (all on /scratch) ===
+export HF_HOME="/scratch/$USER/hf_cache"
+export HF_DATASETS_CACHE="/scratch/$USER/hf_cache/datasets"
+export TRITON_CACHE_DIR="/scratch/$USER/triton_cache"
+COMMON_OUTPUT_DIR="/scratch/$USER/rl_casino_outputs"
+
+mkdir -p "$HF_HOME" "$HF_DATASETS_CACHE" "$TRITON_CACHE_DIR" "$COMMON_OUTPUT_DIR"
+
+# Copy HF token to scratch HF_HOME if it exists in default location
+if [ -f "$HOME/.cache/huggingface/token" ] && [ ! -f "$HF_HOME/token" ]; then
+    cp "$HOME/.cache/huggingface/token" "$HF_HOME/token"
+fi
+
+# === ENVIRONMENT SETUP ===
+source "$HOME/miniconda/etc/profile.d/conda.sh" 2>/dev/null || source "$(conda info --base)/etc/profile.d/conda.sh" 2>/dev/null
+conda activate /home/$USER/.conda/envs/rl_casino || conda activate /scratch/$USER/conda_envs/rl_casino
+
+export PYTHONPATH="$(pwd):$PYTHONPATH"
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export NCCL_DEBUG=INFO
+export NCCL_P2P_DISABLE=1
+export WANDB_PROJECT=$WANDB_PROJECT
+
+# === REPO ROOT ===
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
+mkdir -p logs
+
+# === MULTI-GPU (auto-detect from SLURM) ===
+if [ -n "${SLURM_GPUS_ON_NODE:-}" ]; then
+    NGPUS="$SLURM_GPUS_ON_NODE"
+elif [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    NGPUS=$(echo "$CUDA_VISIBLE_DEVICES" | tr ',' '\n' | wc -l)
+else
+    NGPUS=1
+fi
+GRAD_ACCUM=$((8 / NGPUS))
+[ "$GRAD_ACCUM" -lt 1 ] && GRAD_ACCUM=1
+
+if [ "$NGPUS" -gt 1 ]; then
+    LAUNCH="accelerate launch --num_processes $NGPUS --multi_gpu"
+else
+    LAUNCH="python"
+fi
+
+echo "=================================================="
+echo "Job started at: $(date)"
+echo "Node: $(hostname)"
+echo "Job ID: ${SLURM_JOB_ID:-local}"
+echo "GPUs: $NGPUS | Grad accum: $GRAD_ACCUM"
+echo "Working dir: $(pwd)"
+echo "HF_HOME: $HF_HOME"
+echo "Output dir: $COMMON_OUTPUT_DIR"
+echo "Project: $WANDB_PROJECT"
+echo "=================================================="
+
+# === TIMESTAMP & RUN NAME ===
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+RUN_NAME="llama8b_dpo_mask_grpo_${RUN_TAG:-unknown}_${NGPUS}gpu_${TIMESTAMP}"
+OUTPUT_DIR="${COMMON_OUTPUT_DIR}/${RUN_NAME}"
+mkdir -p "$OUTPUT_DIR"
+
+# === RUN ===
+if [ -n "${MASK_PATH:-}" ] && [ -f "$MASK_PATH" ]; then
+    echo "Sparse GRPO with mask: ${MASK_PATH}"
+    echo "Run name: ${RUN_NAME}"
+    echo "=================================================="
+
+    $LAUNCH src/full_training/sparse_grpo_bsr.py \
+        --model_name "$MODEL" \
+        --dataset "$DATASET" \
+        --n_steps "$N_STEPS" \
+        --subset_size "$SUBSET" \
+        --batch_size "$BATCH_SIZE" \
+        --grad_accum "$GRAD_ACCUM" \
+        --num_generations "$NUM_GENERATIONS" \
+        --generation_batch_size "$GEN_BATCH_SIZE" \
+        --lr "$LR" \
+        --max_grad_norm "$MAX_GRAD_NORM" \
+        --max_completion_length "$MAX_COMPLETION_LENGTH" \
+        --max_prompt_length "$MAX_PROMPT_LENGTH" \
+        --optimizer sparse_adamw \
+        --mask "$MASK_PATH" \
+        --output_base_dir "$OUTPUT_DIR" \
+        --dataset_cache_dir "$HF_DATASETS_CACHE" \
+        --use_wandb \
+        --save_model true \
+        --run_name "$RUN_NAME" 2>&1
+else
+    echo "Dense GRPO Baseline (no mask)"
+    echo "Run name: ${RUN_NAME}"
+    echo "=================================================="
+
+    $LAUNCH src/full_training/GRPO_train.py \
+        --model_name "$MODEL" \
+        --dataset "$DATASET" \
+        --num_steps "$N_STEPS" \
+        --subset_size "$SUBSET" \
+        --output_base_dir "$OUTPUT_DIR" \
+        --dataset_cache_dir "$HF_DATASETS_CACHE" \
+        --num_generations "$NUM_GENERATIONS" \
+        --generation_batch_size "$GEN_BATCH_SIZE" \
+        --max_completion_length "$MAX_COMPLETION_LENGTH" \
+        --max_prompt_length "$MAX_PROMPT_LENGTH" \
+        --learning_rate "$LR" \
+        --use_wandb \
+        --run_name "$RUN_NAME" 2>&1
+fi
+
+STATUS=$?
+echo ""
+echo "=================================================="
+echo "Job finished at: $(date)"
+if [ $STATUS -eq 0 ]; then
+    echo "SUCCESS: ${RUN_NAME}"
+else
+    echo "FAILED: ${RUN_NAME} (exit code $STATUS)"
+fi
+echo "=================================================="
+exit $STATUS
