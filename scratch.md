@@ -38,28 +38,23 @@ Submitted batch job XXXXXX
 
 # CAV Rescue Info and more: 
 
-(base) [biggs.s@explorer-01 rl_casino]$ export ORCH_CAV_IMPL=cold_v2_all_params
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
+  --model_path meta-llama/Llama-3.1-8B-Instruct \
+  --trust_remote_code
+Submitted batch job 6284288
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
+  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500 \
+  --trust_remote_code
+Submitted batch job 6284291
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
+  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
+  --trust_remote_code
+Submitted batch job 6284294
+(base) [biggs.s@explorer-02 rl_casino]$ export ORCH_CAV_IMPL=cold_v2_all_params
 export ORCH_CAV_WEIGHT_ABS=1
 export MASK_RUN_ID=orch_lr1_cavv2_oracle_$(date +%Y%m%d_%H%M%S)
 sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
-Submitted batch job 6278650
-(base) [biggs.s@explorer-01 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path meta-llama/Llama-3.1-8B-Instruct \
-  --trust_remote_code
-Submitted batch job 6278651
-(base) [biggs.s@explorer-01 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500 \
-  --trust_remote_code
-Submitted batch job 6278652
-(base) [biggs.s@explorer-01 rl_casino]$ squeue -u $USER
-             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
-           6278652       gpu llm_eval  biggs.s PD       0:00      1 (Priority)
-           6278651       gpu llm_eval  biggs.s PD       0:00      1 (Priority)
-           6278650       gpu orch_mas  biggs.s  R       0:25      1 d4055
-(base) [biggs.s@explorer-01 rl_casino]$ 
-
-Correct cav v2 re-launch: 6283111
-
+Submitted batch job 6284301
 
 ---
 

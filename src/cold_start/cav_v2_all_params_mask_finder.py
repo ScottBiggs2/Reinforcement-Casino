@@ -63,7 +63,7 @@ class GroupActs:
     pos: List[torch.Tensor]
     neg: List[torch.Tensor]
 
-
+# does this hit attention layers as well? defer to the warm start implementation to check for what is correct
 class ActivationCollector:
     """
     Collect pooled activations for many modules in one forward pass using hooks.
@@ -151,6 +151,15 @@ class ActivationCollector:
             self._store[k] = []
         return out
 
+# what is y here, like what does this actually do?
+# why arent we going contrast or TCAV - linear probes in this setting seems very odd.
+# Whats here right now is a Linear-Probe based method, not a CAV method: 
+# Maybe Cursor was going for TCAV style? https://arxiv.org/pdf/1711.11279 
+# 
+
+# Clarifying questions: 
+# what are positive/negative samples here? 
+# how are we normalizing activations? There are scaling issues as activations tend to be much larger deeper in LLM layers. 
 
 def _fit_l1_logreg_feature_importance(
     X_pos: torch.Tensor,

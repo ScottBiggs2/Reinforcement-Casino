@@ -13,15 +13,27 @@ def _materialize_chat_template(tokenizer: Any, model_path: str) -> Tuple[Optiona
     - a dict-like (multiple templates)
     - absent on local checkpoints even when `chat_template.jinja` exists
     """
+    # 1. Local checkpoints often have a `chat_template.jinja` sidecar.
+    #    We check this FIRST so that user-provided sidecars override base models.
+    try:
+        template_path = Path(model_path) / "chat_template.jinja"
+        if template_path.exists():
+            text = template_path.read_text(encoding="utf-8", errors="replace").strip()
+            if text:
+                return text, "chat_template.jinja"
+    except Exception:
+        pass
+
     try:
         raw = getattr(tokenizer, "chat_template", None)
     except Exception:
         raw = None
 
+    # 2. Check string
     if isinstance(raw, str) and raw.strip():
         return raw, "tokenizer.chat_template (string)"
 
-    # Some versions expose multiple templates (dict-like). Pick deterministically.
+    # 3. Some versions expose multiple templates (dict-like). Pick deterministically.
     if isinstance(raw, dict) and raw:
         for key in ("default", "chat", "llama-3", "llama3", "instruct"):
             val = raw.get(key)
@@ -31,16 +43,6 @@ def _materialize_chat_template(tokenizer: Any, model_path: str) -> Tuple[Optiona
         for key, val in raw.items():
             if isinstance(val, str) and val.strip():
                 return val, f"tokenizer.chat_template[{key!r}]"
-
-    # Local checkpoints often have a `chat_template.jinja` sidecar.
-    try:
-        template_path = Path(model_path) / "chat_template.jinja"
-        if template_path.exists():
-            text = template_path.read_text(encoding="utf-8", errors="replace").strip()
-            if text:
-                return text, "chat_template.jinja"
-    except Exception:
-        pass
 
     return None, "no_chat_template"
 
@@ -53,37 +55,18 @@ def _persist_chat_template_to_tokenizer_config(model_path: str, template: str, *
     `tokenizer_config.json`. lm-eval's vLLM path calls `tokenizer.apply_chat_template(...)`
     which requires `tokenizer.chat_template` to be set unless an explicit template is passed.
     """
-    cfg_path = Path(model_path) / "tokenizer_config.json"
-    if not cfg_path.exists():
-        if verbose:
-            print(f"⚠ Cannot persist chat template: missing {cfg_path}")
-        return False
-
     try:
-        with cfg_path.open("r", encoding="utf-8") as f:
-            cfg = json.load(f)
-    except Exception as e:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer.chat_template = template
+        tokenizer.save_pretrained(model_path)
         if verbose:
-            print(f"⚠ Cannot read tokenizer_config.json for chat template persistence: {e}")
-        return False
-
-    existing = cfg.get("chat_template")
-    if isinstance(existing, str) and existing.strip():
+            print(f"✓ Saved updated tokenizer with chat_template into {model_path}")
         return True
-
-    cfg["chat_template"] = template
-    try:
-        with cfg_path.open("w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2, ensure_ascii=False)
-            f.write("\n")
     except Exception as e:
         if verbose:
-            print(f"⚠ Failed writing chat_template into tokenizer_config.json: {e}")
+            print(f"⚠ Failed to save chat_template to tokenizer: {e}")
         return False
-
-    if verbose:
-        print(f"✓ Wrote chat_template into {cfg_path} (was missing; sourced from checkpoint template files)")
-    return True
 
 
 def has_chat_template(model_path: str) -> bool:
@@ -138,7 +121,7 @@ def auto_detect_apply_chat_template(
             return False
 
         raw_on_tok = getattr(tokenizer, "chat_template", None)
-        needs_persist = not (isinstance(raw_on_tok, str) and raw_on_tok.strip())
+        needs_persist = template != raw_on_tok
         if needs_persist:
             ok = _persist_chat_template_to_tokenizer_config(model_path, template, verbose=verbose)
             if not ok:
@@ -171,7 +154,7 @@ def auto_detect_apply_chat_template(
             # Critical: lm-eval vLLM calls `tokenizer.apply_chat_template` which requires
             # `tokenizer.chat_template` to be populated after `from_pretrained`.
             raw_on_tok = getattr(tokenizer, "chat_template", None)
-            needs_persist = not (isinstance(raw_on_tok, str) and raw_on_tok.strip())
+            needs_persist = template != raw_on_tok
             if needs_persist:
                 ok = _persist_chat_template_to_tokenizer_config(model_path, template, verbose=verbose)
                 if not ok:
