@@ -123,13 +123,11 @@ export MASK_DIR="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}/${MASK_R
 export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/masks}"
 
 ########################################
-# TEMP SCOPE REDUCTION (Light-R1 only)
-# - Only generate: CAV v2 (all-params) + ORACLE (checkpoint-diff) masks
-# - Only queue: Light-R1 sparse DPO jobs for those two masks
-# Everything else remains in-file but commented out for easy restore.
-########################################
-# Oracle checkpoint directory (must contain HF checkpoint files).
+# Oracle checkpoint directory for Light-R1
 export ORACLE_FINAL_CKPT_DIR="${ORACLE_FINAL_CKPT_DIR:-/scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
+
+# Oracle checkpoint directory for Tulu3
+export ORACLE_FINAL_CKPT_DIR_TULU3="${ORACLE_FINAL_CKPT_DIR_TULU3:-/scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500}"
 
 # Downstream run ids (stable names recommended for resume)
 export DPO_DENSE_RUN_ID="${DPO_DENSE_RUN_ID:-dpo5k_dense_${DPO_DS_KEY}}"
@@ -251,6 +249,7 @@ export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 # DPO masks — Tulu3 calibration (scripts/dpo_5k_hpc_copypaste.md)
 export MASK_RANDOM="${MASK_DIR}/random_${MODEL//\//_}_sparsity${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 export MASK_CAV="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_sparsity${SPARSITY_PERCENT}pct.pt"
+export MASK_ORACLE_TULU3="${MASK_DIR}/oracle_diff_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_SNIP="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_${DPO_DS_KEY}_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
 
 # DPO masks — Light-R1 (same model/sparsity; CAV/SNIP calibrated on Light-R1)
@@ -275,35 +274,46 @@ echo "=== Generating shared random mask (DPO + GRPO) → ${MASK_RANDOM}"
 
 echo ""
 echo "=== Generating DPO CAV cold mask (Tulu3) → ${MASK_CAV}"
-# TEMP SCOPE REDUCTION: Tulu3 CAV disabled
-#if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
-#  cav_abs_args=()
-#  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
-#  cav_embed_args=()
-#  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
-#  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
-#    --model_name "${MODEL}" \
-#    --mode dpo \
-#    --dataset_name "${COLD_DATASET_HF}" \
-#    --n_samples "${COLD_CAV_SUBSET}" \
-#    --max_length "${DPO_MAX_LENGTH}" \
-#    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-#    --sparsity_percent "${SPARSITY_PERCENT}" \
-#    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-#    --output_file "${MASK_CAV}" \
-#    "${cav_abs_args[@]}" \
-#    "${cav_embed_args[@]}"
-#else
-#  "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
-#    --model_name "${MODEL}" \
-#    --dataset_name "${COLD_DATASET_HF}" \
-#    --method cav \
-#    --sparsity_percent "${SPARSITY_PERCENT}" \
-#    --subset_size "${COLD_CAV_SUBSET}" \
-#    --num_batches "${COLD_CAV_NUM_BATCHES}" \
-#    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-#    --output_file "${MASK_CAV}"
-#fi
+echo ""
+echo "=== Generating DPO CAV cold mask (Tulu3) → ${MASK_CAV}"
+if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
+  cav_abs_args=()
+  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
+  cav_embed_args=()
+  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
+  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode dpo \
+    --dataset_name "${COLD_DATASET_HF}" \
+    --n_samples "${COLD_CAV_SUBSET}" \
+    --max_length "${DPO_MAX_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_CAV}" \
+    "${cav_abs_args[@]}" \
+    "${cav_embed_args[@]}"
+else
+  "$TRAIN_PY" src/cold_start/cav_cold_mask_finder.py \
+    --model_name "${MODEL}" \
+    --dataset_name "${COLD_DATASET_HF}" \
+    --method cav \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --subset_size "${COLD_CAV_SUBSET}" \
+    --num_batches "${COLD_CAV_NUM_BATCHES}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_CAV}"
+fi
+
+echo ""
+echo "=== Generating ORACLE (checkpoint-diff) mask (Tulu3) → ${MASK_ORACLE_TULU3}"
+echo "ORACLE_FINAL_CKPT_DIR_TULU3=${ORACLE_FINAL_CKPT_DIR_TULU3}"
+"$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+  --initial_model "${MODEL}" \
+  --final_model "${ORACLE_FINAL_CKPT_DIR_TULU3}" \
+  --sparsity_percent "${SPARSITY_PERCENT}" \
+  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+  --output_file "${MASK_ORACLE_TULU3}"
 
 echo ""
 echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
@@ -373,48 +383,46 @@ echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
 #  --output "${MASK_SNIP_LIGHT_R1}"
 
 echo ""
-echo "=== Generating ORACLE (checkpoint-diff) mask (Light-R1) → ${MASK_ORACLE_LIGHT_R1}"
-echo "ORACLE_FINAL_CKPT_DIR=${ORACLE_FINAL_CKPT_DIR}"
-"$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
-  --initial_model "${MODEL}" \
-  --final_model "${ORACLE_FINAL_CKPT_DIR}" \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --output_file "${MASK_ORACLE_LIGHT_R1}"
-
+#echo "=== Generating ORACLE (checkpoint-diff) mask (Light-R1) → ${MASK_ORACLE_LIGHT_R1}"
+#echo "ORACLE_FINAL_CKPT_DIR=${ORACLE_FINAL_CKPT_DIR}"
+#"$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+#  --initial_model "${MODEL}" \
+#  --final_model "${ORACLE_FINAL_CKPT_DIR}" \
+#  --sparsity_percent "${SPARSITY_PERCENT}" \
+#  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+#  --output_file "${MASK_ORACLE_LIGHT_R1}"
 echo ""
 echo "=== Generating GRPO CAV mask → ${MASK_GRPO_CAV}"
-# TEMP SCOPE REDUCTION: GRPO CAV disabled
-#if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
-#  cav_abs_args=()
-#  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
-#  cav_embed_args=()
-#  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
-#  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
-#    --model_name "${MODEL}" \
-#    --mode grpo \
-#    --dataset_name "${GRPO_DATASET_HF}" \
-#    --n_samples "${GRPO_N_SAMPLES}" \
-#    --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-#    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-#    --sparsity_percent "${SPARSITY_PERCENT}" \
-#    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-#    --output_file "${MASK_GRPO_CAV}" \
-#    "${cav_abs_args[@]}" \
-#    "${cav_embed_args[@]}"
-#else
-#  "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-#    --model_name "${MODEL}" \
-#    --mode grpo \
-#    --method cav \
-#    --dataset_name "${GRPO_DATASET_HF}" \
-#    --n_samples "${GRPO_N_SAMPLES}" \
-#    --sparsity "${SPARSITY_PERCENT}" \
-#    --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-#    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-#    --seed 42 \
-#    --output "${MASK_GRPO_CAV}"
-#fi
+if [ "${ORCH_CAV_IMPL}" = "cold_v2_all_params" ]; then
+  cav_abs_args=()
+  if [ "${ORCH_CAV_WEIGHT_ABS}" = "1" ]; then cav_abs_args+=( --weight_abs ); fi
+  cav_embed_args=()
+  if [ "${ORCH_CAV_INCLUDE_EMBEDS}" = "1" ]; then cav_embed_args+=( --include_embeddings ); fi
+  "$TRAIN_PY" src/cold_start/cav_v2_all_params_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode grpo \
+    --dataset_name "${GRPO_DATASET_HF}" \
+    --n_samples "${GRPO_N_SAMPLES}" \
+    --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --output_file "${MASK_GRPO_CAV}" \
+    "${cav_abs_args[@]}" \
+    "${cav_embed_args[@]}"
+else
+  "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
+    --model_name "${MODEL}" \
+    --mode grpo \
+    --method cav \
+    --dataset_name "${GRPO_DATASET_HF}" \
+    --n_samples "${GRPO_N_SAMPLES}" \
+    --sparsity "${SPARSITY_PERCENT}" \
+    --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
+    --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+    --seed 42 \
+    --output "${MASK_GRPO_CAV}"
+fi
 
 echo ""
 echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNIP}"
@@ -551,24 +559,17 @@ echo "--- DPO dense (Tulu3) ---"
 
 echo ""
 echo "--- DPO sparse Tulu3 (3 masks; random = shared baseline file) ---"
-# TEMP SCOPE REDUCTION: all Tulu3 sparse jobs disabled
-#submit_training_job "DPO sparse random RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID}" \
-#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-#  sparse_dpo \
-#  "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=tulu3" \
-#  "dpo_sp_rand_${DPO_SPARSE_RANDOM_RUN_ID}"
-#
-#submit_training_job "DPO sparse CAV RUN_ID=${DPO_SPARSE_CAV_RUN_ID}" \
-#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-#  sparse_dpo \
-#  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID},RUN_ID=${DPO_SPARSE_CAV_RUN_ID},PIPELINE_MASK_FILE=${MASK_CAV},DPO_DATASET_KEY=tulu3" \
-#  "dpo_sp_cav_${DPO_SPARSE_CAV_RUN_ID}"
-#
-#submit_training_job "DPO sparse SNIP RUN_ID=${DPO_SPARSE_SNIP_RUN_ID}" \
-#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-#  sparse_dpo \
-#  "PIPELINE_RUN_ID=${DPO_SPARSE_SNIP_RUN_ID},RUN_ID=${DPO_SPARSE_SNIP_RUN_ID},PIPELINE_MASK_FILE=${MASK_SNIP},DPO_DATASET_KEY=tulu3" \
-#  "dpo_sp_snip_${DPO_SPARSE_SNIP_RUN_ID}"
+submit_training_job "DPO sparse CAV RUN_ID=${DPO_SPARSE_CAV_RUN_ID}" \
+  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+  sparse_dpo \
+  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID},RUN_ID=${DPO_SPARSE_CAV_RUN_ID},PIPELINE_MASK_FILE=${MASK_CAV},DPO_DATASET_KEY=tulu3" \
+  "dpo_sp_cav_${DPO_SPARSE_CAV_RUN_ID}"
+
+submit_training_job "DPO sparse ORACLE RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle" \
+  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+  sparse_dpo \
+  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle,RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle,PIPELINE_MASK_FILE=${MASK_ORACLE_TULU3},DPO_DATASET_KEY=tulu3" \
+  "dpo_sp_oracle_${DPO_SPARSE_CAV_RUN_ID}_oracle"
 
 echo ""
 echo "--- DPO dense + sparse (Light-R1, same hyperparameters; shared random mask) ---"
@@ -591,20 +592,18 @@ submit_training_job "DPO sparse CAV Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGH
   "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_CAV_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
   "dpo_sp_cav_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}"
 
-submit_training_job "DPO sparse ORACLE Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle,RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle,PIPELINE_MASK_FILE=${MASK_ORACLE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-  "dpo_sp_oracle_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle"
-
+#submit_training_job "DPO sparse ORACLE Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle" \
+#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#  sparse_dpo \
+#  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle,RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle,PIPELINE_MASK_FILE=${MASK_ORACLE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+#  "dpo_sp_oracle_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle"
 echo ""
 echo "--- GRPO dense ---"
-# TEMP SCOPE REDUCTION: GRPO jobs disabled
-#submit_training_job "GRPO dense slug=${GRPO_DENSE_RUN_SLUG}" \
-#  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
-#  dense_grpo \
-#  "GRPO_MODE=dense,GRPO_RUN_SLUG=${GRPO_DENSE_RUN_SLUG},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
-#  "grpo_dense_${GRPO_DENSE_RUN_SLUG}"
+submit_training_job "GRPO dense slug=${GRPO_DENSE_RUN_SLUG}" \
+  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
+  dense_grpo \
+  "GRPO_MODE=dense,GRPO_RUN_SLUG=${GRPO_DENSE_RUN_SLUG},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
+  "grpo_dense_${GRPO_DENSE_RUN_SLUG}"
 
 echo ""
 echo "--- GRPO sparse (3 masks) ---"
@@ -615,11 +614,11 @@ echo "--- GRPO sparse (3 masks) ---"
 #  "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_RANDOM},GRPO_RUN_NAME=${GRPO_SPARSE_RANDOM_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
 #  "grpo_sp_rand_${GRPO_SPARSE_RANDOM_RUN_NAME}"
 #
-#submit_training_job "GRPO sparse CAV name=${GRPO_SPARSE_CAV_RUN_NAME}" \
-#  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
-#  sparse_grpo \
-#  "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_CAV},GRPO_RUN_NAME=${GRPO_SPARSE_CAV_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
-#  "grpo_sp_cav_${GRPO_SPARSE_CAV_RUN_NAME}"
+submit_training_job "GRPO sparse CAV name=${GRPO_SPARSE_CAV_RUN_NAME}" \
+  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
+  sparse_grpo \
+  "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_CAV},GRPO_RUN_NAME=${GRPO_SPARSE_CAV_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
+  "grpo_sp_cav_${GRPO_SPARSE_CAV_RUN_NAME}"
 #
 #submit_training_job "GRPO sparse SNIP name=${GRPO_SPARSE_SNIP_RUN_NAME}" \
 #  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \

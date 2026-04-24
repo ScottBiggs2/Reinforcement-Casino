@@ -42,19 +42,23 @@ Submitted batch job XXXXXX
   --model_path meta-llama/Llama-3.1-8B-Instruct \
   --trust_remote_code
 Submitted batch job 6284288
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500 \
-  --trust_remote_code
-Submitted batch job 6284291
+
 (base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
   --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
   --trust_remote_code
-Submitted batch job 6284294
+Submitted batch job 6315118
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
+  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500 \
+  --trust_remote_code
+Submitted batch job 6315119
+
 (base) [biggs.s@explorer-02 rl_casino]$ export ORCH_CAV_IMPL=cold_v2_all_params
 export ORCH_CAV_WEIGHT_ABS=1
 export MASK_RUN_ID=orch_lr1_cavv2_oracle_$(date +%Y%m%d_%H%M%S)
 sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
 Submitted batch job 6284301
+
+
 
 ---
 
