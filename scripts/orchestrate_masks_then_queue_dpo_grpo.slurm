@@ -248,14 +248,14 @@ export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 
 # DPO masks — Tulu3 calibration (scripts/dpo_5k_hpc_copypaste.md)
 export MASK_RANDOM="${MASK_DIR}/random_${MODEL//\//_}_sparsity${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
-export MASK_CAV="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_sparsity${SPARSITY_PERCENT}pct.pt"
-export MASK_ORACLE_TULU3="${MASK_DIR}/oracle_diff_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
+export MASK_CAV="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
+export MASK_ORACLE_TULU3="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_SNIP="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_${DPO_DS_KEY}_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
 
 # DPO masks — Light-R1 (same model/sparsity; CAV/SNIP calibrated on Light-R1)
 export MASK_CAV_LIGHT_R1="${MASK_DIR}/cold_cav_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_SNIP_LIGHT_R1="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
-export MASK_ORACLE_LIGHT_R1="${MASK_DIR}/oracle_diff_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
+export MASK_ORACLE_LIGHT_R1="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
 
 # GRPO: reuse MASK_RANDOM for sparse-random; only CAV + SNIP are GRPO-specific paths
 export MASK_GRPO_RANDOM="${MASK_RANDOM}"
@@ -444,8 +444,8 @@ echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNI
 
 echo ""
 echo "=== Mask outputs written ==="
-ls -lh "${MASK_CAV_LIGHT_R1}" "${MASK_ORACLE_LIGHT_R1}"
-echo "(TEMP SCOPE REDUCTION: only Light-R1 CAV v2 + oracle were generated)"
+ls -lh "${MASK_DIR}"
+echo "(Listing all generated masks in ${MASK_DIR})"
 
 ########################################
 # 2) Queue downstream jobs (afterok)

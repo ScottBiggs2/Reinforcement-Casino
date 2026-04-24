@@ -58,7 +58,11 @@ export MASK_RUN_ID=orch_lr1_cavv2_oracle_$(date +%Y%m%d_%H%M%S)
 sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
 Submitted batch job 6284301
 
-
+(base) [biggs.s@explorer-02 rl_casino]$ export ORCH_CAV_IMPL="cold_v2_all_params"
+export ORCH_CAV_WEIGHT_ABS=1
+export MASK_RUN_ID="orch_tulu3_lr1_grpo_cavv2_oracle_$(date +%Y%m%d_%H%M%S)"
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
+Submitted batch job 6316353
 
 ---
 
