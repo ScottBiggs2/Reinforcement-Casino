@@ -192,9 +192,17 @@ def train_baseline(
     else:
         raise ValueError(f"Unknown optimizer type: {optimizer_type}")
 
+    # Output dir on /scratch + save_strategy="no" — `save_steps=n_steps+1`
+    # alone does NOT prevent TRL from writing a final checkpoint at end of
+    # training (we observed a single dense run leave 15G of weights in
+    # ./baseline_temp under home, blowing the user's quota). Belt-and-suspenders.
+    scratch_root = os.environ.get("SCRATCH_USER_ROOT", f"/scratch/{os.environ.get('USER', 'unknown')}")
+    out_dir = os.path.join(scratch_root, "baseline_temp")
+    os.makedirs(out_dir, exist_ok=True)
+
     # Configure DPO
     dpo_config = DPOConfig(
-        output_dir="./baseline_temp",
+        output_dir=out_dir,
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
         max_steps=n_steps,
@@ -209,7 +217,7 @@ def train_baseline(
         fp16=False,
         gradient_checkpointing=True,
         dataloader_pin_memory=False,
-        save_steps=n_steps + 1,  # Disable saving
+        save_strategy="no",  # truly disable checkpointing
     )
 
     # Initialize trainer

@@ -211,12 +211,19 @@ def train_sparse_baseline(
         )
         print("✓ SparseAdamW ready\n")
 
+        # Output dir on /scratch + save_strategy="no" because Scott's
+        # save_steps=n_steps+1 trick didn't actually stop TRL from writing
+        # a checkpoint at end of training (we observed his run leave 15G of
+        # model weights in ./baseline_temp/). Belt-and-suspenders here.
+        scratch_root = os.environ.get("SCRATCH_USER_ROOT", f"/scratch/{os.environ.get('USER', 'unknown')}")
+        out_dir = os.path.join(scratch_root, "sparse_baseline_temp")
+        os.makedirs(out_dir, exist_ok=True)
         dpo_config = DPOConfig(
-            output_dir="./sparse_baseline_temp",
+            output_dir=out_dir,
             per_device_train_batch_size=batch_size,
             learning_rate=learning_rate,
             max_steps=n_steps,
-            logging_steps=n_steps + 1,   # disable logging (same as dense)
+            logging_steps=n_steps + 1,   # disable logging
             report_to="none",
             remove_unused_columns=False,
             gradient_accumulation_steps=4,
@@ -227,7 +234,7 @@ def train_sparse_baseline(
             fp16=False,
             gradient_checkpointing=True,
             dataloader_pin_memory=False,
-            save_steps=n_steps + 1,       # disable saving
+            save_strategy="no",           # truly disable checkpointing
         )
 
         print("Initializing DPOTrainer...")
