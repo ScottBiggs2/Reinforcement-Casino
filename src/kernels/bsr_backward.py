@@ -3,6 +3,21 @@ import torch
 import triton
 import triton.language as tl
 
+
+# Autotune configs kept small (5) to bound first-call tuning cost: 226 layers ×
+# up to a few unique (output_dim, input_dim) pairs × 5 trials each is still
+# seconds, not minutes. Keys on output_dim + input_dim so each layer shape
+# picks its best config once and caches it.
+_BSR_BACKWARD_CONFIGS = [
+    triton.Config({'BLOCK_SIZE': 16}, num_warps=2, num_stages=2),
+    triton.Config({'BLOCK_SIZE': 32}, num_warps=4, num_stages=2),
+    triton.Config({'BLOCK_SIZE': 32}, num_warps=4, num_stages=3),
+    triton.Config({'BLOCK_SIZE': 64}, num_warps=8, num_stages=2),
+    triton.Config({'BLOCK_SIZE': 64}, num_warps=8, num_stages=3),
+]
+
+
+@triton.autotune(configs=_BSR_BACKWARD_CONFIGS, key=['output_dim', 'input_dim'])
 @triton.jit
 def sparse_grad_weight_kernel(
     grad_weight_ptr, grad_output_ptr, input_ptr, mask_ptr,
@@ -63,11 +78,15 @@ def sparse_grad_weight_kernel(
     tl.store(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
 
 def sparse_weight_gradient_triton(grad_output, input_tensor, mask, block_size=16, use_tf32=False):
+    # `block_size` kept for API compat with callers in mlps/bsr_sparse_mlp.py; the
+    # actual BLOCK_SIZE is picked by @triton.autotune at call time from the
+    # configs above and cached per (output_dim, input_dim) key.
+    del block_size
     batch_size, output_dim = grad_output.shape
     _, input_dim = input_tensor.shape
     grad_weight = torch.empty(output_dim, input_dim, device=grad_output.device, dtype=grad_output.dtype)
-    
-    grid = (triton.cdiv(output_dim, block_size) * triton.cdiv(input_dim, block_size),)
+
+    grid = lambda META: (triton.cdiv(output_dim, META['BLOCK_SIZE']) * triton.cdiv(input_dim, META['BLOCK_SIZE']),)
     sparse_grad_weight_kernel[grid](
         grad_weight, grad_output, input_tensor, mask,
         batch_size, output_dim, input_dim,
@@ -75,7 +94,6 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, block_size=16
         input_tensor.stride(0), input_tensor.stride(1),
         grad_weight.stride(0), grad_weight.stride(1),
         mask.stride(0), mask.stride(1),
-        BLOCK_SIZE=block_size,
         USE_TF32=use_tf32,
     )
     return grad_weight
