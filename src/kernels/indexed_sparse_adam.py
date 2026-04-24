@@ -13,11 +13,15 @@ def indexed_sparse_adamw_kernel(
     indices_ptr,
     n_indices,
     # Hyperparameters
-    lr: tl.constexpr,
+    # NOTE: lr and weight_decay are runtime args (not constexpr) — they change per
+    # step under LR schedulers, and making them constexpr forces a new Triton
+    # compilation for every unique value. beta1/beta2/eps stay constexpr because
+    # they really are constant and constexpr lets Triton fold (1 - beta) etc.
+    lr,
     beta1: tl.constexpr,
     beta2: tl.constexpr,
     eps: tl.constexpr,
-    weight_decay: tl.constexpr,
+    weight_decay,
     # Precomputed bias corrections (not constexpr to avoid recompilation)
     bias_correction1_val,
     bias_correction2_val,
