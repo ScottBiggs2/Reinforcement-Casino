@@ -4,6 +4,21 @@ import triton
 import triton.language as tl
 
 
+# Autotune only num_warps / num_stages — BLOCK_SIZE is locked to the BSR mask
+# block size at the call site (16 to match the BSR backward kernel). Allowing
+# autotune to pick a different BLOCK_SIZE would mean the center-element mask
+# check spans multiple mask blocks and could silently skip / process the wrong
+# blocks at high sparsity.
+_BSR_ADAM_CONFIGS = [
+    triton.Config({}, num_warps=2, num_stages=2),
+    triton.Config({}, num_warps=4, num_stages=2),
+    triton.Config({}, num_warps=4, num_stages=3),
+    triton.Config({}, num_warps=8, num_stages=2),
+    triton.Config({}, num_warps=8, num_stages=3),
+]
+
+
+@triton.autotune(configs=_BSR_ADAM_CONFIGS, key=['M', 'N'])
 @triton.jit
 def block_sparse_adam_2d_kernel(
     # Pointers to tensors

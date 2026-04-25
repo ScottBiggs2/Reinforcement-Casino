@@ -3,7 +3,7 @@ import torch
 import time
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.slurm_safe_log import slurm_safe_print
-from src.kernels.indexed_sparse_adam import triton_indexed_sparse_adamw_step
+from src.kernels.sparse_adam import triton_sparse_adam_update
 
 class SparseAdamW(torch.optim.Optimizer):
     """
@@ -152,11 +152,14 @@ class SparseAdamW(torch.optim.Optimizer):
         state['step'] += 1
         
         try:
-            # Use optimized indexed sparse kernel (with bias correction fix)
-            triton_indexed_sparse_adamw_step(
-                param=param,
-                grad=grad,
-                nonzero_indices=nonzero_indices,
+            # Block-sparse AdamW kernel — same BLOCK_SIZE × BLOCK_SIZE tile
+            # structure as sparse_grad_weight_kernel (BSR backward), so writes
+            # land in the same contiguous regions the backward kernel touches.
+            # Avoids the random gather/scatter pattern of the indexed variant.
+            triton_sparse_adam_update(
+                weights=param,
+                gradient=grad,
+                mask=mask.to(torch.float32) if mask.dtype == torch.bool else mask,
                 exp_avg=state['exp_avg'],
                 exp_avg_sq=state['exp_avg_sq'],
                 lr=group['lr'],
@@ -165,10 +168,15 @@ class SparseAdamW(torch.optim.Optimizer):
                 eps=group['eps'],
                 weight_decay=group['weight_decay'],
                 step=state['step'],
-                block_size=self.block_size,
+                adamw=True,
+                # block_size must match the BSR mask granularity (16) so the
+                # kernel's center-of-tile mask check samples a homogeneous block.
+                # self.block_size (default 128) was for the old indexed kernel's
+                # memory tile size and is unrelated to mask granularity.
+                block_size=16,
             )
         except Exception as e:
-            slurm_safe_print(f"ERROR in indexed Triton kernel for {param_name}: {e}")
+            slurm_safe_print(f"ERROR in block-sparse Triton kernel for {param_name}: {e}")
             slurm_safe_print(f"  Falling back to dense update")
             self._dense_step(param, group)
             return
