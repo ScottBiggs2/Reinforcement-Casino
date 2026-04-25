@@ -80,7 +80,8 @@ class ActivationNormCollector:
     is the L2 norm of that feature dimension across the entire calibration set.
     """
 
-    def __init__(self):
+    def __init__(self, *, include_embeddings: bool = False):
+        self.include_embeddings = include_embeddings
         self._hooks: List[Any] = []
         self._sum_sq: Dict[str, torch.Tensor] = {}
         self._token_counts: Dict[str, int] = {}
@@ -109,7 +110,30 @@ class ActivationNormCollector:
 
                 self._hooks.append(module.register_forward_hook(_make_hook(key)))
 
-        print(f"[ActivationNormCollector] Hooked {len(self._sum_sq)} Linear layers")
+        if self.include_embeddings:
+            for module_name, module in model.named_modules():
+                if isinstance(module, nn.Embedding):
+                    key = f"{module_name}.weight"
+                    out_dim = module.embedding_dim
+                    self._sum_sq[key] = torch.zeros(out_dim, dtype=torch.float64)
+                    self._token_counts[key] = 0
+                    
+                    def _make_hook(k: str):
+                        def _hook(_mod, _inp, out):
+                            x = out.detach().float() # [B, T, out_dim]
+                            if x.dim() == 3:
+                                x_flat = x.reshape(-1, x.shape[-1])
+                            elif x.dim() == 2:
+                                x_flat = x
+                            else:
+                                return
+                            self._sum_sq[k] += x_flat.pow(2).sum(dim=0).to(torch.float64).cpu()
+                            self._token_counts[k] += x_flat.shape[0]
+                        return _hook
+                    
+                    self._hooks.append(module.register_forward_hook(_make_hook(key)))
+
+        print(f"[ActivationNormCollector] Hooked {len(self._sum_sq)} layers")
 
     def remove(self) -> None:
         for h in self._hooks:
@@ -418,7 +442,7 @@ def main(args) -> None:
 
     # Step A1: Collect activation norms
     print("\n=== Step A1: Collecting activation norms ===")
-    collector = ActivationNormCollector()
+    collector = ActivationNormCollector(include_embeddings=args.include_embeddings)
     collector.register(model)
 
     n_total = input_ids.shape[0]
@@ -519,6 +543,7 @@ def main(args) -> None:
         "sparsity_percent": args.sparsity_percent,
         "owl_enabled": args.method == "wanda_owl",
         "coverage_gate_2d": float(args.coverage_gate_2d),
+        "include_embeddings": bool(args.include_embeddings),
         "coverage_report": coverage,
     }
 
@@ -546,6 +571,7 @@ if __name__ == "__main__":
     p.add_argument("--force_cpu", action="store_true")
 
     p.add_argument("--sparsity_percent", type=float, default=97.5)
+    p.add_argument("--include_embeddings", action="store_true", help="Also score embedding matrices.")
     p.add_argument("--coverage_gate_2d", type=float, default=0.995)
     p.add_argument("--output_file", type=str, default=None)
     p.add_argument("--coverage_report_out", type=str, default=None)

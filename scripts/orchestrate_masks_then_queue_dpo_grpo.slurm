@@ -271,47 +271,9 @@ echo "=== Generating shared random mask (DPO + GRPO) → ${MASK_RANDOM}"
   --seed "${RANDOM_MASK_SEED}" \
   --output_file "${MASK_RANDOM}"
 
-echo ""
-echo "=== Generating DPO Wanda+OWL mask (Tulu3) → ${MASK_WANDA}"
-"$TRAIN_PY" src/cold_start/wanda_owl_mask_finder.py \
-  --model_name "${MODEL}" \
-  --method wanda_owl \
-  --n_samples "${COLD_CAV_SUBSET}" \
-  --max_length "${DPO_MAX_LENGTH}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --output_file "${MASK_WANDA}"
-
-echo ""
-echo "=== Generating ORACLE (checkpoint-diff) mask (Tulu3) → ${MASK_ORACLE_TULU3}"
-echo "ORACLE_FINAL_CKPT_DIR_TULU3=${ORACLE_FINAL_CKPT_DIR_TULU3}"
-"$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
-  --initial_model "${MODEL}" \
-  --final_model "${ORACLE_FINAL_CKPT_DIR_TULU3}" \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --output_file "${MASK_ORACLE_TULU3}"
-
-echo ""
-echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
-"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-  --model_name "${MODEL}" \
-  --method snip \
-  --mode dpo \
-  --dataset_name "${DPO_DS_KEY}" \
-  --snip-objective "${DPO_SNIP_OBJECTIVE}" \
-  --n_samples "${COLD_CAV_SUBSET}" \
-  --sparsity "${SPARSITY_PERCENT}" \
-  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-  --max_length "${DPO_MAX_LENGTH}" \
-  --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
-  --snip-preference-beta "${DPO_BETA}" \
-  --output "${MASK_SNIP}"
-
-# TEMP SCOPE REDUCTION: Light-R1 Wanda+OWL disabled (focusing on Tulu3)
+# TEMP SCOPE REDUCTION: Tulu3 Wanda+OWL disabled
 #echo ""
-#echo "=== Generating DPO Wanda+OWL mask (Light-R1) → ${MASK_WANDA_LIGHT_R1}"
+#echo "=== Generating DPO Wanda+OWL mask (Tulu3) → ${MASK_WANDA}"
 #"$TRAIN_PY" src/cold_start/wanda_owl_mask_finder.py \
 #  --model_name "${MODEL}" \
 #  --method wanda_owl \
@@ -319,16 +281,26 @@ echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
 #  --max_length "${DPO_MAX_LENGTH}" \
 #  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
 #  --sparsity_percent "${SPARSITY_PERCENT}" \
-#  --output_file "${MASK_WANDA_LIGHT_R1}"
+#  --include_embeddings \
+#  --output_file "${MASK_WANDA}"
 
-echo ""
-echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
-# TEMP SCOPE REDUCTION: Light-R1 SNIP disabled
+#echo ""
+#echo "=== Generating ORACLE (checkpoint-diff) mask (Tulu3) → ${MASK_ORACLE_TULU3}"
+#echo "ORACLE_FINAL_CKPT_DIR_TULU3=${ORACLE_FINAL_CKPT_DIR_TULU3}"
+#"$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+#  --initial_model "${MODEL}" \
+#  --final_model "${ORACLE_FINAL_CKPT_DIR_TULU3}" \
+#  --sparsity_percent "${SPARSITY_PERCENT}" \
+#  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+#  --output_file "${MASK_ORACLE_TULU3}"
+
+#echo ""
+#echo "=== Generating DPO SNIP mask (Tulu3) → ${MASK_SNIP}"
 #"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
 #  --model_name "${MODEL}" \
 #  --method snip \
 #  --mode dpo \
-#  --dataset_name "${DPO_DS_KEY_LIGHT_R1}" \
+#  --dataset_name "${DPO_DS_KEY}" \
 #  --snip-objective "${DPO_SNIP_OBJECTIVE}" \
 #  --n_samples "${COLD_CAV_SUBSET}" \
 #  --sparsity "${SPARSITY_PERCENT}" \
@@ -337,7 +309,37 @@ echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
 #  --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
 #  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
 #  --snip-preference-beta "${DPO_BETA}" \
-#  --output "${MASK_SNIP_LIGHT_R1}"
+#  --output "${MASK_SNIP}"
+
+# TEMP SCOPE REDUCTION: Light-R1 Wanda+OWL disabled (focusing on Tulu3)
+echo ""
+echo "=== Generating DPO Wanda+OWL mask (Light-R1) → ${MASK_WANDA_LIGHT_R1}"
+"$TRAIN_PY" src/cold_start/wanda_owl_mask_finder.py \
+  --model_name "${MODEL}" \
+  --method wanda_owl \
+  --n_samples "${COLD_CAV_SUBSET}" \
+  --max_length "${DPO_MAX_LENGTH}" \
+  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+  --sparsity_percent "${SPARSITY_PERCENT}" \
+  --include_embeddings \
+  --output_file "${MASK_WANDA_LIGHT_R1}"
+
+echo ""
+echo "=== Generating DPO SNIP mask (Light-R1) → ${MASK_SNIP_LIGHT_R1}"
+"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
+  --model_name "${MODEL}" \
+  --method snip \
+  --mode dpo \
+  --dataset_name "${DPO_DS_KEY_LIGHT_R1}" \
+  --snip-objective "${DPO_SNIP_OBJECTIVE}" \
+  --n_samples "${COLD_CAV_SUBSET}" \
+  --sparsity "${SPARSITY_PERCENT}" \
+  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+  --max_length "${DPO_MAX_LENGTH}" \
+  --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
+  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
+  --snip-preference-beta "${DPO_BETA}" \
+  --output "${MASK_SNIP_LIGHT_R1}"
 
 echo ""
 #echo "=== Generating ORACLE (checkpoint-diff) mask (Light-R1) → ${MASK_ORACLE_LIGHT_R1}"
@@ -348,35 +350,34 @@ echo ""
 #  --sparsity_percent "${SPARSITY_PERCENT}" \
 #  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
 #  --output_file "${MASK_ORACLE_LIGHT_R1}"
-echo ""
-# TEMP SCOPE REDUCTION: GRPO Wanda+OWL mask disabled (focusing on Tulu3; GRPO gets dense + random-sparse only)
-#echo "=== Generating GRPO Wanda+OWL mask → ${MASK_GRPO_WANDA}"
-#"$TRAIN_PY" src/cold_start/wanda_owl_mask_finder.py \
-#  --model_name "${MODEL}" \
-#  --method wanda_owl \
-#  --n_samples "${GRPO_N_SAMPLES}" \
-#  --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-#  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-#  --sparsity_percent "${SPARSITY_PERCENT}" \
-#  --output_file "${MASK_GRPO_WANDA}"
+# echo ""
+# echo "=== Generating GRPO Wanda+OWL mask → ${MASK_GRPO_WANDA}"
+# "$TRAIN_PY" src/cold_start/wanda_owl_mask_finder.py \
+#   --model_name "${MODEL}" \
+#   --method wanda_owl \
+#   --n_samples "${GRPO_N_SAMPLES}" \
+#   --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
+#   --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+#   --sparsity_percent "${SPARSITY_PERCENT}" \
+#   --include_embeddings \
+#   --output_file "${MASK_GRPO_WANDA}"
 
-echo ""
-echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNIP}"
-# TEMP SCOPE REDUCTION: GRPO SNIP disabled
-#"$TRAIN_PY" src/cold_start/inference_mask_finder.py \
-#  --model_name "${MODEL}" \
-#  --mode grpo \
-#  --method snip \
-#  --snip-objective "${GRPO_SNIP_OBJECTIVE}" \
-#  --dataset_name "${GRPO_DATASET_HF}" \
-#  --n_samples "${GRPO_N_SAMPLES}" \
-#  --sparsity "${SPARSITY_PERCENT}" \
-#  --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
-#  --batch_size "${ORCH_MASK_BATCH_SIZE}" \
-#  --seed 42 \
-#  --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
-#  --snip-preference-beta "${GRPO_SNIP_PREFERENCE_BETA}" \
-#  --output "${MASK_GRPO_SNIP}"
+# echo ""
+# echo "=== Generating GRPO SNIP mask (${GRPO_SNIP_OBJECTIVE}) → ${MASK_GRPO_SNIP}"
+# "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
+#   --model_name "${MODEL}" \
+#   --mode grpo \
+#   --method snip \
+#   --snip-objective "${GRPO_SNIP_OBJECTIVE}" \
+#   --dataset_name "${GRPO_DATASET_HF}" \
+#   --n_samples "${GRPO_N_SAMPLES}" \
+#   --sparsity "${SPARSITY_PERCENT}" \
+#   --max_length "${GRPO_MAX_PROMPT_LENGTH}" \
+#   --batch_size "${ORCH_MASK_BATCH_SIZE}" \
+#   --seed 42 \
+#   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
+#   --snip-preference-beta "${GRPO_SNIP_PREFERENCE_BETA}" \
+#   --output "${MASK_GRPO_SNIP}"
 
 echo ""
 echo "=== Mask outputs written ==="
@@ -494,40 +495,45 @@ echo "--- DPO dense (Tulu3) ---"
 #  "dpo_dense_${DPO_DENSE_RUN_ID}"
 
 echo ""
-echo "--- DPO sparse Tulu3 (3 masks; random = shared baseline file) ---"
-submit_training_job "DPO sparse Wanda+OWL RUN_ID=${DPO_SPARSE_CAV_RUN_ID}" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID},RUN_ID=${DPO_SPARSE_CAV_RUN_ID},PIPELINE_MASK_FILE=${MASK_WANDA},DPO_DATASET_KEY=tulu3" \
-  "dpo_sp_wanda_${DPO_SPARSE_CAV_RUN_ID}"
+echo "--- DPO sparse Tulu3 (disabled) ---"
+#submit_training_job "DPO sparse Wanda+OWL RUN_ID=${DPO_SPARSE_CAV_RUN_ID}" \
+#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#  sparse_dpo \
+#  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID},RUN_ID=${DPO_SPARSE_CAV_RUN_ID},PIPELINE_MASK_FILE=${MASK_WANDA},DPO_DATASET_KEY=tulu3" \
+#  "dpo_sp_wanda_${DPO_SPARSE_CAV_RUN_ID}"
 
-submit_training_job "DPO sparse ORACLE RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle" \
-  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-  sparse_dpo \
-  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle,RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle,PIPELINE_MASK_FILE=${MASK_ORACLE_TULU3},DPO_DATASET_KEY=tulu3" \
-  "dpo_sp_oracle_${DPO_SPARSE_CAV_RUN_ID}_oracle"
+#submit_training_job "DPO sparse ORACLE RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle" \
+#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+#  sparse_dpo \
+#  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle,RUN_ID=${DPO_SPARSE_CAV_RUN_ID}_oracle,PIPELINE_MASK_FILE=${MASK_ORACLE_TULU3},DPO_DATASET_KEY=tulu3" \
+#  "dpo_sp_oracle_${DPO_SPARSE_CAV_RUN_ID}_oracle"
 
 echo ""
 echo "--- DPO dense + sparse (Light-R1, same hyperparameters; shared random mask) ---"
-## TEMP SCOPE REDUCTION: only Light-R1 sparse CAV + oracle
-#submit_training_job "DPO dense Light-R1 RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1}" \
-#  "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
-#  dense_dpo \
-#  "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-#  "dpo_dense_lr1_${DPO_DENSE_RUN_ID_LIGHT_R1}"
-#
-#submit_training_job "DPO sparse random Light-R1 RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}" \
-#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-#  sparse_dpo \
-#  "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-#  "dpo_sp_rand_lr1_${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}"
-#
-# TEMP SCOPE REDUCTION: Light-R1 Wanda+OWL disabled (no mask generated this run)
-#submit_training_job "DPO sparse Wanda+OWL Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}" \
-#  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
-#  sparse_dpo \
-#  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_WANDA_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
-#  "dpo_sp_wanda_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}"
+
+submit_training_job "DPO dense Light-R1 RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1}" \
+  "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
+  dense_dpo \
+  "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+  "dpo_dense_lr1_${DPO_DENSE_RUN_ID_LIGHT_R1}"
+
+submit_training_job "DPO sparse random Light-R1 RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}" \
+  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+  sparse_dpo \
+  "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_RANDOM},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+  "dpo_sp_rand_lr1_${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}"
+
+submit_training_job "DPO sparse Wanda+OWL Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}" \
+  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+  sparse_dpo \
+  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_WANDA_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+  "dpo_sp_wanda_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}"
+
+submit_training_job "DPO sparse SNIP Light-R1 RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1}" \
+  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+  sparse_dpo \
+  "PIPELINE_RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_SNIP_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+  "dpo_sp_snip_lr1_${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1}"
 
 #submit_training_job "DPO sparse ORACLE Light-R1 RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle" \
 #  "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
@@ -550,18 +556,17 @@ submit_training_job "GRPO sparse random name=${GRPO_SPARSE_RANDOM_RUN_NAME}" \
   "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_RANDOM},GRPO_RUN_NAME=${GRPO_SPARSE_RANDOM_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
   "grpo_sp_rand_${GRPO_SPARSE_RANDOM_RUN_NAME}"
 
-# TEMP SCOPE REDUCTION: GRPO Wanda+OWL sparse disabled (no mask generated this run)
-#submit_training_job "GRPO sparse Wanda+OWL name=${GRPO_SPARSE_CAV_RUN_NAME}" \
-#  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
-#  sparse_grpo \
-#  "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_WANDA},GRPO_RUN_NAME=${GRPO_SPARSE_CAV_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
-#  "grpo_sp_wanda_${GRPO_SPARSE_CAV_RUN_NAME}"
-#
-#submit_training_job "GRPO sparse SNIP name=${GRPO_SPARSE_SNIP_RUN_NAME}" \
-#  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
-#  sparse_grpo \
-#  "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_SNIP},GRPO_RUN_NAME=${GRPO_SPARSE_SNIP_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
-#  "grpo_sp_snip_${GRPO_SPARSE_SNIP_RUN_NAME}"
+# submit_training_job "GRPO sparse Wanda+OWL name=${GRPO_SPARSE_CAV_RUN_NAME}" \
+#   "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
+#   sparse_grpo \
+#   "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_WANDA},GRPO_RUN_NAME=${GRPO_SPARSE_CAV_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
+#   "grpo_sp_wanda_${GRPO_SPARSE_CAV_RUN_NAME}"
+
+# submit_training_job "GRPO sparse SNIP name=${GRPO_SPARSE_SNIP_RUN_NAME}" \
+#   "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
+#   sparse_grpo \
+#   "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_SNIP},GRPO_RUN_NAME=${GRPO_SPARSE_SNIP_RUN_NAME},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
+#   "grpo_sp_snip_${GRPO_SPARSE_SNIP_RUN_NAME}"
 
 echo ""
 echo "=== Done. Monitor with: squeue -u ${USER:-<user>} ==="
