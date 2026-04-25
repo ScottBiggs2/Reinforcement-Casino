@@ -238,12 +238,18 @@ def train_sparse_baseline(
         )
 
         print("Initializing DPOTrainer...")
+        # Pass `processing_class=tokenizer` instead of a custom data_collator —
+        # TRL's DPOTrainer handles {prompt, chosen, rejected} text → tokenized
+        # batches internally. The custom dpo_collator_fn copied from Scott's
+        # dense baseline crashes on `tokenizer.pad` when sparse phase exposes
+        # something the dense path didn't trigger (3 jobs all FAILED in
+        # collator before the new fix).
         trainer = DPOTrainer(
             model=model,
             args=dpo_config,
             train_dataset=dataset,
             eval_dataset=None,
-            data_collator=collator,
+            processing_class=tokenizer,
             optimizers=(optimizer, None),
         )
         print("✓ Trainer ready\n")
