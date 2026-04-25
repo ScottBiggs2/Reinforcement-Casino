@@ -219,12 +219,17 @@ def train_sparse_baseline(
         scratch_root = os.environ.get("SCRATCH_USER_ROOT", f"/scratch/{os.environ.get('USER', 'unknown')}")
         out_dir = os.path.join(scratch_root, "sparse_baseline_temp")
         os.makedirs(out_dir, exist_ok=True)
+        # logging_steps env override allows convergence checks to capture loss /
+        # rewards/* / logps/* trajectories. Default is "disabled" (n_steps+1) so
+        # pure timing runs aren't slowed by per-step logging hooks.
+        log_steps_env = os.environ.get("RL_CASINO_LOGGING_STEPS")
+        eff_logging_steps = int(log_steps_env) if log_steps_env else n_steps + 1
         dpo_config = DPOConfig(
             output_dir=out_dir,
             per_device_train_batch_size=batch_size,
             learning_rate=learning_rate,
             max_steps=n_steps,
-            logging_steps=n_steps + 1,   # disable logging
+            logging_steps=eff_logging_steps,
             report_to="none",
             remove_unused_columns=False,
             gradient_accumulation_steps=4,
@@ -299,6 +304,13 @@ def train_sparse_baseline(
         with open(out_path, "w") as f:
             json.dump(results, f, indent=2)
         print(f"✓ Timing results saved to {out_path}\n")
+
+        # Save trainer.state.log_history if any logs were captured (convergence check).
+        if trainer.state.log_history:
+            log_path = "log_history.json"
+            with open(log_path, "w") as f:
+                json.dump(trainer.state.log_history, f, indent=2)
+            print(f"✓ log_history saved to {log_path}  ({len(trainer.state.log_history)} entries)\n")
 
     finally:
         if os.path.exists(tmp_mask_path):

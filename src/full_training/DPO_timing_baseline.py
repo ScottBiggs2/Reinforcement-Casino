@@ -200,13 +200,16 @@ def train_baseline(
     out_dir = os.path.join(scratch_root, "baseline_temp")
     os.makedirs(out_dir, exist_ok=True)
 
+    log_steps_env = os.environ.get("RL_CASINO_LOGGING_STEPS")
+    eff_logging_steps = int(log_steps_env) if log_steps_env else n_steps + 1
+
     # Configure DPO
     dpo_config = DPOConfig(
         output_dir=out_dir,
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
         max_steps=n_steps,
-        logging_steps=n_steps + 1,  # Disable logging
+        logging_steps=eff_logging_steps,
         report_to="none",
         remove_unused_columns=False,
         gradient_accumulation_steps=4,
@@ -281,6 +284,12 @@ def train_baseline(
     with open('baseline_timing.json', 'w') as f:
         json.dump(results, f, indent=2)
     print("✓ Timing results saved to baseline_timing.json\n")
+
+    # Save trainer.state.log_history if any logs were captured.
+    if trainer.state.log_history:
+        with open('log_history.json', 'w') as f:
+            json.dump(trainer.state.log_history, f, indent=2)
+        print(f"✓ log_history saved to log_history.json ({len(trainer.state.log_history)} entries)\n")
     
     # Save final model to safetensors if requested
     if save_model:
