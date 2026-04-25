@@ -80,31 +80,32 @@ def load_dpo_dataset(subset_size=None):
 
 
 def dpo_collator_fn(examples, tokenizer):
-    """Same collator as DPO_timing_baseline.py."""
+    """DPO collator. Batch-tokenize each field once (avoids the per-example
+    list-of-BatchEncodings → tokenizer.pad path that breaks on some inputs)."""
     prompts = [ex.get("prompt", "") for ex in examples]
     chosens = [ex.get("chosen", "") for ex in examples]
     rejects = [ex.get("rejected", "") for ex in examples]
 
-    enc_prompt = [tokenizer(p, truncation=True, max_length=512, return_tensors="pt") for p in prompts]
-    enc_chosen = [tokenizer(c, truncation=True, max_length=1024, return_tensors="pt") for c in chosens]
-    enc_reject = [tokenizer(r, truncation=True, max_length=1024, return_tensors="pt") for r in rejects]
-
-    batch_prompt = tokenizer.pad(enc_prompt, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-    batch_chosen = tokenizer.pad(enc_chosen, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-    batch_reject = tokenizer.pad(enc_reject, padding=True, return_tensors="pt", pad_to_multiple_of=8)
-
-    for k in ("input_ids", "attention_mask"):
-        batch_prompt[k] = batch_prompt[k].to(torch.long)
-        batch_chosen[k] = batch_chosen[k].to(torch.long)
-        batch_reject[k] = batch_reject[k].to(torch.long)
+    batch_prompt = tokenizer(
+        prompts, padding=True, truncation=True, max_length=512,
+        return_tensors="pt", pad_to_multiple_of=8,
+    )
+    batch_chosen = tokenizer(
+        chosens, padding=True, truncation=True, max_length=1024,
+        return_tensors="pt", pad_to_multiple_of=8,
+    )
+    batch_reject = tokenizer(
+        rejects, padding=True, truncation=True, max_length=1024,
+        return_tensors="pt", pad_to_multiple_of=8,
+    )
 
     return {
-        "prompt_input_ids": batch_prompt["input_ids"],
-        "prompt_attention_mask": batch_prompt["attention_mask"],
-        "chosen_input_ids": batch_chosen["input_ids"],
-        "chosen_attention_mask": batch_chosen["attention_mask"],
-        "rejected_input_ids": batch_reject["input_ids"],
-        "rejected_attention_mask": batch_reject["attention_mask"],
+        "prompt_input_ids": batch_prompt["input_ids"].to(torch.long),
+        "prompt_attention_mask": batch_prompt["attention_mask"].to(torch.long),
+        "chosen_input_ids": batch_chosen["input_ids"].to(torch.long),
+        "chosen_attention_mask": batch_chosen["attention_mask"].to(torch.long),
+        "rejected_input_ids": batch_reject["input_ids"].to(torch.long),
+        "rejected_attention_mask": batch_reject["attention_mask"].to(torch.long),
     }
 
 
@@ -238,18 +239,15 @@ def train_sparse_baseline(
         )
 
         print("Initializing DPOTrainer...")
-        # Pass `processing_class=tokenizer` instead of a custom data_collator —
-        # TRL's DPOTrainer handles {prompt, chosen, rejected} text → tokenized
-        # batches internally. The custom dpo_collator_fn copied from Scott's
-        # dense baseline crashes on `tokenizer.pad` when sparse phase exposes
-        # something the dense path didn't trigger (3 jobs all FAILED in
-        # collator before the new fix).
+        # Use custom collator (with the batch-tokenize fix above). Without it,
+        # DPOTrainer's default tokenization produced float input_ids that
+        # crashed the embedding lookup with 'Expected Long, got Float'.
         trainer = DPOTrainer(
             model=model,
             args=dpo_config,
             train_dataset=dataset,
             eval_dataset=None,
-            processing_class=tokenizer,
+            data_collator=collator,
             optimizers=(optimizer, None),
         )
         print("✓ Trainer ready\n")
