@@ -83,11 +83,15 @@ class SNIPScorer:
         *,
         gradient_checkpointing: bool = True,
         use_autocast: bool = True,
+        response_masks: Optional[torch.Tensor] = None,
     ):
         """Return per-parameter SNIP saliency (|grad * w|) for the mean CE loss over batches.
 
         Uses **per-batch backward** with scale ``1/K`` so gradients match mean loss **without**
         fusing all forwards into one autograd graph (which would scale VRAM with batch count).
+
+        If ``response_masks`` is provided (a [N, T] int tensor where 1=response, 0=prompt/pad),
+        the loss is restricted to response tokens only, preventing prompt-token domination.
         """
         dev = torch.device(device)
         use_cuda = dev.type == "cuda" and torch.cuda.is_available()
@@ -137,6 +141,17 @@ class SNIPScorer:
                 attention_mask = enc["attention_mask"].to(device, non_blocking=True)
                 labels = input_ids.clone()
                 labels[attention_mask == 0] = -100
+
+                # Response-only masking: set prompt token labels to -100
+                if response_masks is not None:
+                    batch_rmask = response_masks[i : i + batch_size].to(device, non_blocking=True)
+                    labels[batch_rmask == 0] = -100
+                    active_tokens = (labels != -100).sum().item()
+                    total_tokens = attention_mask.sum().item()
+                    if i == 0:  # log once
+                        print(f"[SNIPScorer] Response-only masking: "
+                              f"{active_tokens}/{int(total_tokens)} tokens active in loss "
+                              f"({100*active_tokens/max(total_tokens,1):.1f}%)")
 
                 with ctx:
                     out = model(

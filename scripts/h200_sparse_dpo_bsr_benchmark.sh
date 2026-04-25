@@ -70,7 +70,7 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_DATASETS_CACHE_ROOT}"
 # Steps **per phase** (default 50). Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read
 # NUM_STEPS_DPO here, so a leftover export NUM_STEPS_DPO=500 from other README snippets
 # cannot silently turn this into a 500-step-per-phase run.
-export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-50}"
+export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-30}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
