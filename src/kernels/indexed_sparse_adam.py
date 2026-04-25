@@ -1,27 +1,38 @@
 
 import triton
 import triton.language as tl
+import os
+
+def get_env_int(name, default):
+    return int(os.environ.get(name, default))
 
 @triton.jit
 def indexed_sparse_adamw_kernel(
-    # Pointers to FULL tensors (flattened)
+    # Pointers to 2D tensors
     param_ptr,
     grad_ptr,
     exp_avg_ptr,
     exp_avg_sq_ptr,
-    # Pointer to non-zero indices
+    # Pointer to 1D non-zero linear indices
     indices_ptr,
     n_indices,
+    # Tensor shape and strides
+    M, N,
+    stride_p_m, stride_p_n,
+    stride_g_m, stride_g_n,
+    stride_m_m, stride_m_n,
+    stride_v_m, stride_v_n,
     # Hyperparameters
-    lr: tl.constexpr,
-    beta1: tl.constexpr,
-    beta2: tl.constexpr,
-    eps: tl.constexpr,
-    weight_decay: tl.constexpr,
+    lr,
+    beta1,
+    beta2,
+    eps,
+    weight_decay,
     # Precomputed bias corrections (not constexpr to avoid recompilation)
     bias_correction1_val,
     bias_correction2_val,
     BLOCK_SIZE: tl.constexpr,
+    USE_SPARSE_STATES: tl.constexpr,
 ):
     """
     Indexed sparse AdamW without kernel recompilation.
@@ -33,14 +44,31 @@ def indexed_sparse_adamw_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask_valid = offsets < n_indices
     
-    # Load the actual flattened indices we need to update
-    idx = tl.load(indices_ptr + offsets, mask=mask_valid, other=0)
+    # Load the actual flattened index we need to update
+    linear_idx = tl.load(indices_ptr + offsets, mask=mask_valid, other=0)
+    
+    # Convert linear index to 2D coordinates
+    row = linear_idx // N
+    col = linear_idx % N
+    
+    # Compute memory offsets
+    p_off = row * stride_p_m + col * stride_p_n
+    g_off = row * stride_g_m + col * stride_g_n
     
     # Gather operation - only load values at non-zero indices
-    param = tl.load(param_ptr + idx, mask=mask_valid, other=0.0)
-    grad = tl.load(grad_ptr + idx, mask=mask_valid, other=0.0)
-    exp_avg = tl.load(exp_avg_ptr + idx, mask=mask_valid, other=0.0)
-    exp_avg_sq = tl.load(exp_avg_sq_ptr + idx, mask=mask_valid, other=0.0)
+    param = tl.load(param_ptr + p_off, mask=mask_valid, other=0.0)
+    grad = tl.load(grad_ptr + g_off, mask=mask_valid, other=0.0)
+    
+    if USE_SPARSE_STATES:
+        # Sparse storage: exp_avg and exp_avg_sq are 1D tensors of size n_indices
+        m = tl.load(exp_avg_ptr + offsets, mask=mask_valid, other=0.0)
+        v = tl.load(exp_avg_sq_ptr + offsets, mask=mask_valid, other=0.0)
+    else:
+        # Dense storage: exp_avg and exp_avg_sq match parameter shape
+        m_off = row * stride_m_m + col * stride_m_n
+        v_off = row * stride_v_m + col * stride_v_n
+        m = tl.load(exp_avg_ptr + m_off, mask=mask_valid, other=0.0)
+        v = tl.load(exp_avg_sq_ptr + v_off, mask=mask_valid, other=0.0)
     
     # Standard AdamW update computations
     decay_factor = 1.0 - lr * weight_decay
@@ -61,9 +89,14 @@ def indexed_sparse_adamw_kernel(
     param_new = param_decayed - step_size * exp_avg_corrected
     
     # Scatter operation - only store at non-zero indices
-    tl.store(param_ptr + idx, param_new, mask=mask_valid)
-    tl.store(exp_avg_ptr + idx, exp_avg_new, mask=mask_valid)
-    tl.store(exp_avg_sq_ptr + idx, exp_avg_sq_new, mask=mask_valid)
+    tl.store(param_ptr + p_off, param_new, mask=mask_valid)
+    
+    if USE_SPARSE_STATES:
+        tl.store(exp_avg_ptr + offsets, exp_avg_new, mask=mask_valid)
+        tl.store(exp_avg_sq_ptr + offsets, exp_avg_sq_new, mask=mask_valid)
+    else:
+        tl.store(exp_avg_ptr + m_off, exp_avg_new, mask=mask_valid)
+        tl.store(exp_avg_sq_ptr + v_off, exp_avg_sq_new, mask=mask_valid)
 
 
 def triton_indexed_sparse_adamw_step(
@@ -81,28 +114,33 @@ def triton_indexed_sparse_adamw_step(
     bias_correction1 = 1.0 - (beta1 ** step)
     bias_correction2 = 1.0 - (beta2 ** step)
     
-    # Flatten all tensors for indexed access (creates views, not copies)
-    param_flat = param.flatten()
-    grad_flat = grad.flatten()
-    exp_avg_flat = exp_avg.flatten()
-    exp_avg_sq_flat = exp_avg_sq.flatten()
-    
-    # Only call .contiguous() if needed
-    if not param_flat.is_contiguous():
-        param_flat = param_flat.contiguous()
-    if not grad_flat.is_contiguous():
-        grad_flat = grad_flat.contiguous()
-    if not exp_avg_flat.is_contiguous():
-        exp_avg_flat = exp_avg_flat.contiguous()
-    if not exp_avg_sq_flat.is_contiguous():
-        exp_avg_sq_flat = exp_avg_sq_flat.contiguous()
-    
+    M, N = param.shape
     grid = (triton.cdiv(n_indices, block_size),)
     
+    # Detect sparse states
+    use_sparse_states = (exp_avg.dim() == 1)
+    
+    # Tuneable parameters from environment
+    num_warps = get_env_int("BSR_NUM_WARPS", 4)
+    num_stages = get_env_int("BSR_NUM_STAGES", 2)
+    
+    # Handle strides for 1D vs 2D
+    if use_sparse_states:
+        stride_m_m = stride_m_n = 0
+        stride_v_m = stride_v_n = 0
+    else:
+        stride_m_m, stride_m_n = exp_avg.stride(0), exp_avg.stride(1)
+        stride_v_m, stride_v_n = exp_avg_sq.stride(0), exp_avg_sq.stride(1)
+
     indexed_sparse_adamw_kernel[grid](
-        param_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat,
+        param, grad, exp_avg, exp_avg_sq,
         nonzero_indices,
         n_indices,
+        M, N,
+        param.stride(0), param.stride(1),
+        grad.stride(0), grad.stride(1),
+        stride_m_m, stride_m_n,
+        stride_v_m, stride_v_n,
         lr=lr,
         beta1=beta1,
         beta2=beta2,
@@ -111,26 +149,7 @@ def triton_indexed_sparse_adamw_step(
         bias_correction1_val=bias_correction1,
         bias_correction2_val=bias_correction2,
         BLOCK_SIZE=block_size,
+        USE_SPARSE_STATES=use_sparse_states,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
-    
-    # Update .data directly to avoid overhead (modifications to views are reflected if contiguous)
-    # If we made copies with .contiguous(), we might need to copy back?
-    # Ideally, we assume they are contiguous or the layout matches.
-    # The original script did: 
-    # param.data = param_flat.reshape(param.shape)
-    # Let's keep that for safety.
-    
-    if param_flat.data_ptr() != param.data_ptr():
-         # If we copied, we must copy back. 
-         # But wait, triton writes to the pointer we gave it. 
-         # If param_flat is a copy, we wrote to the copy.
-         # So we must copy back to param.
-         param.copy_(param_flat.reshape(param.shape))
-    else:
-         # If it was a view, modifications are in place. nothing to do.
-         pass
-         
-    # To be safe and identical to v3 logic:
-    param.data = param_flat.reshape(param.shape)
-    exp_avg.data = exp_avg_flat.reshape(exp_avg.shape)
-    exp_avg_sq.data = exp_avg_sq_flat.reshape(exp_avg_sq.shape)

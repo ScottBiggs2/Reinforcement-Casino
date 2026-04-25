@@ -59,7 +59,8 @@ class SparseAdamW(torch.optim.Optimizer):
             with torch.no_grad():
                 for group in self.param_groups:
                     for p in group['params']:
-                        self._init_adam_state_tensors(p)
+                        p_name = self.param_to_name.get(id(p))
+                        self._init_adam_state_tensors(p, p_name)
 
             init_time = time.time() - init_start
             slurm_safe_print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
@@ -75,17 +76,32 @@ class SparseAdamW(torch.optim.Optimizer):
         slurm_safe_print(f"  Kernel recompilation fix: APPLIED")
         slurm_safe_print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
 
-    def _init_adam_state_tensors(self, p: torch.Tensor) -> None:
+    def _init_adam_state_tensors(self, p: torch.Tensor, param_name: str = None) -> None:
         state = self.state[p]
         state["step"] = 0
-        state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
-        state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        
+        should_use_sparse = (
+            param_name is not None and 
+            self.mask_manager.has_mask(param_name) and 
+            len(p.shape) == 2 and 
+            (not self.mlp_only or self.mask_manager.is_mlp_layer(param_name))
+        )
+        
+        if should_use_sparse:
+            nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
+            n_nonzero = nonzero_indices.shape[0]
+            # Use 1D sparse storage for optimizer states (VRAM optimization)
+            state["exp_avg"] = torch.zeros(n_nonzero, device=p.device, dtype=p.dtype)
+            state["exp_avg_sq"] = torch.zeros(n_nonzero, device=p.device, dtype=p.dtype)
+        else:
+            state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+            state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
 
-    def _ensure_adam_state(self, p: torch.Tensor) -> None:
+    def _ensure_adam_state(self, p: torch.Tensor, param_name: str = None) -> None:
         if not self.eager_state_init:
             state = self.state[p]
             if "exp_avg" not in state:
-                self._init_adam_state_tensors(p)
+                self._init_adam_state_tensors(p, param_name)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -114,6 +130,8 @@ class SparseAdamW(torch.optim.Optimizer):
                     self._dense_step(p, group)
                     continue
                 
+                self._ensure_adam_state(p, param_name)
+                
                 should_use_sparse = (
                     self.mask_manager.has_mask(param_name) and
                     len(p.shape) == 2 and
@@ -131,7 +149,6 @@ class SparseAdamW(torch.optim.Optimizer):
         """
         Sparse update using indexed Triton kernel (PERFORMANCE FIXED).
         """
-        self._ensure_adam_state(param)
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
@@ -177,7 +194,6 @@ class SparseAdamW(torch.optim.Optimizer):
     
     def _dense_step(self, param, group):
         """Standard dense AdamW update (fallback for non-masked params)."""
-        self._ensure_adam_state(param)
         grad = param.grad
         state = self.state[param]
         state['step'] += 1

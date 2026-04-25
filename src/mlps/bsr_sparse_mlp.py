@@ -15,8 +15,8 @@ class SparseLinearFunction(torch.autograd.Function):
     """
     
     @staticmethod
-    def forward(ctx, input, weight, bias, mask, block_size=16, use_tf32=False):
-        ctx.save_for_backward(input, weight, mask)
+    def forward(ctx, input, weight, bias, mask, active_blocks, block_size=16, use_tf32=False):
+        ctx.save_for_backward(input, weight, mask, active_blocks)
         ctx.has_bias = bias is not None
         ctx.block_size = block_size
         ctx.use_tf32 = use_tf32
@@ -30,7 +30,7 @@ class SparseLinearFunction(torch.autograd.Function):
     
     @staticmethod
     def backward(ctx, grad_output):
-        input_tensor, weight, mask = ctx.saved_tensors
+        input_tensor, weight, mask, active_blocks = ctx.saved_tensors
         block_size = ctx.block_size
         
         grad_input = grad_weight = grad_bias = None
@@ -53,17 +53,19 @@ class SparseLinearFunction(torch.autograd.Function):
                 input_tensor_flat = input_tensor_flat.contiguous()
                 
             grad_weight = sparse_weight_gradient_triton(
-                grad_output_flat, input_tensor_flat, mask, 
+                grad_output_flat, input_tensor_flat, mask,
+                active_blocks=active_blocks,
                 block_size=block_size,
                 use_tf32=ctx.use_tf32
             )
+        
             
         # Bias gradient
         if ctx.has_bias and ctx.needs_input_grad[2]:
             # Sum over all dimensions except the last one (channel/feature dim)
             grad_bias = grad_output.reshape(-1, grad_output.shape[-1]).sum(0)
             
-        return grad_input, grad_weight, grad_bias, None, None, None
+        return grad_input, grad_weight, grad_bias, None, None, None, None
 
 
 class SparseLinearLayer(nn.Linear):
@@ -72,19 +74,39 @@ class SparseLinearLayer(nn.Linear):
     """
     def __init__(self, in_features, out_features, bias=True, mask=None, block_size=16, use_tf32=False):
         super().__init__(in_features, out_features, bias)
-        self.register_buffer('mask', mask)
         self.block_size = block_size
         self.use_tf32 = use_tf32
+        self.register_buffer('mask', None)
+        self.register_buffer('active_blocks', None)
+        if mask is not None:
+            self.set_mask(mask)
         
     def set_mask(self, mask):
         if mask.shape != self.weight.shape:
             raise ValueError(f"Mask shape {mask.shape} mismatch with weight {self.weight.shape}")
         self.mask = mask.to(self.weight.device)
         
+        # Precompute active blocks
+        output_dim, input_dim = mask.shape
+        num_blocks_m = (output_dim + self.block_size - 1) // self.block_size
+        num_blocks_n = (input_dim + self.block_size - 1) // self.block_size
+        pad_m = num_blocks_m * self.block_size - output_dim
+        pad_n = num_blocks_n * self.block_size - input_dim
+        
+        mask_f = mask.float() if mask.dtype == torch.bool else mask
+        padded_mask = torch.nn.functional.pad(mask_f, (0, pad_n, 0, pad_m), value=0)
+        blocks = padded_mask.view(num_blocks_m, self.block_size, num_blocks_n, self.block_size)
+        block_active = blocks.any(dim=1).any(dim=2)
+        
+        self.active_blocks = torch.nonzero(block_active.flatten(), as_tuple=True)[0].to(torch.int32).to(self.weight.device)
+        
+        # Ensure weight is zeroed where mask is zero (mathematical equivalence)
+        with torch.no_grad():
+            self.weight.data *= self.mask.to(self.weight.dtype)
+        
     def forward(self, input):
         if self.mask is not None:
-             # Pass block_size to the custom function
-             return SparseLinearFunction.apply(input, self.weight, self.bias, self.mask, self.block_size, self.use_tf32)
+             return SparseLinearFunction.apply(input, self.weight, self.bias, self.mask, self.active_blocks, self.block_size, self.use_tf32)
         else:
             return F.linear(input, self.weight, self.bias)
 

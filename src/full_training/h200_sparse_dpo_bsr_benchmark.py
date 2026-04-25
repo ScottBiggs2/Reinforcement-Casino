@@ -182,10 +182,10 @@ def main():
 
     phases = [
         ("dense", None, "adamw"),
-        ("sparse_90", 90.0, "sparse_adamw"),
-        # ("sparse_95", 95.0, "sparse_adamw"),
+        # ("sparse_90", 90.0, "sparse_adamw"),
+        ("sparse_95", 95.0, "sparse_adamw"),
         ("sparse_97_5", 97.5, "sparse_adamw"),
-        ("sparse_99", 99.0, "sparse_adamw"),
+        # ("sparse_99", 99.0, "sparse_adamw"),
         ("sparse_99_75", 99.75, "sparse_adamw"),
     ]
 

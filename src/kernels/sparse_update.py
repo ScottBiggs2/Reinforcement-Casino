@@ -2,6 +2,10 @@
 import triton
 import triton.language as tl
 import torch
+import os
+
+def get_env_int(name, default):
+    return int(os.environ.get(name, default))
 
 @triton.jit
 def sparse_update_kernel(
@@ -82,6 +86,10 @@ def triton_sparse_update(weights, gradient, mask, lr, block_size=32):
     num_blocks_n = triton.cdiv(N, block_size)
     grid = (num_blocks_m * num_blocks_n,)
     
+    # Tuneable parameters from environment
+    num_warps = get_env_int("BSR_NUM_WARPS", 4)
+    num_stages = get_env_int("BSR_NUM_STAGES", 2)
+    
     # Launch kernel
     sparse_update_kernel[grid](
         weights, gradient, mask, output,
@@ -92,6 +100,8 @@ def triton_sparse_update(weights, gradient, mask, lr, block_size=32):
         output.stride(0), output.stride(1),
         lr,
         BLOCK_SIZE=block_size,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
     
     return output
