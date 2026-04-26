@@ -540,13 +540,13 @@ submit_training_job "DPO sparse SNIP Light-R1 RUN_ID=${DPO_SPARSE_SNIP_RUN_ID_LI
 #  sparse_dpo \
 #  "PIPELINE_RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle,RUN_ID=${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle,PIPELINE_MASK_FILE=${MASK_ORACLE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
 #  "dpo_sp_oracle_lr1_${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1}_oracle"
-echo ""
-echo "--- GRPO dense ---"
-submit_training_job "GRPO dense slug=${GRPO_DENSE_RUN_SLUG}" \
-  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
-  dense_grpo \
-  "GRPO_MODE=dense,GRPO_RUN_SLUG=${GRPO_DENSE_RUN_SLUG},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
-  "grpo_dense_${GRPO_DENSE_RUN_SLUG}"
+# echo ""
+# echo "--- GRPO dense ---"
+# submit_training_job "GRPO dense slug=${GRPO_DENSE_RUN_SLUG}" \
+#   "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
+#   dense_grpo \
+#   "GRPO_MODE=dense,GRPO_RUN_SLUG=${GRPO_DENSE_RUN_SLUG},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE},GRPO_USE_WANDB=${GRPO_USE_WANDB}" \
+#   "grpo_dense_${GRPO_DENSE_RUN_SLUG}"
 
 echo ""
 echo "--- GRPO sparse (3 masks) ---"
