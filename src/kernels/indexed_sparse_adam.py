@@ -61,14 +61,14 @@ def indexed_sparse_adamw_kernel(
     
     if USE_SPARSE_STATES:
         # Sparse storage: exp_avg and exp_avg_sq are 1D tensors of size n_indices
-        m = tl.load(exp_avg_ptr + offsets, mask=mask_valid, other=0.0)
-        v = tl.load(exp_avg_sq_ptr + offsets, mask=mask_valid, other=0.0)
+        exp_avg = tl.load(exp_avg_ptr + offsets, mask=mask_valid, other=0.0)
+        exp_avg_sq = tl.load(exp_avg_sq_ptr + offsets, mask=mask_valid, other=0.0)
     else:
         # Dense storage: exp_avg and exp_avg_sq match parameter shape
         m_off = row * stride_m_m + col * stride_m_n
         v_off = row * stride_v_m + col * stride_v_n
-        m = tl.load(exp_avg_ptr + m_off, mask=mask_valid, other=0.0)
-        v = tl.load(exp_avg_sq_ptr + v_off, mask=mask_valid, other=0.0)
+        exp_avg = tl.load(exp_avg_ptr + m_off, mask=mask_valid, other=0.0)
+        exp_avg_sq = tl.load(exp_avg_sq_ptr + v_off, mask=mask_valid, other=0.0)
     
     # Standard AdamW update computations
     decay_factor = 1.0 - lr * weight_decay
