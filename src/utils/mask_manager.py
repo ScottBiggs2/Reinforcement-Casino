@@ -83,7 +83,7 @@ class SparseMaskManager:
                     padded_mask = mask.float()
                 
                 blocks = padded_mask.view(num_blocks_m, block_size, num_blocks_n, block_size)
-                block_active = blocks.any(dim=1).any(dim=3) # any() over both block dims
+                block_active = blocks.any(dim=(1, 3)) # any() over both block dims
                 self.active_block_indices = getattr(self, 'active_block_indices', {})
                 self.active_block_indices[name] = torch.nonzero(block_active.flatten(), as_tuple=False).squeeze(-1).to(torch.int32).to(device)
             else:

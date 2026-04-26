@@ -89,11 +89,24 @@ class SparseAdamW(torch.optim.Optimizer):
         )
         
         if should_use_sparse:
-            nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
-            n_nonzero = nonzero_indices.shape[0]
-            # Use 1D sparse storage for optimizer states (VRAM optimization)
-            state["exp_avg"] = torch.zeros(n_nonzero, device=p.device, dtype=p.dtype)
-            state["exp_avg_sq"] = torch.zeros(n_nonzero, device=p.device, dtype=p.dtype)
+            active_block_indices = self.mask_manager.get_active_block_indices(param_name)
+            if active_block_indices is not None and len(active_block_indices) > 0:
+                # Use Block-Sparse storage (BSR-compatible)
+                # We store entire 16x16 blocks (including zeros) to enable fast coalesced kernels
+                n_blocks = active_block_indices.shape[0]
+                n_elements = n_blocks * 16 * 16
+                state["exp_avg"] = torch.zeros(n_elements, device=p.device, dtype=p.dtype)
+                state["exp_avg_sq"] = torch.zeros(n_elements, device=p.device, dtype=p.dtype)
+                state["sparse_regime"] = "block"
+                state["active_block_indices"] = active_block_indices
+            else:
+                # Fallback to Element-Sparse storage (Unstructured)
+                nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
+                n_nonzero = nonzero_indices.shape[0]
+                state["exp_avg"] = torch.zeros(n_nonzero, device=p.device, dtype=p.dtype)
+                state["exp_avg_sq"] = torch.zeros(n_nonzero, device=p.device, dtype=p.dtype)
+                state["sparse_regime"] = "element"
+                state["nonzero_indices"] = nonzero_indices
         else:
             state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
             state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
@@ -209,9 +222,10 @@ class SparseAdamW(torch.optim.Optimizer):
         state['step'] += 1
         
         try:
-            active_block_indices = self.mask_manager.get_active_block_indices(param_name)
+            regime = state.get("sparse_regime", "element")
             
-            if active_block_indices is not None and len(active_block_indices) > 0:
+            if regime == "block":
+                active_block_indices = state["active_block_indices"]
                 # Use block-aware optimizer kernel (faster coalescing)
                 triton_bsr_sparse_adamw_step(
                     param=param,
@@ -228,6 +242,7 @@ class SparseAdamW(torch.optim.Optimizer):
                     block_size=16, # Assuming 16x16 BSR
                 )
             else:
+                nonzero_indices = state["nonzero_indices"]
                 # Fallback to unstructured indexed sparse kernel
                 triton_indexed_sparse_adamw_step(
                     param=param,
