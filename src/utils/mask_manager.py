@@ -63,14 +63,33 @@ class SparseMaskManager:
             # CRITICAL FIX: Pre-compute flattened indices of non-zero elements ON GPU
             # The mask is already on device, so nonzero() will return GPU indices
             if nonzero_count > 0:
-                # nonzero() returns indices; we flatten and store as 1D tensor
+                # 1. Unstructured indices (for fallback or unstructured kernels)
                 flat_mask = mask.flatten()
                 indices = torch.nonzero(flat_mask, as_tuple=False).squeeze(-1).contiguous()
-                # Ensure indices are on the correct device (should already be, but verify)
                 self.nonzero_indices[name] = indices.to(device, non_blocking=True)
+                
+                # 2. Block-structured indices (for BSR kernels)
+                # Assume 16x16 blocks (standard for this project)
+                block_size = 16
+                M, N = mask.shape
+                num_blocks_m = (M + block_size - 1) // block_size
+                num_blocks_n = (N + block_size - 1) // block_size
+                pad_m = num_blocks_m * block_size - M
+                pad_n = num_blocks_n * block_size - N
+                
+                if pad_m > 0 or pad_n > 0:
+                    padded_mask = torch.nn.functional.pad(mask.float(), (0, pad_n, 0, pad_m), value=0)
+                else:
+                    padded_mask = mask.float()
+                
+                blocks = padded_mask.view(num_blocks_m, block_size, num_blocks_n, block_size)
+                block_active = blocks.any(dim=1).any(dim=3) # any() over both block dims
+                self.active_block_indices = getattr(self, 'active_block_indices', {})
+                self.active_block_indices[name] = torch.nonzero(block_active.flatten(), as_tuple=False).squeeze(-1).to(torch.int32).to(device)
             else:
-                # Edge case: completely sparse mask
                 self.nonzero_indices[name] = torch.empty(0, dtype=torch.long, device=device)
+                self.active_block_indices = getattr(self, 'active_block_indices', {})
+                self.active_block_indices[name] = torch.empty(0, dtype=torch.int32, device=device)
         
         slurm_safe_print(f"✓ Loaded {len(self.masks)} masks with pre-computed indices")
         self._print_mask_summary()
@@ -119,8 +138,22 @@ class SparseMaskManager:
         if idx_key_dots in self.nonzero_indices:
             return self.nonzero_indices[idx_key_dots]
         
+    def get_active_block_indices(self, param_name):
+        """Get pre-computed active block indices (16x16) for a parameter."""
+        if hasattr(self, 'active_block_indices'):
+            if param_name in self.active_block_indices:
+                return self.active_block_indices[param_name]
+            
+            idx_key = param_name.replace('.', '_')
+            if idx_key in self.active_block_indices:
+                return self.active_block_indices[idx_key]
+            
+            idx_key_dots = param_name.replace('_', '.')
+            if idx_key_dots in self.active_block_indices:
+                return self.active_block_indices[idx_key_dots]
+        
         return None
-    
+
     def is_mlp_layer(self, param_name):
         """Check if parameter belongs to an MLP layer."""
         return 'mlp' in param_name.lower()

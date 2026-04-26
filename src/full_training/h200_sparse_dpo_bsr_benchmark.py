@@ -55,6 +55,7 @@ from src.utils.bsr_theory_metrics import (
     default_b_tokens_proxy,
     dense_phase_theory_stub,
 )
+from src.utils.block_profiler import print_block_sparsity_profile
 
 
 def _build_random_scores_for_masks(model: torch.nn.Module, mlp_only: bool) -> dict:
@@ -122,6 +123,64 @@ def generate_random_masks_cpu(
     )
     return masks
 
+def generate_block_random_masks_cpu(
+    model_name: str,
+    checkpoint_path: Optional[str],
+    sparsity_percent: float,
+    seed: int,
+    mlp_only: bool,
+    min_layer_keep_ratio: float,
+    block_size: int = 16,
+) -> dict:
+    """Build global random masks that are explicitly block-structured (e.g., 16x16)."""
+    ckpt = checkpoint_path if checkpoint_path and str(checkpoint_path).lower() != "none" else model_name
+    torch.manual_seed(seed)
+    slurm_safe_print(
+        f"  Generating BLOCK-STRUCTURED random mask (target sparsity {sparsity_percent}%, seed={seed}, block={block_size}) on CPU..."
+    )
+    m = _model_for_mask_shapes(ckpt)
+    
+    # 1. Generate random scores for the block grid
+    block_scores = {}
+    original_shapes = {}
+    for name, p in m.named_parameters():
+        if "weight" not in name or p.dim() != 2:
+            continue
+        if mlp_only and "mlp" not in name.lower():
+            continue
+            
+        M, N = p.shape
+        original_shapes[name] = (M, N)
+        blocks_m = (M + block_size - 1) // block_size
+        blocks_n = (N + block_size - 1) // block_size
+        block_scores[name] = torch.rand((blocks_m, blocks_n), dtype=torch.float32, device="cpu")
+        
+    del m
+    gc.collect()
+
+    # 2. Prune the block grid! (This guarantees global sparsity constraints at the block level)
+    # We turn OFF tie_break_noise so that if a block score is exactly on the threshold, 
+    # it gets decided cleanly, though with random floats it's rare anyway.
+    block_masks = create_mask_from_scores_gpu_efficient(
+        block_scores,
+        sparsity_percent,
+        device="cpu",
+        min_layer_keep_ratio=min_layer_keep_ratio,
+        local_pool=False,
+        add_tie_break_noise=False,
+    )
+    
+    # 3. Expand block masks back to original shapes
+    final_masks = {}
+    for name, b_mask in block_masks.items():
+        # Expand
+        expanded = b_mask.repeat_interleave(block_size, dim=0).repeat_interleave(block_size, dim=1)
+        # Crop padding
+        M, N = original_shapes[name]
+        final_masks[name] = expanded[:M, :N]
+        
+    return final_masks
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -181,12 +240,9 @@ def main():
     dpo_ds = registry_load_dpo(args.dataset, subset_size=args.subset_size)
 
     phases = [
-        ("dense", None, "adamw"),
-        # ("sparse_90", 90.0, "sparse_adamw"),
-        ("sparse_95", 95.0, "sparse_adamw"),
-        ("sparse_97_5", 97.5, "sparse_adamw"),
-        # ("sparse_99", 99.0, "sparse_adamw"),
-        ("sparse_99_75", 99.75, "sparse_adamw"),
+        ("dense", None, "adamw", "none"),
+        ("sparse_99_75", 99.75, "sparse_adamw", "unstructured"),
+        ("block_sparse_99_75", 99.75, "sparse_adamw", "block"),
     ]
 
     gc_flag = not args.no_gradient_checkpointing
@@ -194,9 +250,9 @@ def main():
     if dm.lower() in ("none", "null"):
         dm = "none"
 
-    for idx, (phase_name, sparsity_pct, opt) in enumerate(phases):
+    for idx, (phase_name, sparsity_pct, opt, mask_type) in enumerate(phases):
         slurm_safe_print(
-            f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt}\n{'#'*60}\n"
+            f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt} mask_type={mask_type}\n{'#'*60}\n"
         )
         mask_path = None
         tmp_mask = None
@@ -204,15 +260,30 @@ def main():
 
         extra_log: Optional[Dict[str, Any]] = None
         if sparsity_pct is not None:
-            masks = generate_random_masks_cpu(
-                args.model_name,
-                args.checkpoint,
-                sparsity_pct,
-                seed=seed,
-                mlp_only=args.mlp_only,
-                min_layer_keep_ratio=args.min_layer_keep_ratio,
-            )
+            if mask_type == "block":
+                masks = generate_block_random_masks_cpu(
+                    args.model_name,
+                    args.checkpoint,
+                    sparsity_pct,
+                    seed=seed,
+                    mlp_only=args.mlp_only,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    block_size=args.block_size_bsr,
+                )
+            else:
+                masks = generate_random_masks_cpu(
+                    args.model_name,
+                    args.checkpoint,
+                    sparsity_pct,
+                    seed=seed,
+                    mlp_only=args.mlp_only,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                )
             bool_masks = {k: v.bool() if v.dtype != torch.bool else v for k, v in masks.items()}
+            
+            # Profile and print block sparsity BEFORE saving
+            print_block_sparsity_profile(bool_masks, block_size=args.block_size_bsr)
+            
             extra_log = compute_sparse_mask_theory_metrics(bool_masks, b_tokens)
             theory_records.append(
                 {

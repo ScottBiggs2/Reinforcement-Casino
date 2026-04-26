@@ -3,7 +3,8 @@ import torch
 import time
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.slurm_safe_log import slurm_safe_print
-from src.kernels.indexed_sparse_adam import triton_indexed_sparse_adamw_step
+from src.kernels.indexed_sparse_adam import triton_indexed_sparse_adamw_step, triton_bsr_sparse_adamw_step
+from src.kernels.sparse_norm import compute_bsr_grad_norm_sq, compute_unstructured_grad_norm_sq
 
 class SparseAdamW(torch.optim.Optimizer):
     """
@@ -104,6 +105,49 @@ class SparseAdamW(torch.optim.Optimizer):
                 self._init_adam_state_tensors(p, param_name)
 
     @torch.no_grad()
+    def _clip_grads_sparse(self):
+        """
+        Optimized gradient clipping that only looks at non-zero elements.
+        Avoids redundant memory reads and synchronizations.
+        """
+        if not self.max_grad_norm or self.max_grad_norm <= 0:
+            return
+            
+        total_norm_sq = torch.tensor(0.0, device='cuda')
+        
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                
+                param_name = self.param_to_name.get(id(p), None)
+                
+                # Check for mask
+                if param_name and self.mask_manager.has_mask(param_name):
+                    # Try BSR norm first
+                    active_blocks = self.mask_manager.get_active_block_indices(param_name)
+                    if active_blocks is not None:
+                        total_norm_sq += compute_bsr_grad_norm_sq(p.grad, active_blocks)
+                    else:
+                        # Fallback to unstructured
+                        indices = self.mask_manager.get_nonzero_indices(param_name)
+                        total_norm_sq += compute_unstructured_grad_norm_sq(p.grad, indices)
+                else:
+                    # Dense parameter
+                    total_norm_sq += torch.sum(p.grad * p.grad)
+        
+        total_norm = total_norm_sq.sqrt()
+        clip_coef = self.max_grad_norm / (total_norm + 1e-6)
+        
+        if clip_coef < 1.0:
+            for group in self.param_groups:
+                for p in group['params']:
+                    if p.grad is not None:
+                        p.grad.mul_(clip_coef)
+        
+        return total_norm
+
+    @torch.no_grad()
     def step(self, closure=None):
         """Perform a single optimization step using Triton kernels."""
         loss = None
@@ -111,13 +155,9 @@ class SparseAdamW(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        # Gradient clipping: do it once per param-group (not once per parameter).
-        # Per-parameter clipping is extremely slow at Llama-8B scale.
-        if self.max_grad_norm and self.max_grad_norm > 0:
-            for group in self.param_groups:
-                params = [p for p in group["params"] if p.grad is not None]
-                if params:
-                    torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+        # Check for redundant clipping (if Trainer also has max_grad_norm)
+        # We handle clipping ourselves using optimized sparse kernels.
+        self._clip_grads_sparse()
         
         for group in self.param_groups:
             for p in group['params']:
@@ -169,21 +209,40 @@ class SparseAdamW(torch.optim.Optimizer):
         state['step'] += 1
         
         try:
-            # Use optimized indexed sparse kernel (with bias correction fix)
-            triton_indexed_sparse_adamw_step(
-                param=param,
-                grad=grad,
-                nonzero_indices=nonzero_indices,
-                exp_avg=state['exp_avg'],
-                exp_avg_sq=state['exp_avg_sq'],
-                lr=group['lr'],
-                beta1=group['betas'][0],
-                beta2=group['betas'][1],
-                eps=group['eps'],
-                weight_decay=group['weight_decay'],
-                step=state['step'],
-                block_size=self.block_size,
-            )
+            active_block_indices = self.mask_manager.get_active_block_indices(param_name)
+            
+            if active_block_indices is not None and len(active_block_indices) > 0:
+                # Use block-aware optimizer kernel (faster coalescing)
+                triton_bsr_sparse_adamw_step(
+                    param=param,
+                    grad=grad,
+                    active_blocks=active_block_indices,
+                    exp_avg=state['exp_avg'],
+                    exp_avg_sq=state['exp_avg_sq'],
+                    lr=group['lr'],
+                    beta1=group['betas'][0],
+                    beta2=group['betas'][1],
+                    eps=group['eps'],
+                    weight_decay=group['weight_decay'],
+                    step=state['step'],
+                    block_size=16, # Assuming 16x16 BSR
+                )
+            else:
+                # Fallback to unstructured indexed sparse kernel
+                triton_indexed_sparse_adamw_step(
+                    param=param,
+                    grad=grad,
+                    nonzero_indices=nonzero_indices,
+                    exp_avg=state['exp_avg'],
+                    exp_avg_sq=state['exp_avg_sq'],
+                    lr=group['lr'],
+                    beta1=group['betas'][0],
+                    beta2=group['betas'][1],
+                    eps=group['eps'],
+                    weight_decay=group['weight_decay'],
+                    step=state['step'],
+                    block_size=self.block_size,
+                )
         except Exception as e:
             slurm_safe_print(f"ERROR in indexed Triton kernel for {param_name}: {e}")
             slurm_safe_print(f"  Falling back to dense update")

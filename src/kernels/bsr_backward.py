@@ -17,12 +17,14 @@ def sparse_grad_weight_kernel(
     BLOCK_SIZE: tl.constexpr,
     BATCH_BLOCK_SIZE: tl.constexpr,
     USE_TF32: tl.constexpr,
+    USE_ATOMIC: tl.constexpr,
 ):
     """Computes grad_W = grad_output.T @ input ONLY for non-masked blocks."""
-    pid = tl.program_id(0)
+    pid_block = tl.program_id(0)
+    pid_batch = tl.program_id(1)
     
     # Load the block index from the active blocks array
-    block_idx = tl.load(active_blocks_ptr + pid)
+    block_idx = tl.load(active_blocks_ptr + pid_block)
     
     num_blocks_in = tl.cdiv(input_dim, BLOCK_SIZE)
     block_out = block_idx // num_blocks_in
@@ -42,9 +44,20 @@ def sparse_grad_weight_kernel(
     mask_block = tl.load(mask_ptr + m_offsets, mask=valid, other=0.0)
 
     acc = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=tl.float32)
-    for b_start in range(0, batch_size, BATCH_BLOCK_SIZE):
+    
+    # Calculate batch range for this program
+    if USE_ATOMIC:
+        num_batch_chunks = tl.num_programs(1)
+        batch_chunk_size = tl.cdiv(batch_size, num_batch_chunks)
+        batch_start = pid_batch * batch_chunk_size
+        batch_end = tl.minimum(batch_start + batch_chunk_size, batch_size)
+    else:
+        batch_start = 0
+        batch_end = batch_size
+
+    for b_start in range(batch_start, batch_end, BATCH_BLOCK_SIZE):
         b_offsets = b_start + tl.arange(0, BATCH_BLOCK_SIZE)
-        b_mask = b_offsets < batch_size
+        b_mask = b_offsets < batch_end
         
         # Load grad_out (BATCH_BLOCK_SIZE, BLOCK_SIZE)
         go_offs = b_offsets[:, None] * stride_go_batch + out_offsets[None, :] * stride_go_out
@@ -65,7 +78,11 @@ def sparse_grad_weight_kernel(
         
     acc = acc * mask_block
     gw_offsets = out_offsets[:, None] * stride_gw_out + in_offsets[None, :] * stride_gw_in
-    tl.store(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
+    
+    if USE_ATOMIC:
+        tl.atomic_add(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
+    else:
+        tl.store(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
 
 def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks=None, block_size=16, use_tf32=False):
     batch_size, output_dim = grad_output.shape
@@ -90,7 +107,15 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
     if num_active_blocks == 0:
         return grad_weight
         
-    grid = (num_active_blocks,)
+    # Parallelize over batch dimension for high sparsity (fewer active blocks)
+    # H200 has ~132 SMs; we want enough programs to saturate them (target 1024+)
+    num_batch_chunks = get_env_int("BSR_BATCH_CHUNKS", 1)
+    if num_batch_chunks == 1:
+        target_total_programs = 1024
+        num_batch_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
+        
+    grid = (num_active_blocks, num_batch_chunks)
+    use_atomic = (num_batch_chunks > 1)
     
     # Tuneable parameters from environment
     batch_block_size = get_env_int("BSR_BATCH_BLOCK_SIZE", 64)
@@ -107,6 +132,7 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
         BLOCK_SIZE=block_size,
         BATCH_BLOCK_SIZE=batch_block_size,
         USE_TF32=use_tf32,
+        USE_ATOMIC=use_atomic,
         num_warps=num_warps,
         num_stages=num_stages,
     )
