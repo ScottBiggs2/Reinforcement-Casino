@@ -44,6 +44,12 @@ from src.cold_start.utils.snip_scorer import (
     compute_snip_scores,
     snip_save_metadata,
 )
+from src.cold_start.utils.grasp_scorer import (
+    GRASP_OBJECTIVE_DPO_PREFERENCE,
+    GRASP_OBJECTIVE_LM,
+    GRaSPScorer,
+    grasp_save_metadata,
+)
 from src.utils.data_utils import concatenated_dpo_collator_fn, load_dpo_dataset
 from src.utils.dpo_text_normalize import normalize_dpo_record
 from src.utils.dataset_registry import resolve_hf_dataset_id
@@ -664,6 +670,59 @@ def main(args):
             extra=meta_extra,
         )
 
+    elif args.method == "grasp":
+        train_device = str(input_device)
+        scorer = GRaSPScorer()
+        
+        # Use SNIP-like logic for dataloader selection
+        pref_loader = None
+        if args.grasp_objective == GRASP_OBJECTIVE_DPO_PREFERENCE:
+            print("[GRaSP] Objective=dpo_preference (gradient of pairwise preference loss)")
+            # Reuse SNIP dataloader builder for consistency
+            pref_loader = build_preference_snip_dataloader(args, tokenizer, chosen_texts, rejected_texts)
+        else:
+            print("[GRaSP] Objective=lm (standard GRaSP: CE loss on chosen sequences)")
+
+        grasp_scores = scorer.score(
+            model,
+            tokenizer,
+            chosen_texts,
+            train_device,
+            max_length=args.max_length,
+            batch_size=args.batch_size,
+            mlp_only=False,
+            objective=args.grasp_objective,
+            gradient_checkpointing=args.grasp_gradient_checkpointing,
+            use_autocast=not args.grasp_no_autocast,
+            dataloader=pref_loader,
+            preference_beta=args.grasp_preference_beta,
+        )
+        
+        masks = create_mask_from_scores_gpu_efficient(
+            grasp_scores,
+            sparsity_percent=args.sparsity,
+            device="cpu",
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+            add_tie_break_noise=True,
+        )
+        
+        meta_extra = {
+            "model_name": args.model_name,
+            "mode": args.mode,
+            "n_samples": args.n_samples,
+            "dataset": effective_dataset,
+            "seed": args.seed,
+        }
+        metadata = grasp_save_metadata(
+            grasp_objective=args.grasp_objective,
+            sparsity_percent=args.sparsity,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+            preference_beta=args.grasp_preference_beta if args.grasp_objective == GRASP_OBJECTIVE_DPO_PREFERENCE else None,
+            extra=meta_extra,
+        )
+
     elif args.method == "activation":
         extractor = FeatureExtractor()
         extractor.register(model)
@@ -739,6 +798,11 @@ def main(args):
                 f"masks/cold_{args.method}_{model_sanitized}_"
                 f"sparsity{args.sparsity}pct_{args.snip_objective}.pt"
             )
+        elif args.method == "grasp":
+            output_path = (
+                f"masks/cold_{args.method}_{model_sanitized}_"
+                f"sparsity{args.sparsity}pct_{args.grasp_objective}.pt"
+            )
         else:
             output_path = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity}pct.pt"
 
@@ -767,7 +831,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, default="google/gemma-3-270m-it")
     parser.add_argument(
         "--method", type=str, default="cav",
-        choices=["fisher", "cav", "snip", "activation"],
+        choices=["fisher", "cav", "snip", "activation", "grasp"],
         help="Scoring method.",
     )
     parser.add_argument(
@@ -884,6 +948,37 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="[SNIP lm] Disable CUDA bf16 autocast around forward+loss.",
+    )
+
+    # ── GRaSP-specific ───────────────────────────────────────────
+    parser.add_argument(
+        "--grasp-objective",
+        dest="grasp_objective",
+        choices=[GRASP_OBJECTIVE_LM, GRASP_OBJECTIVE_DPO_PREFERENCE],
+        default=GRASP_OBJECTIVE_LM,
+        help=(
+            "[GRaSP] lm: standard GRaSP (CE on chosen). "
+            "dpo_preference: gradient of pairwise preference loss (DPO-style batches)."
+        ),
+    )
+    parser.add_argument(
+        "--grasp-preference-beta",
+        type=float,
+        default=1.0,
+        help="[GRaSP dpo_preference] Beta in dpo_style_preference_loss.",
+    )
+    parser.add_argument(
+        "--no-grasp-gradient-checkpointing",
+        dest="grasp_gradient_checkpointing",
+        action="store_false",
+        default=True,
+        help="[GRaSP] Disable gradient checkpointing.",
+    )
+    parser.add_argument(
+        "--grasp-no-autocast",
+        action="store_true",
+        default=False,
+        help="[GRaSP] Disable CUDA bf16 autocast.",
     )
 
     args = parser.parse_args()
