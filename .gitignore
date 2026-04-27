@@ -53,3 +53,12 @@ multi_gpu_example.sh
 
 current_bib.md
 current_tex.md
+
+# Local agent briefing (Irene's playbook — never commit)
+AGENT_PLAYBOOK.md
+
+# Reference snapshot of multiautoresearch agents/skills (local-only)
+docs/multiautoresearch_agents/
+
+# Local Claude Code subagents (Irene's tools — same status as AGENT_PLAYBOOK.md)
+.claude/agents/

@@ -38,6 +38,7 @@ from src.utils.grpo_checkpoint_utils import (
 )
 from src.utils.grpo_rewards import (
     OPENR1_TAG_PROMPT_SUFFIX,
+    LLAMA_COT_PROMPT_SUFFIX,
     get_grpo_reward_funcs,
     normalize_reward_profile,
 )
@@ -162,7 +163,7 @@ def train(
     print(f"run_dir={run_dir}\nresume={resume_ckpt!r}")
 
     reward_prof = normalize_reward_profile(grpo_reward_profile)
-    prompt_suffix = OPENR1_TAG_PROMPT_SUFFIX if reward_prof == "openr1_tags" else None
+    prompt_suffix = OPENR1_TAG_PROMPT_SUFFIX if reward_prof == "openr1_tags" else LLAMA_COT_PROMPT_SUFFIX
     reward_funcs = get_grpo_reward_funcs(grpo_reward_profile)
     print(f"GRPO reward profile={reward_prof} (prompt_suffix={'yes' if prompt_suffix else 'no'})")
 

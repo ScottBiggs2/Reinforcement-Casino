@@ -173,5 +173,14 @@ OPENR1_TAG_PROMPT_SUFFIX = (
     "<redacted_thinking>...</redacted_thinking>, then give the final answer after the closing tag."
 )
 
+# Append for ``llama_cot``: nudge Instruct models to emit a marker the heuristic
+# split can find. Without this the heuristic falls through to thinking_content=""
+# and format_reasoning_reward stays 0 forever — observed in the deleted
+# 200-step math-220k GRPO run.
+LLAMA_COT_PROMPT_SUFFIX = (
+    "\n\nThink step by step, then put your final numeric answer inside "
+    "\\boxed{...} (or write `#### <answer>` on a new line)."
+)
+
 # Default import: ``llama_cot`` (delimiter-aware); matches Open-R1 + Instruct runs.
 GRPO_REWARD_FUNCS: List[Callable[..., List[float]]] = get_grpo_reward_funcs(_DEFAULT_PROFILE)

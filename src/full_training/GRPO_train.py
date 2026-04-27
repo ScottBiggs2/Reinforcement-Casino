@@ -35,6 +35,7 @@ from src.utils.grpo_checkpoint_utils import (
 )
 from src.utils.grpo_rewards import (
     OPENR1_TAG_PROMPT_SUFFIX,
+    LLAMA_COT_PROMPT_SUFFIX,
     get_grpo_reward_funcs,
     normalize_reward_profile,
 )
@@ -234,7 +235,7 @@ def main() -> None:
     run_display_name = args.run_name or f"{model_sanitized}_{dataset_sanitized}_grpo_{num_steps}steps"
 
     reward_prof = normalize_reward_profile(args.grpo_reward_profile)
-    prompt_suffix = OPENR1_TAG_PROMPT_SUFFIX if reward_prof == "openr1_tags" else None
+    prompt_suffix = OPENR1_TAG_PROMPT_SUFFIX if reward_prof == "openr1_tags" else LLAMA_COT_PROMPT_SUFFIX
     train_dataset = load_grpo_dataset(
         dataset_key,
         subset_size=args.subset_size,
