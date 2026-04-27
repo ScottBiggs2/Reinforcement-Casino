@@ -101,6 +101,11 @@ class SparseAdamW(torch.optim.Optimizer):
         if should_use_sparse:
             active_block_indices = self.mask_manager.get_active_block_indices(param_name)
             if active_block_indices is not None and len(active_block_indices) > 0:
+                # Normalize once so kernel launch never needs to cast/copy/sync.
+                if active_block_indices.dtype != torch.int32:
+                    active_block_indices = active_block_indices.to(torch.int32)
+                if not active_block_indices.is_contiguous():
+                    active_block_indices = active_block_indices.contiguous()
                 # Use Block-Sparse storage (BSR-compatible)
                 # We store entire 16x16 blocks (including zeros) to enable fast coalesced kernels
                 n_blocks = active_block_indices.shape[0]

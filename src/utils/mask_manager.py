@@ -85,7 +85,15 @@ class SparseMaskManager:
                 blocks = padded_mask.view(num_blocks_m, block_size, num_blocks_n, block_size)
                 block_active = blocks.any(dim=(1, 3)) # any() over both block dims
                 self.active_block_indices = getattr(self, 'active_block_indices', {})
-                self.active_block_indices[name] = torch.nonzero(block_active.flatten(), as_tuple=False).squeeze(-1).to(torch.int32).to(device)
+                # Keep this in a launch-ready format: int32 + contiguous on device.
+                self.active_block_indices[name] = (
+                    torch.nonzero(block_active.flatten(), as_tuple=False)
+                    .squeeze(-1)
+                    .to(dtype=torch.int32)
+                    .contiguous()
+                    .to(device, non_blocking=True)
+                    .contiguous()
+                )
             else:
                 self.nonzero_indices[name] = torch.empty(0, dtype=torch.long, device=device)
                 self.active_block_indices = getattr(self, 'active_block_indices', {})

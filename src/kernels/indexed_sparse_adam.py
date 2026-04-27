@@ -2,6 +2,7 @@
 import triton
 import triton.language as tl
 import os
+import torch
 
 def get_env_int(name, default):
     return int(os.environ.get(name, default))
@@ -177,7 +178,7 @@ def bsr_sparse_adamw_kernel(
     if pid >= n_active_blocks:
         return
         
-    block_idx = tl.load(active_blocks_ptr + pid)
+    block_idx = tl.load(active_blocks_ptr + pid).to(tl.int32)
     
     num_blocks_n = tl.cdiv(N, BLOCK_SIZE)
     block_m = block_idx // num_blocks_n
@@ -244,6 +245,13 @@ def triton_bsr_sparse_adamw_step(
     """
     Wrapper for BSR-aware sparse AdamW kernel.
     """
+    # Hardening: ensure block indices are integer + contiguous.
+    # (Some upstream paths may accidentally materialize these as fp tensors.)
+    if active_blocks.dtype != torch.int32:
+        active_blocks = active_blocks.to(torch.int32)
+    if not active_blocks.is_contiguous():
+        active_blocks = active_blocks.contiguous()
+
     n_active_blocks = active_blocks.shape[0]
     if n_active_blocks == 0:
         return
@@ -313,7 +321,7 @@ def bsr_sparse_adamw_kernel_2d(
     if pid_block >= n_active_blocks:
         return
 
-    block_idx = tl.load(active_blocks_ptr + pid_block)
+    block_idx = tl.load(active_blocks_ptr + pid_block).to(tl.int32)
     num_blocks_n = tl.cdiv(N, BLOCK_SIZE)
     block_m = block_idx // num_blocks_n
     block_n = block_idx % num_blocks_n
@@ -382,6 +390,11 @@ def triton_bsr_sparse_adamw_step_2d(
     """
     2D-grid wrapper for the BSR-aware AdamW kernel.
     """
+    if active_blocks.dtype != torch.int32:
+        active_blocks = active_blocks.to(torch.int32)
+    if not active_blocks.is_contiguous():
+        active_blocks = active_blocks.contiguous()
+
     n_active_blocks = active_blocks.shape[0]
     if n_active_blocks == 0:
         return

@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=08:00:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=h200_bsr_bench
 #SBATCH --output=logs/h200_bsr_bench_%j.out
 #SBATCH --error=logs/h200_bsr_bench_%j.err

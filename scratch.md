@@ -55,6 +55,10 @@ Submitted batch job 6315119
   --model_path /scratch/biggs.s/rl_casino_grpo/dense/llama31_OpenR1-Math-220k_grpo_dense_v1/checkpoints/checkpoint-750 \
   --trust_remote_code
 Submitted batch job 6353405
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
+  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
+  --trust_remote_code
+Submitted batch job 6364819
 
 (base) [biggs.s@explorer-02 rl_casino]$ export ORCH_CAV_IMPL=cold_v2_all_params
 export ORCH_CAV_WEIGHT_ABS=1
