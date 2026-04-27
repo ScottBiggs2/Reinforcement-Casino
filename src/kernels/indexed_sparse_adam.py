@@ -281,3 +281,149 @@ def triton_bsr_sparse_adamw_step(
         num_warps=num_warps,
         num_stages=num_stages,
     )
+
+
+@triton.jit
+def bsr_sparse_adamw_kernel_2d(
+    param_ptr, grad_ptr, exp_avg_ptr, exp_avg_sq_ptr,
+    active_blocks_ptr, n_active_blocks,
+    M, N,
+    stride_p_m, stride_p_n,
+    stride_g_m, stride_g_n,
+    stride_m_m, stride_m_n,
+    stride_v_m, stride_v_n,
+    lr, beta1, beta2, eps, weight_decay,
+    bias_correction1_val, bias_correction2_val,
+    BLOCK_SIZE: tl.constexpr,
+    ROW_TILE: tl.constexpr,
+    USE_SPARSE_STATES: tl.constexpr,
+):
+    """
+    2D block-indexed variant of BSR AdamW.
+
+    Grid:
+      - pid0: active block id
+      - pid1: row tile within the block (splits BLOCK_SIZE rows)
+
+    This is primarily for benchmarking 1D-vs-2D launch structure and for better
+    occupancy control when the number of active blocks is small.
+    """
+    pid_block = tl.program_id(0)
+    pid_tile = tl.program_id(1)
+    if pid_block >= n_active_blocks:
+        return
+
+    block_idx = tl.load(active_blocks_ptr + pid_block)
+    num_blocks_n = tl.cdiv(N, BLOCK_SIZE)
+    block_m = block_idx // num_blocks_n
+    block_n = block_idx % num_blocks_n
+
+    row_start = block_m * BLOCK_SIZE + pid_tile * ROW_TILE
+    rows = row_start + tl.arange(0, ROW_TILE)
+    cols = block_n * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+
+    row_mask = rows < M
+    col_mask = cols < N
+    mask = row_mask[:, None] & col_mask[None, :]
+
+    p_offs = rows[:, None] * stride_p_m + cols[None, :] * stride_p_n
+    g_offs = rows[:, None] * stride_g_m + cols[None, :] * stride_g_n
+
+    param = tl.load(param_ptr + p_offs, mask=mask, other=0.0)
+    grad = tl.load(grad_ptr + g_offs, mask=mask, other=0.0)
+
+    if USE_SPARSE_STATES:
+        # States are packed contiguously per active block, row-major within block.
+        state_block_start = pid_block * BLOCK_SIZE * BLOCK_SIZE
+        state_row_start = pid_tile * ROW_TILE * BLOCK_SIZE
+        state_offs = (
+            state_block_start
+            + state_row_start
+            + tl.arange(0, ROW_TILE)[:, None] * BLOCK_SIZE
+            + tl.arange(0, BLOCK_SIZE)[None, :]
+        )
+        exp_avg = tl.load(exp_avg_ptr + state_offs, mask=mask, other=0.0)
+        exp_avg_sq = tl.load(exp_avg_sq_ptr + state_offs, mask=mask, other=0.0)
+    else:
+        m_offs = rows[:, None] * stride_m_m + cols[None, :] * stride_m_n
+        v_offs = rows[:, None] * stride_v_m + cols[None, :] * stride_v_n
+        exp_avg = tl.load(exp_avg_ptr + m_offs, mask=mask, other=0.0)
+        exp_avg_sq = tl.load(exp_avg_sq_ptr + v_offs, mask=mask, other=0.0)
+
+    decay_factor = 1.0 - lr * weight_decay
+    param_decayed = param * decay_factor
+
+    beta1_complement = 1.0 - beta1
+    exp_avg_new = beta1 * exp_avg + beta1_complement * grad
+
+    beta2_complement = 1.0 - beta2
+    exp_avg_sq_new = beta2 * exp_avg_sq + beta2_complement * (grad * grad)
+
+    exp_avg_corrected = exp_avg_new / bias_correction1_val
+    exp_avg_sq_corrected = exp_avg_sq_new / bias_correction2_val
+
+    denom = tl.sqrt(exp_avg_sq_corrected) + eps
+    step_size = lr / denom
+    param_new = param_decayed - step_size * exp_avg_corrected
+
+    tl.store(param_ptr + p_offs, param_new, mask=mask)
+    if USE_SPARSE_STATES:
+        tl.store(exp_avg_ptr + state_offs, exp_avg_new, mask=mask)
+        tl.store(exp_avg_sq_ptr + state_offs, exp_avg_sq_new, mask=mask)
+    else:
+        tl.store(exp_avg_ptr + m_offs, exp_avg_new, mask=mask)
+        tl.store(exp_avg_sq_ptr + v_offs, exp_avg_sq_new, mask=mask)
+
+
+def triton_bsr_sparse_adamw_step_2d(
+    param, grad, active_blocks, exp_avg, exp_avg_sq,
+    lr, beta1, beta2, eps, weight_decay, step, block_size=16
+):
+    """
+    2D-grid wrapper for the BSR-aware AdamW kernel.
+    """
+    n_active_blocks = active_blocks.shape[0]
+    if n_active_blocks == 0:
+        return
+
+    bias_correction1 = 1.0 - (beta1 ** step)
+    bias_correction2 = 1.0 - (beta2 ** step)
+
+    M, N = param.shape
+
+    # Split a 16-row block into two 8-row tiles by default.
+    row_tile = int(os.environ.get("BSR_ADAM_ROW_TILE", "8"))
+    if row_tile <= 0 or row_tile > block_size or (block_size % row_tile) != 0:
+        row_tile = 8 if block_size == 16 else block_size
+    n_row_tiles = triton.cdiv(block_size, row_tile)
+
+    grid = (n_active_blocks, n_row_tiles)
+    use_sparse_states = (exp_avg.dim() == 1)
+
+    num_warps = get_env_int("BSR_NUM_WARPS", 4)
+    num_stages = get_env_int("BSR_NUM_STAGES", 2)
+
+    if use_sparse_states:
+        stride_m_m = stride_m_n = 0
+        stride_v_m = stride_v_n = 0
+    else:
+        stride_m_m, stride_m_n = exp_avg.stride(0), exp_avg.stride(1)
+        stride_v_m, stride_v_n = exp_avg_sq.stride(0), exp_avg_sq.stride(1)
+
+    bsr_sparse_adamw_kernel_2d[grid](
+        param, grad, exp_avg, exp_avg_sq,
+        active_blocks, n_active_blocks,
+        M, N,
+        param.stride(0), param.stride(1),
+        grad.stride(0), grad.stride(1),
+        stride_m_m, stride_m_n,
+        stride_v_m, stride_v_n,
+        lr=lr, beta1=beta1, beta2=beta2, eps=eps, weight_decay=weight_decay,
+        bias_correction1_val=bias_correction1,
+        bias_correction2_val=bias_correction2,
+        BLOCK_SIZE=block_size,
+        ROW_TILE=row_tile,
+        USE_SPARSE_STATES=use_sparse_states,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )

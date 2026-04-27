@@ -1,9 +1,14 @@
 
 import torch
 import time
+import os
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.slurm_safe_log import slurm_safe_print
-from src.kernels.indexed_sparse_adam import triton_indexed_sparse_adamw_step, triton_bsr_sparse_adamw_step
+from src.kernels.indexed_sparse_adam import (
+    triton_indexed_sparse_adamw_step,
+    triton_bsr_sparse_adamw_step,
+    triton_bsr_sparse_adamw_step_2d,
+)
 from src.kernels.sparse_norm import compute_bsr_grad_norm_sq, compute_unstructured_grad_norm_sq
 
 class SparseAdamW(torch.optim.Optimizer):
@@ -49,8 +54,13 @@ class SparseAdamW(torch.optim.Optimizer):
             'sparse_steps': 0,
             'dense_steps': 0,
             'nan_warnings': [],
+            'dense_fallbacks': 0,
+            'dense_fallback_params': set(),
         }
         self.eager_state_init = eager_state_init
+        self._warned_empty_indices = set()
+        self._warned_shape_mismatch = set()
+        self._warned_fallback = set()
 
         # Pre-allocating exp_avg/exp_avg_sq for every parameter spikes memory (2× model size on-device).
         # Lazy init matches PyTorch Adam: allocate on first step — slower first step, much lower peak RAM/VRAM.
@@ -212,9 +222,18 @@ class SparseAdamW(torch.optim.Optimizer):
             return
         
         if mask.shape != param.shape:
-            slurm_safe_print(f"WARNING: Shape mismatch for {param_name}")
-            slurm_safe_print(f"  Param: {param.shape}, Mask: {mask.shape}")
-            slurm_safe_print(f"  Falling back to dense update")
+            if param_name not in self._warned_shape_mismatch:
+                slurm_safe_print(f"WARNING: Shape mismatch for {param_name}")
+                slurm_safe_print(f"  Param: {param.shape}, Mask: {mask.shape}")
+                slurm_safe_print(f"  Falling back to dense update")
+                self._warned_shape_mismatch.add(param_name)
+            self._dense_step(param, group)
+            return
+
+        if nonzero_indices.numel() == 0:
+            if param_name not in self._warned_empty_indices:
+                slurm_safe_print(f"WARNING: Mask has 0 active elements for {param_name}; dense fallback.")
+                self._warned_empty_indices.add(param_name)
             self._dense_step(param, group)
             return
         
@@ -222,45 +241,62 @@ class SparseAdamW(torch.optim.Optimizer):
         state['step'] += 1
         
         try:
-            regime = state.get("sparse_regime", "element")
-            
-            if regime == "block":
-                active_block_indices = state["active_block_indices"]
-                # Use block-aware optimizer kernel (faster coalescing)
-                triton_bsr_sparse_adamw_step(
+            active_block_indices = state.get("active_block_indices", None)
+            use_block = active_block_indices is not None and active_block_indices.numel() > 0
+
+            if use_block:
+                # Kernel choice for block regime.
+                # Default stays 1D block kernel unless explicitly overridden.
+                kernel_mode = os.environ.get("RL_CASINO_ADAM_KERNEL", "block_1d").strip().lower()
+                step_fn = triton_bsr_sparse_adamw_step
+                if kernel_mode in ("block_2d", "bsr_2d", "2d"):
+                    step_fn = triton_bsr_sparse_adamw_step_2d
+
+                step_fn(
                     param=param,
                     grad=grad,
                     active_blocks=active_block_indices,
-                    exp_avg=state['exp_avg'],
-                    exp_avg_sq=state['exp_avg_sq'],
-                    lr=group['lr'],
-                    beta1=group['betas'][0],
-                    beta2=group['betas'][1],
-                    eps=group['eps'],
-                    weight_decay=group['weight_decay'],
-                    step=state['step'],
-                    block_size=16, # Assuming 16x16 BSR
+                    exp_avg=state["exp_avg"],
+                    exp_avg_sq=state["exp_avg_sq"],
+                    lr=group["lr"],
+                    beta1=group["betas"][0],
+                    beta2=group["betas"][1],
+                    eps=group["eps"],
+                    weight_decay=group["weight_decay"],
+                    step=state["step"],
+                    block_size=16,  # 16x16 BSR
                 )
             else:
-                nonzero_indices = state["nonzero_indices"]
-                # Fallback to unstructured indexed sparse kernel
+                # Unstructured indexed sparse kernel. Do not rely on state['nonzero_indices'].
+                # If we want caching for debug visibility, store it when absent.
+                if "nonzero_indices" not in state:
+                    state["nonzero_indices"] = nonzero_indices
+
                 triton_indexed_sparse_adamw_step(
                     param=param,
                     grad=grad,
                     nonzero_indices=nonzero_indices,
-                    exp_avg=state['exp_avg'],
-                    exp_avg_sq=state['exp_avg_sq'],
-                    lr=group['lr'],
-                    beta1=group['betas'][0],
-                    beta2=group['betas'][1],
-                    eps=group['eps'],
-                    weight_decay=group['weight_decay'],
-                    step=state['step'],
+                    exp_avg=state["exp_avg"],
+                    exp_avg_sq=state["exp_avg_sq"],
+                    lr=group["lr"],
+                    beta1=group["betas"][0],
+                    beta2=group["betas"][1],
+                    eps=group["eps"],
+                    weight_decay=group["weight_decay"],
+                    step=state["step"],
                     block_size=self.block_size,
                 )
         except Exception as e:
             slurm_safe_print(f"ERROR in indexed Triton kernel for {param_name}: {e}")
             slurm_safe_print(f"  Falling back to dense update")
+            self.stats["dense_fallbacks"] += 1
+            self.stats["dense_fallback_params"].add(param_name)
+            if param_name not in self._warned_fallback:
+                slurm_safe_print(
+                    "  NOTE: dense fallback requires dense-shaped optimizer state; "
+                    "we will reinitialize exp_avg/exp_avg_sq if they are sparse-shaped."
+                )
+                self._warned_fallback.add(param_name)
             self._dense_step(param, group)
             return
         
@@ -271,6 +307,19 @@ class SparseAdamW(torch.optim.Optimizer):
         grad = param.grad
         state = self.state[param]
         state['step'] += 1
+
+        # If this param was initialized with sparse-shaped optimizer state (1D packed),
+        # make the fallback safe by reinitializing to dense tensors.
+        exp_avg = state.get("exp_avg", None)
+        exp_avg_sq = state.get("exp_avg_sq", None)
+        if (
+            exp_avg is None
+            or exp_avg_sq is None
+            or exp_avg.shape != param.shape
+            or exp_avg_sq.shape != param.shape
+        ):
+            state["exp_avg"] = torch.zeros_like(param, memory_format=torch.preserve_format)
+            state["exp_avg_sq"] = torch.zeros_like(param, memory_format=torch.preserve_format)
         
         beta1, beta2 = group['betas']
         

@@ -138,6 +138,8 @@ class SparseMaskManager:
         if idx_key_dots in self.nonzero_indices:
             return self.nonzero_indices[idx_key_dots]
         
+        return None
+        
     def get_active_block_indices(self, param_name):
         """Get pre-computed active block indices (16x16) for a parameter."""
         if hasattr(self, 'active_block_indices'):

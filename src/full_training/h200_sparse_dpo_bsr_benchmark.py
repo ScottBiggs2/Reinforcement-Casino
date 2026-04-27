@@ -239,10 +239,16 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     dpo_ds = registry_load_dpo(args.dataset, subset_size=args.subset_size)
 
+    # Always run a comparison matrix for the manuscript:
+    # - dense baseline
+    # - sparse with block masks using block_1d Adam kernel
+    # - sparse with block masks using block_2d Adam kernel
+    #
+    # Note: the optimizer selects the actual kernel via RL_CASINO_ADAM_KERNEL.
     phases = [
-        ("dense", None, "adamw", "none"),
-        ("sparse_99_75", 99.75, "sparse_adamw", "unstructured"),
-        ("block_sparse_99_75", 99.75, "sparse_adamw", "block"),
+        ("dense", None, "adamw", "none", None),
+        ("block_sparse_99_75_block1d", 99.75, "sparse_adamw", "block", "block_1d"),
+        ("block_sparse_99_75_block2d", 99.75, "sparse_adamw", "block", "block_2d"),
     ]
 
     gc_flag = not args.no_gradient_checkpointing
@@ -250,7 +256,7 @@ def main():
     if dm.lower() in ("none", "null"):
         dm = "none"
 
-    for idx, (phase_name, sparsity_pct, opt, mask_type) in enumerate(phases):
+    for idx, (phase_name, sparsity_pct, opt, mask_type, adam_kernel) in enumerate(phases):
         slurm_safe_print(
             f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt} mask_type={mask_type}\n{'#'*60}\n"
         )
@@ -285,6 +291,9 @@ def main():
             print_block_sparsity_profile(bool_masks, block_size=args.block_size_bsr)
             
             extra_log = compute_sparse_mask_theory_metrics(bool_masks, b_tokens)
+            extra_log = dict(extra_log)
+            extra_log["mask_type"] = mask_type
+            extra_log["adam_kernel"] = adam_kernel or ""
             theory_records.append(
                 {
                     "phase": phase_name,
@@ -312,6 +321,9 @@ def main():
         run_name = f"{args.run_label}_{phase_name}"
 
         try:
+            prev_kernel = os.environ.get("RL_CASINO_ADAM_KERNEL", None)
+            if adam_kernel:
+                os.environ["RL_CASINO_ADAM_KERNEL"] = adam_kernel
             sparse_dpo_train(
                 model_name=args.model_name,
                 checkpoint_path=args.checkpoint,
@@ -360,6 +372,11 @@ def main():
                 benchmark_extra_log_fields=extra_log,
             )
         finally:
+            if adam_kernel:
+                if prev_kernel is None:
+                    os.environ.pop("RL_CASINO_ADAM_KERNEL", None)
+                else:
+                    os.environ["RL_CASINO_ADAM_KERNEL"] = prev_kernel
             try:
                 sink.flush()
             except OSError as e:
