@@ -70,7 +70,7 @@ export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-25}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-2}"
 
 # Mask generation calibration / objectives
-export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-1024}"
+export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-512}"
 export COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-32}"
 export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-4}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
@@ -85,6 +85,12 @@ export ORCH_MASK_BLOCK_REDUCTION="${ORCH_MASK_BLOCK_REDUCTION:-mean}" # mean|max
 export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-per_weight}" # per_tensor|per_weight
 export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}"
 export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
+export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-48}"
+export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-1}"
+
+# Random masks: disable by default for relaunches (random already queued successfully).
+# Set ORCH_DO_RANDOM_MASKS=1 to re-enable.
+export ORCH_DO_RANDOM_MASKS="${ORCH_DO_RANDOM_MASKS:-0}"
 
 # W&B: keep enabled by default; these names come from mask filename + RUN_ID in pipeline_common.sh
 export ORCH_DISABLE_WANDB="${ORCH_DISABLE_WANDB:-0}"
@@ -150,6 +156,8 @@ echo "Child walltime override: 04:00:00"
 echo "COLD_CAV_SUBSET=${COLD_CAV_SUBSET} COLD_CAV_NUM_BATCHES=${COLD_CAV_NUM_BATCHES} ORCH_MASK_BATCH_SIZE=${ORCH_MASK_BATCH_SIZE}"
 echo "Block: ORCH_MASK_BLOCK_SIZE=${ORCH_MASK_BLOCK_SIZE} ORCH_MASK_BLOCK_REDUCTION=${ORCH_MASK_BLOCK_REDUCTION}"
 echo "SNR: ORCH_SCORE_SNR_MODE=${ORCH_SCORE_SNR_MODE} ORCH_SCORE_SNR_TRANSFORM=${ORCH_SCORE_SNR_TRANSFORM}"
+echo "SNR RAM: ORCH_SCORE_SNR_RAM_BUDGET_GB=${ORCH_SCORE_SNR_RAM_BUDGET_GB} ORCH_SCORE_SNR_ALLOW_LARGE_RAM=${ORCH_SCORE_SNR_ALLOW_LARGE_RAM}"
+echo "ORCH_DO_RANDOM_MASKS=${ORCH_DO_RANDOM_MASKS}"
 
 ########################################
 # Submission helper
@@ -193,31 +201,36 @@ submit_sparse_dpo_one_mask() {
 MASK_RANDOM_ELEM="${MASK_DIR}/random_elem_${MODEL//\//_}_light_r1_sp${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 MASK_RANDOM_BLOCK="${MASK_DIR}/random_block${ORCH_MASK_BLOCK_SIZE}_${ORCH_MASK_BLOCK_REDUCTION}_${MODEL//\//_}_light_r1_sp${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 
-echo ""
-echo "=== Generating RANDOM element mask → ${MASK_RANDOM_ELEM}"
-set +e
-"$TRAIN_PY" src/utils/generate_random_mask.py \
-  --model_name "${MODEL}" \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --seed "${RANDOM_MASK_SEED}" \
-  --mask-granularity element \
-  --output_file "${MASK_RANDOM_ELEM}"
-set -e
+if [ "${ORCH_DO_RANDOM_MASKS}" = "1" ]; then
+  echo ""
+  echo "=== Generating RANDOM element mask → ${MASK_RANDOM_ELEM}"
+  set +e
+  "$TRAIN_PY" src/utils/generate_random_mask.py \
+    --model_name "${MODEL}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --seed "${RANDOM_MASK_SEED}" \
+    --mask-granularity element \
+    --output_file "${MASK_RANDOM_ELEM}"
+  set -e
 
-echo ""
-echo "=== Generating RANDOM block mask → ${MASK_RANDOM_BLOCK}"
-set +e
-"$TRAIN_PY" src/utils/generate_random_mask.py \
-  --model_name "${MODEL}" \
-  --sparsity_percent "${SPARSITY_PERCENT}" \
-  --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
-  --seed "${RANDOM_MASK_SEED}" \
-  --mask-granularity block \
-  --mask-block-size "${ORCH_MASK_BLOCK_SIZE}" \
-  --mask-block-reduction "${ORCH_MASK_BLOCK_REDUCTION}" \
-  --output_file "${MASK_RANDOM_BLOCK}"
-set -e
+  echo ""
+  echo "=== Generating RANDOM block mask → ${MASK_RANDOM_BLOCK}"
+  set +e
+  "$TRAIN_PY" src/utils/generate_random_mask.py \
+    --model_name "${MODEL}" \
+    --sparsity_percent "${SPARSITY_PERCENT}" \
+    --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+    --seed "${RANDOM_MASK_SEED}" \
+    --mask-granularity block \
+    --mask-block-size "${ORCH_MASK_BLOCK_SIZE}" \
+    --mask-block-reduction "${ORCH_MASK_BLOCK_REDUCTION}" \
+    --output_file "${MASK_RANDOM_BLOCK}"
+  set -e
+else
+  echo ""
+  echo "=== Skipping random mask generation/submission (ORCH_DO_RANDOM_MASKS=0) ==="
+fi
 
 ########################################
 # 2) GRaSP masks (element/base, element/SNR, block/base, block/SNR)
@@ -240,6 +253,10 @@ gen_grasp_mask() {
     SNRS+=( --score-snr "${ORCH_SCORE_SNR_MODE}" )
     SNRS+=( --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}" )
     SNRS+=( --score-snr-eps "${ORCH_SCORE_SNR_EPS}" )
+    SNRS+=( --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+    if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM}" = "1" ]; then
+      SNRS+=( --score-snr-allow-large-ram )
+    fi
   fi
 
   local -a MG=()
@@ -283,8 +300,12 @@ gen_grasp_mask "GRaSP block/SNR"    "${MASK_GRASP_BLOCK_SNR}"  "block" "1"
 echo ""
 echo "=== Submitting 6 Light-R1 sparse DPO jobs (NUM_STEPS_DPO=${NUM_STEPS_DPO}) ==="
 
-submit_sparse_dpo_one_mask "DPO sparse random element (Light-R1)" "${MASK_RANDOM_ELEM}"  "rand_elem"
-submit_sparse_dpo_one_mask "DPO sparse random block (Light-R1)"   "${MASK_RANDOM_BLOCK}" "rand_block"
+if [ "${ORCH_DO_RANDOM_MASKS}" = "1" ]; then
+  submit_sparse_dpo_one_mask "DPO sparse random element (Light-R1)" "${MASK_RANDOM_ELEM}"  "rand_elem"
+  submit_sparse_dpo_one_mask "DPO sparse random block (Light-R1)"   "${MASK_RANDOM_BLOCK}" "rand_block"
+else
+  echo "Skipping random sparse submits (ORCH_DO_RANDOM_MASKS=0)"
+fi
 submit_sparse_dpo_one_mask "DPO sparse GRaSP elem/base (Light-R1)" "${MASK_GRASP_ELEM_BASE}" "grasp_elem_base"
 submit_sparse_dpo_one_mask "DPO sparse GRaSP elem/SNR (Light-R1)"  "${MASK_GRASP_ELEM_SNR}"  "grasp_elem_snr"
 submit_sparse_dpo_one_mask "DPO sparse GRaSP block/base (Light-R1)" "${MASK_GRASP_BLOCK_BASE}" "grasp_block_base"
