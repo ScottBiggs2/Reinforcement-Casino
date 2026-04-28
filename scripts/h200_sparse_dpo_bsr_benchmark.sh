@@ -81,14 +81,19 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
 # Match pipeline dense `DPO_train.py` default optimizer (`--optim adamw_8bit`) when bitsandbytes is installed.
 export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
 
-# Fewer Trainer log events than every step (override with RL_CASINO_LOGGING_STEPS=1 for parity with DPO_train).
-export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-25}"
-
 # For stable benchmarking (avoid layer-dependent kernel variants)
 # - BSR_USE_ATOMIC: keep constexpr stable across all layers in a phase
 # - BSR_BATCH_CHUNKS: keep grid shape deterministic (disable auto heuristic)
 export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
 export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
+
+# Block-sparse grad_input (RL_CASINO_BSR_GRAD_INPUT_MODE=sparse) vs dense matmul.
+# Dense baseline phase does not use SparseLinearLayer; sparse phases benefit from this default.
+export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-sparse}"
+
+# Trainer CSV rows follow logging frequency (default: every 25 steps). For short phases, set
+# RL_CASINO_LOGGING_STEPS=1 before sbatch so each step appears in benchmark_training_log.csv.
+export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-25}"
 
 OUT_BASE="${H200_BSR_OUT:-${SCRATCH_USER_ROOT}/rl_casino_h200_bsr}/${RUN_ID:-${SLURM_JOB_ID:-local}}"
 mkdir -p "$OUT_BASE"
@@ -97,8 +102,9 @@ echo "REPO_ROOT=${REPO_ROOT}"
 echo "OUT_BASE=${OUT_BASE}"
 echo "MODEL=${MODEL}"
 echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per dense/sparse phase)"
-echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS:-}"
+echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)"
 echo "TRITON_CACHE_DIR=${TRITON_CACHE_DIR}  RL_CASINO_BSR_QUIET_INJECTION=${RL_CASINO_BSR_QUIET_INJECTION}"
+echo "RL_CASINO_BSR_GRAD_INPUT_MODE=${RL_CASINO_BSR_GRAD_INPUT_MODE}  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS}"
 
 GC_ARGS=()
 if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then

@@ -64,7 +64,7 @@ def bsr_recompile_diag_summary(reset: bool = False) -> str:
     if reset:
         _BSR_DIAG = {}
         _BSR_DIAG_USE_ATOMIC_SEEN = {}
-    return \"\\n\".join(out_lines)
+    return "\n".join(out_lines)
 
 @triton.jit
 def sparse_grad_weight_kernel(
@@ -141,6 +141,82 @@ def sparse_grad_weight_kernel(
         tl.atomic_add(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
     else:
         tl.store(grad_weight_ptr + gw_offsets, acc.to(grad_weight_ptr.dtype.element_ty), mask=valid)
+
+
+@triton.jit
+def sparse_grad_input_kernel(
+    grad_input_ptr,
+    grad_output_ptr,
+    weight_ptr,
+    mask_ptr,
+    active_blocks_ptr,
+    batch_size,
+    output_dim,
+    input_dim,
+    stride_go_batch,
+    stride_go_out,
+    stride_w_out,
+    stride_w_in,
+    stride_gi_batch,
+    stride_gi_in,
+    stride_m_out,
+    stride_m_in,
+    BLOCK_SIZE: tl.constexpr,
+    BATCH_BLOCK_SIZE: tl.constexpr,
+    USE_TF32: tl.constexpr,
+):
+    """
+    grad_input = grad_output @ W over active blocks only.
+    Accumulates into grad_input via atomic_add (fp32) so overlapping active blocks are correct.
+
+    Grid is 1-D over active blocks only (one program per block, full batch in inner loops)
+    to avoid duplicate atomic_add when batch dimension would be split without atomics.
+    """
+    pid_block = tl.program_id(0)
+
+    block_idx = tl.load(active_blocks_ptr + pid_block).to(tl.int32)
+    num_blocks_in = tl.cdiv(input_dim, BLOCK_SIZE)
+    block_out = block_idx // num_blocks_in
+    block_in = block_idx % num_blocks_in
+
+    out_start = block_out * BLOCK_SIZE
+    in_start = block_in * BLOCK_SIZE
+    out_offsets = out_start + tl.arange(0, BLOCK_SIZE)
+    in_offsets = in_start + tl.arange(0, BLOCK_SIZE)
+
+    out_valid = out_offsets < output_dim
+    in_valid = in_offsets < input_dim
+    valid_w = out_valid[:, None] & in_valid[None, :]
+
+    w_offs = out_offsets[:, None] * stride_w_out + in_offsets[None, :] * stride_w_in
+    Wblk = tl.load(weight_ptr + w_offs, mask=valid_w, other=0.0)
+
+    m_offsets = out_offsets[:, None] * stride_m_out + in_offsets[None, :] * stride_m_in
+    mask_block = tl.load(mask_ptr + m_offsets, mask=valid_w, other=0.0)
+    Wblk = Wblk * mask_block
+
+    batch_start = 0
+    batch_end = batch_size
+
+    for b_start in range(batch_start, batch_end, BATCH_BLOCK_SIZE):
+        b_offsets = b_start + tl.arange(0, BATCH_BLOCK_SIZE)
+        b_mask = b_offsets < batch_end
+
+        go_offs = b_offsets[:, None] * stride_go_batch + out_offsets[None, :] * stride_go_out
+        go_mask = b_mask[:, None] & out_valid[None, :]
+        go = tl.load(grad_output_ptr + go_offs, mask=go_mask, other=0.0)
+
+        if USE_TF32:
+            go_f = go.to(tl.float32)
+            W_f = Wblk.to(tl.float32)
+            contrib = tl.dot(go_f, W_f, allow_tf32=True)
+        else:
+            contrib = tl.dot(go, Wblk)
+
+        gi_offs = b_offsets[:, None] * stride_gi_batch + in_offsets[None, :] * stride_gi_in
+        gi_mask = b_mask[:, None] & in_valid[None, :]
+        tl.atomic_add(grad_input_ptr + gi_offs, contrib, mask=gi_mask)
+
 
 def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks=None, block_size=16, use_tf32=False):
     batch_size, output_dim = grad_output.shape
@@ -241,3 +317,90 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
             if st.first_ms > max(50.0, 5.0 * st.last_ms):
                 st.compile_suspected = True
     return grad_weight
+
+
+def sparse_grad_input_triton(
+    grad_output: torch.Tensor,
+    weight: torch.Tensor,
+    mask: torch.Tensor,
+    active_blocks: Optional[torch.Tensor] = None,
+    block_size: int = 16,
+    use_tf32: bool = False,
+) -> torch.Tensor:
+    """
+    grad_input = grad_output @ weight with block sparsity (active blocks only).
+
+    Returns a tensor with the same dtype as ``grad_output``. Internally accumulates
+    in fp32 for stable ``atomic_add``, then casts.
+    """
+    batch_size, output_dim = grad_output.shape
+    out_w, input_dim = weight.shape
+    if out_w != output_dim:
+        raise ValueError(f"grad_output out_dim {output_dim} != weight shape[0] {out_w}")
+
+    out_dtype = grad_output.dtype
+    device = grad_output.device
+    # fp32 accumulation for atomic_add stability
+    grad_input = torch.zeros((batch_size, input_dim), device=device, dtype=torch.float32)
+
+    if active_blocks is None:
+        num_blocks_m = (output_dim + block_size - 1) // block_size
+        num_blocks_n = (input_dim + block_size - 1) // block_size
+        pad_m = num_blocks_m * block_size - output_dim
+        pad_n = num_blocks_n * block_size - input_dim
+        mask_f = mask.float() if mask.dtype == torch.bool else mask
+        padded_mask = torch.nn.functional.pad(mask_f, (0, pad_n, 0, pad_m), value=0)
+        blocks = padded_mask.view(num_blocks_m, block_size, num_blocks_n, block_size)
+        block_active = blocks.any(dim=1).any(dim=2)
+        active_blocks = torch.nonzero(block_active.flatten(), as_tuple=True)[0].to(torch.int32)
+
+    if active_blocks.dtype != torch.int32:
+        active_blocks = active_blocks.to(torch.int32)
+    if not active_blocks.is_contiguous():
+        active_blocks = active_blocks.contiguous()
+
+    num_active_blocks = active_blocks.shape[0]
+    if num_active_blocks == 0:
+        return torch.zeros((batch_size, input_dim), device=device, dtype=out_dtype)
+
+    # One program per active block (full batch inner loop). Avoids duplicate atomic_add across batch shards.
+    grid = (num_active_blocks,)
+
+    batch_block_size = get_env_int("BSR_BATCH_BLOCK_SIZE", 64)
+    num_warps = get_env_int("BSR_NUM_WARPS", 4)
+    num_stages = get_env_int("BSR_NUM_STAGES", 2)
+
+    grad_out = grad_output
+    if not grad_out.is_contiguous():
+        grad_out = grad_out.contiguous()
+    w = weight
+    if not w.is_contiguous():
+        w = w.contiguous()
+    m = mask
+    if not m.is_contiguous():
+        m = m.contiguous()
+
+    sparse_grad_input_kernel[grid](
+        grad_input,
+        grad_out,
+        w,
+        m,
+        active_blocks,
+        batch_size,
+        output_dim,
+        input_dim,
+        grad_out.stride(0),
+        grad_out.stride(1),
+        w.stride(0),
+        w.stride(1),
+        grad_input.stride(0),
+        grad_input.stride(1),
+        m.stride(0),
+        m.stride(1),
+        BLOCK_SIZE=block_size,
+        BATCH_BLOCK_SIZE=batch_block_size,
+        USE_TF32=use_tf32,
+        num_warps=num_warps,
+        num_stages=num_stages,
+    )
+    return grad_input.to(out_dtype)

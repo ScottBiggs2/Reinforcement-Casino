@@ -1,9 +1,14 @@
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.kernels.bsr_backward import sparse_weight_gradient_triton
+from src.kernels.bsr_backward import sparse_grad_input_triton, sparse_weight_gradient_triton
 from src.utils.slurm_safe_log import slurm_safe_print
+
+
+def _grad_input_mode() -> str:
+    return os.environ.get("RL_CASINO_BSR_GRAD_INPUT_MODE", "dense").strip().lower()
 
 # ============================================================================
 # AUTOGRAD FUNCTIONS
@@ -37,7 +42,22 @@ class SparseLinearFunction(torch.autograd.Function):
         
         # Gradient w.r.t input
         if ctx.needs_input_grad[0]:
-            grad_input = grad_output @ weight
+            mode = _grad_input_mode()
+            if mode in ("sparse", "block", "bsr"):
+                grad_output_flat = grad_output.reshape(-1, grad_output.shape[-1])
+                if not grad_output_flat.is_contiguous():
+                    grad_output_flat = grad_output_flat.contiguous()
+                grad_input_flat = sparse_grad_input_triton(
+                    grad_output_flat,
+                    weight,
+                    mask,
+                    active_blocks=active_blocks,
+                    block_size=block_size,
+                    use_tf32=ctx.use_tf32,
+                )
+                grad_input = grad_input_flat.reshape_as(input_tensor)
+            else:
+                grad_input = grad_output @ weight
             
         # SPARSE gradient w.r.t weight
         if ctx.needs_input_grad[1]:
