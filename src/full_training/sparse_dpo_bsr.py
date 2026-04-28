@@ -42,6 +42,7 @@ from src.utils.logging_utils import (
 )
 from src.optimizers.sparse_adamw import SparseAdamW
 from src.mlps.bsr_sparse_mlp import replace_linear_modules, restore_linear_modules
+from src.kernels.bsr_backward import bsr_recompile_diag_summary
 
 def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
@@ -388,6 +389,11 @@ def train(
     )
     
     trainer.train()
+
+    # Optional: print BSR kernel compile/variant diagnostics for this phase.
+    if os.environ.get("RL_CASINO_BSR_RECOMPILE_DIAG", "").strip().lower() in ("1", "true", "yes"):
+        # Do not reset here by default; multi-phase benchmarks may want a global summary.
+        slurm_safe_print(bsr_recompile_diag_summary(reset=False))
 
     # Final Saving and Cleanup
     if save_model:

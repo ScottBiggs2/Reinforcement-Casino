@@ -122,6 +122,16 @@ export GRPO_BETA="${GRPO_BETA:-1.0}"
 export GRPO_SNIP_PREFERENCE_BETA="${GRPO_SNIP_PREFERENCE_BETA:-$GRPO_BETA}"
 export GRPO_GRASP_PREFERENCE_BETA="${GRPO_GRASP_PREFERENCE_BETA:-$GRPO_BETA}"
 
+# Optional score reweighting (SNIP / GRaSP): default off.
+# These are forwarded as CLI flags to inference_mask_finder.py for direct A/B comparison.
+export ORCH_SCORE_SNR="${ORCH_SCORE_SNR:-off}" # off|per_tensor|per_weight
+export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}" # identity|log1p|clamp
+export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
+export ORCH_SCORE_SNR_CLAMP_MIN="${ORCH_SCORE_SNR_CLAMP_MIN:-0.0}"
+export ORCH_SCORE_SNR_CLAMP_MAX="${ORCH_SCORE_SNR_CLAMP_MAX:-50.0}"
+export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-8.0}"
+export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" # 1 to override RAM guard
+
 # Output locations for masks
 export MASK_RUN_ID="${MASK_RUN_ID:-orch_masks_${SLURM_JOB_ID:-manual}}"
 export MASK_DIR="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}/${MASK_RUN_ID}"
@@ -245,6 +255,7 @@ echo "GRPO_DATASET_HF=${GRPO_DATASET_HF}  GRPO_DATASET=${GRPO_DATASET}"
 echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}  MIN_LAYER_KEEP_RATIO=${MIN_LAYER_KEEP_RATIO}"
 echo "DPO_SNIP_OBJECTIVE=${DPO_SNIP_OBJECTIVE}  GRPO_SNIP_OBJECTIVE=${GRPO_SNIP_OBJECTIVE}"
 echo "ORCH_CAV_IMPL=${ORCH_CAV_IMPL}  ORCH_CAV_WEIGHT_ABS=${ORCH_CAV_WEIGHT_ABS}  ORCH_CAV_INCLUDE_EMBEDS=${ORCH_CAV_INCLUDE_EMBEDS}"
+echo "ORCH_SCORE_SNR=${ORCH_SCORE_SNR} ORCH_SCORE_SNR_TRANSFORM=${ORCH_SCORE_SNR_TRANSFORM} ORCH_SCORE_SNR_EPS=${ORCH_SCORE_SNR_EPS}"
 
 ########################################
 # 1) Helper functions for submission
@@ -363,6 +374,19 @@ export MASK_GRPO_WANDA="${GRPO_MASK_DIR}/grpo_wanda_owl_sp${SPARSITY_PERCENT/./}
 export MASK_GRPO_SNIP="${GRPO_MASK_DIR}/grpo_snip_${GRPO_SNIP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
 export MASK_GRPO_GRASP="${GRPO_MASK_DIR}/grpo_grasp_${GRPO_GRASP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
 
+SNRS=()
+if [ "${ORCH_SCORE_SNR:-off}" != "off" ]; then
+  SNRS+=( --score-snr "${ORCH_SCORE_SNR}" )
+  SNRS+=( --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}" )
+  SNRS+=( --score-snr-eps "${ORCH_SCORE_SNR_EPS}" )
+  SNRS+=( --score-snr-clamp-min "${ORCH_SCORE_SNR_CLAMP_MIN}" )
+  SNRS+=( --score-snr-clamp-max "${ORCH_SCORE_SNR_CLAMP_MAX}" )
+  SNRS+=( --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+  if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
+    SNRS+=( --score-snr-allow-large-ram )
+  fi
+fi
+
 echo ""
 echo "=== Generating shared random mask (DPO + GRPO) → ${MASK_RANDOM}"
 set +e
@@ -439,6 +463,7 @@ set +e
   --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
   --snip-preference-beta "${DPO_BETA}" \
+  "${SNRS[@]}" \
   --output "${MASK_SNIP_LIGHT_R1}"
 set -e
 
@@ -466,6 +491,7 @@ set +e
   --max_length "${DPO_MAX_LENGTH}" \
   --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
   --grasp-preference-beta "${DPO_BETA}" \
+  "${SNRS[@]}" \
   --output "${MASK_GRASP_LIGHT_R1}"
 set -e
 
@@ -517,6 +543,7 @@ set +e
   --seed 42 \
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
   --snip-preference-beta "${GRPO_SNIP_PREFERENCE_BETA}" \
+  "${SNRS[@]}" \
   --output "${MASK_GRPO_SNIP}"
 set -e
 
@@ -544,6 +571,7 @@ set +e
   --batch_size 1 \
   --seed 42 \
   --grasp-preference-beta "${GRPO_GRASP_PREFERENCE_BETA}" \
+  "${SNRS[@]}" \
   --output "${MASK_GRPO_GRASP}"
 set -e
 

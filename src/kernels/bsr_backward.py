@@ -4,9 +4,67 @@ import triton
 import triton.language as tl
 
 import os
+import time
+from dataclasses import dataclass
+from typing import Dict, Tuple, Optional, Any
 
 def get_env_int(name, default):
     return int(os.environ.get(name, default))
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    v = os.environ.get(name, default)
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+@dataclass
+class _BsrRecompileSigStats:
+    first_seen_s: float
+    launches: int = 0
+    first_ms: Optional[float] = None
+    last_ms: Optional[float] = None
+    total_ms: float = 0.0
+    compile_suspected: bool = False
+    first_step: Optional[int] = None
+    last_step: Optional[int] = None
+
+
+# Global (per-process) diagnostics store. Off by default.
+_BSR_DIAG: Dict[Tuple[Any, ...], _BsrRecompileSigStats] = {}
+_BSR_DIAG_USE_ATOMIC_SEEN: Dict[bool, int] = {}
+
+
+def bsr_recompile_diag_summary(reset: bool = False) -> str:
+    """
+    Return a concise summary string. Safe to call on CPU at end of a phase.
+    """
+    global _BSR_DIAG, _BSR_DIAG_USE_ATOMIC_SEEN
+    if not _BSR_DIAG:
+        out = "[bsr_diag] no kernel launches recorded"
+        if reset:
+            _BSR_DIAG_USE_ATOMIC_SEEN = {}
+        return out
+
+    suspects = [
+        (k, v) for k, v in _BSR_DIAG.items() if v.first_ms is not None and v.compile_suspected
+    ]
+    suspects.sort(key=lambda kv: kv[1].first_ms or 0.0, reverse=True)
+    top = suspects[:5]
+
+    unique = len(_BSR_DIAG)
+    flips = len(_BSR_DIAG_USE_ATOMIC_SEEN)
+    out_lines = [
+        f"[bsr_diag] unique_signatures={unique} use_atomic_values_seen={flips} {sorted(_BSR_DIAG_USE_ATOMIC_SEEN.keys())}",
+    ]
+    if top:
+        out_lines.append("[bsr_diag] top_compile_suspects(first_ms):")
+        for sig, st in top:
+            out_lines.append(
+                f"  first_ms={st.first_ms:.3f} launches={st.launches} step={st.first_step}->{st.last_step} sig={sig}"
+            )
+    if reset:
+        _BSR_DIAG = {}
+        _BSR_DIAG_USE_ATOMIC_SEEN = {}
+    return \"\\n\".join(out_lines)
 
 @triton.jit
 def sparse_grad_weight_kernel(
@@ -115,12 +173,44 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
         num_batch_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
         
     grid = (num_active_blocks, num_batch_chunks)
-    use_atomic = (num_batch_chunks > 1)
+    # Phase-constant atomic choice (prevents layer-dependent constexpr flips / recompiles).
+    # Default off unless explicitly enabled.
+    use_atomic = bool(get_env_int("BSR_USE_ATOMIC", 0))
     
     # Tuneable parameters from environment
     batch_block_size = get_env_int("BSR_BATCH_BLOCK_SIZE", 64)
     num_warps = get_env_int("BSR_NUM_WARPS", 4)
     num_stages = get_env_int("BSR_NUM_STAGES", 2)
+
+    # Optional diagnostics (off by default). Uses CUDA events.
+    diag = _env_flag("RL_CASINO_BSR_RECOMPILE_DIAG", "0")
+    diag_sync = _env_flag("RL_CASINO_BSR_RECOMPILE_DIAG_SYNC", "0")
+    diag_step = int(os.environ.get("RL_CASINO_BSR_RECOMPILE_DIAG_STEP", "-1"))
+    step_for_sig = diag_step if diag_step >= 0 else None
+
+    sig = None
+    start_evt = end_evt = None
+    if diag and grad_output.is_cuda:
+        sig = (
+            int(block_size),
+            int(batch_block_size),
+            bool(use_tf32),
+            bool(use_atomic),
+            str(grad_output.dtype),
+            str(input_tensor.dtype),
+            str(mask.dtype),
+            int(output_dim),
+            int(input_dim),
+        )
+        _BSR_DIAG_USE_ATOMIC_SEEN[bool(use_atomic)] = _BSR_DIAG_USE_ATOMIC_SEEN.get(bool(use_atomic), 0) + 1
+        if sig not in _BSR_DIAG:
+            _BSR_DIAG[sig] = _BsrRecompileSigStats(first_seen_s=time.time(), first_step=step_for_sig)
+        st = _BSR_DIAG[sig]
+        st.launches += 1
+        st.last_step = step_for_sig
+        start_evt = torch.cuda.Event(enable_timing=True)
+        end_evt = torch.cuda.Event(enable_timing=True)
+        start_evt.record()
     
     sparse_grad_weight_kernel[grid](
         grad_weight, grad_output, input_tensor, mask, active_blocks,
@@ -136,4 +226,18 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
         num_warps=num_warps,
         num_stages=num_stages,
     )
+
+    if diag and diag_sync and start_evt is not None and end_evt is not None and sig is not None:
+        end_evt.record()
+        torch.cuda.synchronize()
+        ms = float(start_evt.elapsed_time(end_evt))
+        st = _BSR_DIAG[sig]
+        st.last_ms = ms
+        st.total_ms += ms
+        if st.first_ms is None:
+            st.first_ms = ms
+        # Mark compile suspected if the first launch is much slower than the most recent.
+        if st.launches >= 2 and st.first_ms is not None and st.last_ms is not None:
+            if st.first_ms > max(50.0, 5.0 * st.last_ms):
+                st.compile_suspected = True
     return grad_weight

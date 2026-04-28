@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -12,6 +12,11 @@ from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     pooling_metadata,
+)
+from src.cold_start.utils.snr_weighting import (
+    GradientSNRAccumulator,
+    SNRConfig,
+    summarize_multiplier_stats,
 )
 
 # Reuse the same objectives as SNIP
@@ -71,6 +76,13 @@ class GRaSPScorer:
         response_masks: Optional[torch.Tensor] = None,
         preference_beta: float = 1.0,
         dataloader = None, # If provided, uses the dataloader directly (DPO/GRPO modes)
+        score_snr: Literal["off", "per_tensor", "per_weight"] = "off",
+        score_snr_eps: float = 1e-8,
+        score_snr_transform: Literal["identity", "log1p", "clamp"] = "log1p",
+        score_snr_clamp_min: float = 0.0,
+        score_snr_clamp_max: float = 50.0,
+        score_snr_ram_budget_gb: float = 8.0,
+        score_snr_allow_large_ram: bool = False,
     ):
         dev = torch.device(device)
         use_cuda = dev.type == "cuda" and torch.cuda.is_available()
@@ -98,8 +110,8 @@ class GRaSPScorer:
         # ---------------------------------------------------------------------
         print(f"[GRaSP] Pass 1: Computing average gradient (objective={objective})...")
         model.zero_grad(set_to_none=True)
-        
-        params_to_score = []
+
+        named_params: List[tuple[str, torch.Tensor]] = []
         for name, param in model.named_parameters():
             if mlp_only and "mlp" not in name:
                 continue
@@ -107,9 +119,23 @@ class GRaSPScorer:
                 continue
             if not param.requires_grad:
                 continue
-            params_to_score.append(param)
+            named_params.append((name, param))
+        params_to_score = [p for _, p in named_params]
 
-        g_avg = [torch.zeros_like(p, dtype=torch.float32, device="cpu") for p in params_to_score]
+        g_sum = [torch.zeros_like(p, dtype=torch.float32, device="cpu") for p in params_to_score]
+
+        snr_accum = None
+        if score_snr != "off":
+            cfg = SNRConfig(
+                mode=score_snr,
+                eps=float(score_snr_eps),
+                transform=score_snr_transform,
+                clamp_min=float(score_snr_clamp_min),
+                clamp_max=float(score_snr_clamp_max),
+                ram_budget_gb=float(score_snr_ram_budget_gb),
+                allow_large_ram=bool(score_snr_allow_large_ram),
+            )
+            snr_accum = GradientSNRAccumulator(cfg=cfg, params_by_name={n: p for n, p in named_params})
         
         # We need a way to iterate through the data
         if dataloader is not None:
@@ -169,19 +195,28 @@ class GRaSPScorer:
         # Pass 1 Loop
         for i, batch_data in enumerate(data_iter):
             loss = get_loss(batch_data, i)
-            loss.backward()
-            
+            grads = torch.autograd.grad(loss, params_to_score, retain_graph=False, create_graph=False)
+
+            if snr_accum is not None:
+                snr_accum.update_from_batch_grads({name: g for (name, _), g in zip(named_params, grads)})
+
             bs = batch_data["chosen_input_ids"].shape[0] if isinstance(batch_data, dict) else batch_size
             seen_samples += bs
-            
+
+            with torch.no_grad():
+                for j, g in enumerate(grads):
+                    if g is None:
+                        continue
+                    # loss is a mean over the batch -> multiply by bs to sum per-example gradients.
+                    g_sum[j].add_(g.detach().cpu().float(), alpha=float(bs))
+
             if i % 10 == 0:
                 print(f"  [Pass 1] Batch {i} processed...")
 
+            del loss, grads
+
         # Normalize and store g_avg on CPU
-        for j, p in enumerate(params_to_score):
-            if p.grad is not None:
-                g_avg[j] = (p.grad.data / float(seen_samples)).cpu().float()
-            p.grad = None
+        g_avg = [gs / float(max(seen_samples, 1)) for gs in g_sum]
         
         # ---------------------------------------------------------------------
         # Pass 2: Compute H * g_avg using HVPs
@@ -234,11 +269,25 @@ class GRaSPScorer:
         # ---------------------------------------------------------------------
         print("[GRaSP] Computing final scores...")
         scores = {}
-        param_names = [name for name, param in model.named_parameters() if (not mlp_only or "mlp" in name) and param.dim() == 2 and param.requires_grad]
-        
+        param_names = [name for name, _ in named_params]
+
+        multipliers = {}
+        if snr_accum is not None:
+            multipliers, summary = snr_accum.snr_multipliers()
+            print(
+                f"[GRaSP] SNR weighting enabled: mode={score_snr} "
+                f"transform={score_snr_transform} eps={score_snr_eps} "
+                f"summary={summarize_multiplier_stats(summary)}"
+            )
+
         for name, p_cpu, hgp in zip(param_names, [p.detach().cpu().float() for p in params_to_score], hgp_avg):
             # S = - (H * g) * w
-            scores[name] = -(hgp * p_cpu)
+            s = -(hgp * p_cpu)
+            if multipliers:
+                m = multipliers.get(name)
+                if m is not None:
+                    s = s * (m if m.numel() > 1 else float(m.item()))
+            scores[name] = s
 
         if we_turned_gc_on and hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()

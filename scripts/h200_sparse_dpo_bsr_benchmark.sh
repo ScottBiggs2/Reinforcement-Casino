@@ -84,6 +84,12 @@ export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
 # Fewer Trainer log events than every step (override with RL_CASINO_LOGGING_STEPS=1 for parity with DPO_train).
 export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-25}"
 
+# For stable benchmarking (avoid layer-dependent kernel variants)
+# - BSR_USE_ATOMIC: keep constexpr stable across all layers in a phase
+# - BSR_BATCH_CHUNKS: keep grid shape deterministic (disable auto heuristic)
+export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
+export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
+
 OUT_BASE="${H200_BSR_OUT:-${SCRATCH_USER_ROOT}/rl_casino_h200_bsr}/${RUN_ID:-${SLURM_JOB_ID:-local}}"
 mkdir -p "$OUT_BASE"
 

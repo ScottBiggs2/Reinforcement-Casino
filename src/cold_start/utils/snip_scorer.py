@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -12,6 +12,11 @@ from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,
     pooling_metadata,
+)
+from src.cold_start.utils.snr_weighting import (
+    GradientSNRAccumulator,
+    SNRConfig,
+    summarize_multiplier_stats,
 )
 
 # CLI / metadata string values (match inference_mask_finder --snip-objective)
@@ -84,6 +89,13 @@ class SNIPScorer:
         gradient_checkpointing: bool = True,
         use_autocast: bool = True,
         response_masks: Optional[torch.Tensor] = None,
+        score_snr: Literal["off", "per_tensor", "per_weight"] = "off",
+        score_snr_eps: float = 1e-8,
+        score_snr_transform: Literal["identity", "log1p", "clamp"] = "log1p",
+        score_snr_clamp_min: float = 0.0,
+        score_snr_clamp_max: float = 50.0,
+        score_snr_ram_budget_gb: float = 8.0,
+        score_snr_allow_large_ram: bool = False,
     ):
         """Return per-parameter SNIP saliency (|grad * w|) for the mean CE loss over batches.
 
@@ -127,6 +139,31 @@ class SNIPScorer:
 
         k = float(n_batches)
         seen = 0
+
+        named_params: List[tuple[str, torch.Tensor]] = []
+        for name, param in model.named_parameters():
+            if mlp_only and "mlp" not in name:
+                continue
+            if len(param.shape) != 2:
+                continue
+            if not param.requires_grad:
+                continue
+            named_params.append((name, param))
+        params_to_score = [p for _, p in named_params]
+
+        snr_accum = None
+        if score_snr != "off":
+            cfg = SNRConfig(
+                mode=score_snr,
+                eps=float(score_snr_eps),
+                transform=score_snr_transform,
+                clamp_min=float(score_snr_clamp_min),
+                clamp_max=float(score_snr_clamp_max),
+                ram_budget_gb=float(score_snr_ram_budget_gb),
+                allow_large_ram=bool(score_snr_allow_large_ram),
+            )
+            snr_accum = GradientSNRAccumulator(cfg=cfg, params_by_name={n: p for n, p in named_params})
+
         try:
             for i in range(0, len(chosen_texts), batch_size):
                 batch = chosen_texts[i : i + batch_size]
@@ -159,11 +196,23 @@ class SNIPScorer:
                         attention_mask=attention_mask,
                         labels=labels,
                     )
-                    loss_scaled = out.loss / k
+                    loss = out.loss
 
-                loss_scaled.backward()
+                grads = torch.autograd.grad(loss, params_to_score, retain_graph=False, create_graph=False)
 
-                del out, loss_scaled, input_ids, attention_mask, labels, enc, batch
+                if snr_accum is not None:
+                    snr_accum.update_from_batch_grads({name: g for (name, _), g in zip(named_params, grads)})
+
+                with torch.no_grad():
+                    for p, g in zip(params_to_score, grads):
+                        if g is None:
+                            continue
+                        if p.grad is None:
+                            p.grad = g.detach() / k
+                        else:
+                            p.grad.add_(g.detach(), alpha=(1.0 / k))
+
+                del out, loss, grads, input_ids, attention_mask, labels, enc, batch
                 if use_cuda:
                     torch.cuda.empty_cache()
 
@@ -173,6 +222,14 @@ class SNIPScorer:
                 model.gradient_checkpointing_disable()
 
         scores = {}
+        multipliers = {}
+        if snr_accum is not None:
+            multipliers, summary = snr_accum.snr_multipliers()
+            print(
+                f"[SNIPScorer] SNR weighting enabled: mode={score_snr} "
+                f"transform={score_snr_transform} eps={score_snr_eps} "
+                f"summary={summarize_multiplier_stats(summary)}"
+            )
         with torch.no_grad():
             for name, param in model.named_parameters():
                 if mlp_only and "mlp" not in name:
@@ -181,7 +238,12 @@ class SNIPScorer:
                     continue
                 if param.grad is None:
                     continue
-                scores[name] = (param.grad.abs() * param.detach().abs()).float().cpu()
+                base = (param.grad.abs() * param.detach().abs()).float().cpu()
+                if multipliers:
+                    m = multipliers.get(name)
+                    if m is not None:
+                        base = base * (m if m.numel() > 1 else float(m.item()))
+                scores[name] = base
 
         model.zero_grad(set_to_none=True)
         model.eval()
@@ -266,6 +328,13 @@ def compute_snip_scores(
     *,
     gradient_checkpointing: bool = True,
     use_autocast: bool = True,
+    score_snr: Literal["off", "per_tensor", "per_weight"] = "off",
+    score_snr_eps: float = 1e-8,
+    score_snr_transform: Literal["identity", "log1p", "clamp"] = "log1p",
+    score_snr_clamp_min: float = 0.0,
+    score_snr_clamp_max: float = 50.0,
+    score_snr_ram_budget_gb: float = 8.0,
+    score_snr_allow_large_ram: bool = False,
 ):
     """Compute SNIP scores from gradients of ``dpo_style_preference_loss`` (pairwise preference).
 
@@ -293,6 +362,32 @@ def compute_snip_scores(
 
     model.train()
     model.zero_grad(set_to_none=True)
+
+    # Collect params once (used for autograd.grad + optional SNR accumulation).
+    named_params: List[tuple[str, torch.Tensor]] = []
+    for name, param in model.named_parameters():
+        if mlp_only and "mlp" not in name:
+            continue
+        if param.dim() != 2:
+            continue
+        if not param.requires_grad:
+            continue
+        named_params.append((name, param))
+    params_to_score = [p for _, p in named_params]
+
+    snr_accum = None
+    snr_summary_stats = None
+    if score_snr != "off":
+        cfg = SNRConfig(
+            mode=score_snr,
+            eps=float(score_snr_eps),
+            transform=score_snr_transform,
+            clamp_min=float(score_snr_clamp_min),
+            clamp_max=float(score_snr_clamp_max),
+            ram_budget_gb=float(score_snr_ram_budget_gb),
+            allow_large_ram=bool(score_snr_allow_large_ram),
+        )
+        snr_accum = GradientSNRAccumulator(cfg=cfg, params_by_name={n: p for n, p in named_params})
 
     amp_dtype = torch.bfloat16
     if use_cuda:
@@ -336,11 +431,22 @@ def compute_snip_scores(
                     rejected_mask=rejected_mask,
                     beta=preference_beta,
                 )
-                loss_weighted = loss * scale
+            grads = torch.autograd.grad(loss, params_to_score, retain_graph=False, create_graph=False)
 
-            loss_weighted.backward()
+            if snr_accum is not None:
+                snr_accum.update_from_batch_grads({name: g for (name, _), g in zip(named_params, grads)})
 
-            del chosen_logits, rejected_logits, loss, loss_weighted
+            # Accumulate scaled gradients to match the global-mean objective.
+            with torch.no_grad():
+                for p, g in zip(params_to_score, grads):
+                    if g is None:
+                        continue
+                    if p.grad is None:
+                        p.grad = g.detach() * scale
+                    else:
+                        p.grad.add_(g.detach(), alpha=scale)
+
+            del chosen_logits, rejected_logits, loss, grads
             del chosen_ids, chosen_mask, rejected_ids, rejected_mask
             if use_cuda:
                 torch.cuda.empty_cache()
@@ -352,6 +458,15 @@ def compute_snip_scores(
         if we_turned_gc_on and hasattr(model, "gradient_checkpointing_disable"):
             model.gradient_checkpointing_disable()
 
+    multipliers = {}
+    multiplier_summary = {}
+    if snr_accum is not None:
+        multipliers, multiplier_summary = snr_accum.snr_multipliers()
+        snr_summary_stats = summarize_multiplier_stats(multiplier_summary)
+        print(f"[compute_snip_scores] SNR weighting enabled: mode={score_snr} "
+              f"transform={score_snr_transform} eps={score_snr_eps} "
+              f"summary={snr_summary_stats}")
+
     scores = {}
     with torch.no_grad():
         for name, param in model.named_parameters():
@@ -361,7 +476,12 @@ def compute_snip_scores(
                 continue
             if param.grad is None:
                 continue
-            scores[name] = (param.grad.abs() * param.detach().abs()).float().cpu()
+            base = (param.grad.abs() * param.detach().abs()).float().cpu()
+            if multipliers:
+                m = multipliers.get(name)
+                if m is not None:
+                    base = base * (m if m.numel() > 1 else float(m.item()))
+            scores[name] = base
 
     model.zero_grad(set_to_none=True)
     model.eval()

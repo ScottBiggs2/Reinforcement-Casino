@@ -622,6 +622,13 @@ def main(args):
                 batch_size=args.batch_size,
                 gradient_checkpointing=args.snip_lm_gradient_checkpointing,
                 use_autocast=not args.snip_lm_no_autocast,
+                score_snr=args.score_snr,
+                score_snr_eps=args.score_snr_eps,
+                score_snr_transform=args.score_snr_transform,
+                score_snr_clamp_min=args.score_snr_clamp_min,
+                score_snr_clamp_max=args.score_snr_clamp_max,
+                score_snr_ram_budget_gb=args.score_snr_ram_budget_gb,
+                score_snr_allow_large_ram=args.score_snr_allow_large_ram,
             )
         else:
             print("[SNIP] Objective=dpo_preference (gradient of pairwise preference loss)")
@@ -637,6 +644,13 @@ def main(args):
                 preference_beta=args.snip_preference_beta,
                 gradient_checkpointing=args.snip_gradient_checkpointing,
                 use_autocast=not args.snip_no_autocast,
+                score_snr=args.score_snr,
+                score_snr_eps=args.score_snr_eps,
+                score_snr_transform=args.score_snr_transform,
+                score_snr_clamp_min=args.score_snr_clamp_min,
+                score_snr_clamp_max=args.score_snr_clamp_max,
+                score_snr_ram_budget_gb=args.score_snr_ram_budget_gb,
+                score_snr_allow_large_ram=args.score_snr_allow_large_ram,
             )
         masks = build_snip_masks_from_scores(
             snip_scores,
@@ -653,6 +667,18 @@ def main(args):
             "dataset": effective_dataset,
             "seed": args.seed,
         }
+        if args.score_snr != "off":
+            meta_extra.update(
+                {
+                    "score_snr": args.score_snr,
+                    "score_snr_eps": float(args.score_snr_eps),
+                    "score_snr_transform": args.score_snr_transform,
+                    "score_snr_clamp_min": float(args.score_snr_clamp_min),
+                    "score_snr_clamp_max": float(args.score_snr_clamp_max),
+                    "score_snr_ram_budget_gb": float(args.score_snr_ram_budget_gb),
+                    "score_snr_allow_large_ram": bool(args.score_snr_allow_large_ram),
+                }
+            )
         if args.snip_objective == SNIP_OBJECTIVE_LM:
             meta_extra["snip_lm_gradient_checkpointing"] = bool(args.snip_lm_gradient_checkpointing)
             meta_extra["snip_lm_autocast"] = not bool(args.snip_lm_no_autocast)
@@ -696,6 +722,13 @@ def main(args):
             use_autocast=not args.grasp_no_autocast,
             dataloader=pref_loader,
             preference_beta=args.grasp_preference_beta,
+            score_snr=args.score_snr,
+            score_snr_eps=args.score_snr_eps,
+            score_snr_transform=args.score_snr_transform,
+            score_snr_clamp_min=args.score_snr_clamp_min,
+            score_snr_clamp_max=args.score_snr_clamp_max,
+            score_snr_ram_budget_gb=args.score_snr_ram_budget_gb,
+            score_snr_allow_large_ram=args.score_snr_allow_large_ram,
         )
         
         masks = create_mask_from_scores_gpu_efficient(
@@ -714,6 +747,18 @@ def main(args):
             "dataset": effective_dataset,
             "seed": args.seed,
         }
+        if args.score_snr != "off":
+            meta_extra.update(
+                {
+                    "score_snr": args.score_snr,
+                    "score_snr_eps": float(args.score_snr_eps),
+                    "score_snr_transform": args.score_snr_transform,
+                    "score_snr_clamp_min": float(args.score_snr_clamp_min),
+                    "score_snr_clamp_max": float(args.score_snr_clamp_max),
+                    "score_snr_ram_budget_gb": float(args.score_snr_ram_budget_gb),
+                    "score_snr_allow_large_ram": bool(args.score_snr_allow_large_ram),
+                }
+            )
         metadata = grasp_save_metadata(
             grasp_objective=args.grasp_objective,
             sparsity_percent=args.sparsity,
@@ -872,6 +917,40 @@ if __name__ == "__main__":
                         help="Print per-layer diagnostics (score distribution, sparsity, effective rank).")
     parser.add_argument("--no_layer_norm", action="store_true",
                         help="Disable per-layer normalization (affects fisher and cav methods).")
+
+    # ── Optional SNR reweighting (SNIP / GRaSP) ───────────────────────────────
+    parser.add_argument(
+        "--score-snr",
+        dest="score_snr",
+        choices=["off", "per_tensor", "per_weight"],
+        default="off",
+        help=(
+            "Optional SNR reweighting of SNIP/GRaSP scores using minibatch gradient stability. "
+            "off: unchanged baseline. per_tensor: cheap scalar per weight matrix. "
+            "per_weight: per-element SNR (RAM heavy; guarded by a RAM budget)."
+        ),
+    )
+    parser.add_argument("--score-snr-eps", type=float, default=1e-8, help="[score-snr] Epsilon for std denom.")
+    parser.add_argument(
+        "--score-snr-transform",
+        choices=["identity", "log1p", "clamp"],
+        default="log1p",
+        help="[score-snr] Transform f(snr) used as multiplicative score weight.",
+    )
+    parser.add_argument("--score-snr-clamp-min", type=float, default=0.0, help="[score-snr clamp] Min clamp.")
+    parser.add_argument("--score-snr-clamp-max", type=float, default=50.0, help="[score-snr clamp] Max clamp.")
+    parser.add_argument(
+        "--score-snr-ram-budget-gb",
+        type=float,
+        default=8.0,
+        help="[score-snr per_weight] Approx RAM budget for per-weight moments (mean+M2, float32).",
+    )
+    parser.add_argument(
+        "--score-snr-allow-large-ram",
+        action="store_true",
+        default=False,
+        help="[score-snr per_weight] Override RAM budget guardrail (still may OOM).",
+    )
 
     # ── CAV-specific ──────────────────────────────────────────
     parser.add_argument(
