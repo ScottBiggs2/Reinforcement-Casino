@@ -2,6 +2,22 @@
 # Single H200 job: dense + random-mask sparse BSR-DPO phases (see src/full_training/h200_sparse_dpo_bsr_benchmark.py).
 # Submit from repo root:  sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 #
+# --- Why end-to-end [throughput] often differs only ~few % across phases ---
+# 1) Sparse phases DO use sparse backprop: SparseLinearLayer backward calls Triton (grad_w; optional
+#    sparse grad_i via RL_CASINO_BSR_GRAD_INPUT_MODE). Only the *forward* matmul is still dense F.linear.
+#    The dense baseline phase skips injection entirely (standard nn.Linear + dense optimizer).
+# 2) A Llama-style step is dominated by attention/Flash, norms, activations, DPO/ref forward paths,
+#    data loading, and (with GC) extra recomputation — not only MLP/linear matmuls.
+# 3) benchmark_theory.json FLOP proxies count masked linear backward math; they explicitly do NOT
+#    include dense forward FLOPs (src/utils/bsr_theory_metrics.py). Do not expect wall time to track
+#    theory_* columns linearly.
+# 4) Dense baseline uses DPO_OPTIM (default adamw_8bit); sparse uses SparseAdamW — different optim
+#    kernels; for apples-to-apples sparse vs dense *optimizer* cost, try DPO_OPTIM=adamw on the host.
+# 5) Phases block_sparse_*_block1d vs *_block2d differ only in RL_CASINO_ADAM_KERNEL — tiny slice of
+#    step time vs attention; small deltas between them are expected.
+# 6) To unlock larger gaps: microbench isolated SparseLinear backward (parity script), torch.profiler
+#    / Nsight on one step, optional --mlp_only driver flag to narrow scope, or future sparse forward.
+#
 # Northeastern Explorer-style defaults; override env vars as needed.
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
