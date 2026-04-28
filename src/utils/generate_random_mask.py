@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 # On-disk masks are torch.bool via ``save_masks`` (see ``src.utils.mask_utils`` module docstring).
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
+    build_binary_masks_from_scores_blockwise,
     create_mask_from_scores_gpu_efficient,
     pooling_metadata,
     save_masks,
@@ -25,6 +26,9 @@ def generate_random_mask(
     compare_mask=None,
     min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
     seed=None,
+    mask_granularity: str = "element",
+    mask_block_size: int = 256,
+    mask_block_reduction: str = "mean",
 ):
     print(f"Generating random mask for {model_name} at {sparsity_percent}% sparsity...")
     if min_layer_keep_ratio > 0:
@@ -34,6 +38,24 @@ def generate_random_mask(
         )
     else:
         print("Mask pooling: pure global (single threshold across all random scores)")
+
+    mask_granularity = str(mask_granularity or "element").strip().lower()
+    if mask_granularity not in ("element", "block"):
+        raise ValueError(f"--mask_granularity must be one of: element, block (got {mask_granularity!r})")
+    if mask_granularity == "block":
+        if int(mask_block_size) < 1:
+            raise ValueError(f"--mask_block_size must be >= 1 (got {mask_block_size})")
+        mask_block_reduction = str(mask_block_reduction or "mean").strip().lower()
+        if mask_block_reduction not in ("mean", "max"):
+            raise ValueError(
+                f"--mask_block_reduction must be one of: mean, max (got {mask_block_reduction!r})"
+            )
+        print(
+            f"Mask layout: block (block_size={int(mask_block_size)}, reduction={mask_block_reduction}) "
+            "(note: nominal sparsity applies to block-grid; realized weight sparsity may differ slightly)"
+        )
+    else:
+        print("Mask layout: element")
     
     # Load model to get parameter shapes
     model = AutoModelForCausalLM.from_pretrained(
@@ -66,21 +88,36 @@ def generate_random_mask(
 
     print(f"Targeting {len(scores)} layers ({total_params:,} total parameters)")
     
-    masks = create_mask_from_scores_gpu_efficient(
-        scores,
-        sparsity_percent,
-        device="cpu",
-        min_layer_keep_ratio=min_layer_keep_ratio,
-        local_pool=False,
-    )
+    if mask_granularity == "block":
+        masks = build_binary_masks_from_scores_blockwise(
+            scores,
+            sparsity_percent=float(sparsity_percent),
+            block_size=int(mask_block_size),
+            device="cpu",
+            local_pool=False,
+            min_layer_keep_ratio=float(min_layer_keep_ratio),
+            reduction=mask_block_reduction,
+            add_tie_break_noise=False,
+        )
+    else:
+        masks = create_mask_from_scores_gpu_efficient(
+            scores,
+            sparsity_percent,
+            device="cpu",
+            min_layer_keep_ratio=min_layer_keep_ratio,
+            local_pool=False,
+        )
     total_selected = sum(mask.sum().item() for mask in masks.values())
     
     # Save
     metadata = {
-        "method": "random_global",
+        "method": "random_global" if mask_granularity == "element" else "random_global_block",
         "model_name": model_name,
         "sparsity_percent": sparsity_percent,
         "mlp_only": mlp_only,
+        "mask_granularity": mask_granularity,
+        "mask_block_size": int(mask_block_size) if mask_granularity == "block" else None,
+        "mask_block_reduction": mask_block_reduction if mask_granularity == "block" else None,
         "total_params": total_params,
         "selected_params": total_selected,
         **pooling_metadata(local_pool=False, min_layer_keep_ratio=min_layer_keep_ratio),
@@ -133,6 +170,29 @@ if __name__ == "__main__":
         default=None,
         help="Optional RNG seed for reproducible random masks (default: time-based).",
     )
+    parser.add_argument(
+        "--mask-granularity",
+        "--mask_granularity",
+        type=str,
+        default="element",
+        choices=["element", "block"],
+        help="Mask layout: element-wise (default) or block-structured.",
+    )
+    parser.add_argument(
+        "--mask-block-size",
+        "--mask_block_size",
+        type=int,
+        default=256,
+        help="Block size B for block-structured masks (B×B). Used only when --mask_granularity=block.",
+    )
+    parser.add_argument(
+        "--mask-block-reduction",
+        "--mask_block_reduction",
+        type=str,
+        default="mean",
+        choices=["mean", "max"],
+        help="How to pool element scores into blocks. Used only when --mask_granularity=block.",
+    )
     args = parser.parse_args()
 
     generate_random_mask(
@@ -143,4 +203,7 @@ if __name__ == "__main__":
         args.compare_mask,
         args.min_layer_keep_ratio,
         args.seed,
+        args.mask_granularity,
+        args.mask_block_size,
+        args.mask_block_reduction,
     )

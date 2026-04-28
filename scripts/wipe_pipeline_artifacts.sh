@@ -22,6 +22,7 @@ set -euo pipefail
 
 RUN_ID=""
 FULL_SCRATCH=0
+SCORCHED_SPARSE=0
 REPO_LOGS=0
 SCANCEL_USER=0
 INCLUDE_HF=0
@@ -31,6 +32,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --run-id) RUN_ID="${2:?}"; shift 2 ;;
     --full-scratch) FULL_SCRATCH=1; shift ;;
+    --scorched-sparse) SCORCHED_SPARSE=1; shift ;;
     --repo-logs) REPO_LOGS=1; shift ;;
     --scancel-user) SCANCEL_USER=1; shift ;;
     --include-hf-cache) INCLUDE_HF=1; shift ;;
@@ -52,8 +54,8 @@ if [ "$CONFIRM" != "1" ]; then
   exit 1
 fi
 
-if [ "$SCANCEL_USER" != "1" ] && [ "$FULL_SCRATCH" != "1" ] && [ -z "$RUN_ID" ] && [ "$REPO_LOGS" != "1" ] && [ "$INCLUDE_HF" != "1" ]; then
-  echo "ERROR: specify at least one of --scancel-user, --run-id, --full-scratch, --repo-logs, --include-hf-cache" >&2
+if [ "$SCANCEL_USER" != "1" ] && [ "$FULL_SCRATCH" != "1" ] && [ "$SCORCHED_SPARSE" != "1" ] && [ -z "$RUN_ID" ] && [ "$REPO_LOGS" != "1" ] && [ "$INCLUDE_HF" != "1" ]; then
+  echo "ERROR: specify at least one of --scancel-user, --run-id, --full-scratch, --scorched-sparse, --repo-logs, --include-hf-cache" >&2
   exit 1
 fi
 
@@ -71,6 +73,10 @@ SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train}
 EVAL_OUT_BASE="${EVAL_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_eval_runs}"
 HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
+# GRPO trees (optional in some setups; defaults match orchestrate_masks_then_queue_dpo_grpo.slurm)
+GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_grpo/sparse}"
+GRPO_MASK_DIR="${GRPO_MASK_DIR:-${SCRATCH_USER_ROOT}/rl_casino_grpo/masks}"
+
 if [ "$SCANCEL_USER" = "1" ]; then
   echo "=== scancel -u ${USER} ==="
   scancel -u "${USER}" || true
@@ -80,6 +86,10 @@ if [ "$FULL_SCRATCH" = "1" ]; then
   echo "=== Removing full scratch pipeline trees under ${SCRATCH_USER_ROOT} ==="
   rm -rf "${TRAIN_OUT_BASE}" "${MASK_OUT_BASE}" "${SPARSE_OUT_BASE}" "${EVAL_OUT_BASE}"
   echo "Removed: rl_casino_train, rl_casino_masks, rl_casino_sparse_train, rl_casino_eval_runs"
+elif [ "$SCORCHED_SPARSE" = "1" ]; then
+  echo "=== Scorched-earth sparse cleanup (preserve dense under ${TRAIN_OUT_BASE}) ==="
+  echo "Removing: ${MASK_OUT_BASE}  ${SPARSE_OUT_BASE}  ${GRPO_MASK_DIR}  ${GRPO_SPARSE_OUTPUT_BASE}"
+  rm -rf "${MASK_OUT_BASE}" "${SPARSE_OUT_BASE}" "${GRPO_MASK_DIR}" "${GRPO_SPARSE_OUTPUT_BASE}"
 elif [ -n "$RUN_ID" ]; then
   echo "=== Removing RUN_ID=${RUN_ID} under scratch bases ==="
   rm -rf "${TRAIN_OUT_BASE}/${RUN_ID}" "${MASK_OUT_BASE}/${RUN_ID}" "${SPARSE_OUT_BASE}/${RUN_ID}" "${EVAL_OUT_BASE}/${RUN_ID}"
