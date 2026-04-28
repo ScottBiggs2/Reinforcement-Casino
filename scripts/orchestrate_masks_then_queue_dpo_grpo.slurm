@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # One short GPU job that:
-#   1) generates masks (shared random baseline + per-task CAV/SNIP for Tulu3, Light-R1, GRPO)
-#   2) submits downstream training jobs with Slurm afterok dependencies:
-#      Tulu3 DPO (dense + 3 sparse), Light-R1 DPO (dense + 3 sparse), GRPO (dense + 3 sparse)
+#   1) Generates masks on GPU: shared random baseline + Light-R1 Wanda+OWL + Light-R1 SNIP/GRaSP +
+#      GRPO Wanda+OWL + GRPO SNIP/GRaSP (plus optional ORCH_SCORE_SNR / ORCH_MASK_GRANULARITY flags).
+#   2) As each mask file is written, submits the matching downstream training job via sbatch (no
+#      Slurm afterok on this orchestrator job — children start independently once their mask exists).
 #
-# The random global mask is generated once and reused for DPO (Tulu3) sparse-random, DPO (Light-R1)
-# sparse-random, and GRPO sparse-random.
+# Light-R1 DPO: random sparse, dense, Wanda+OWL sparse, SNIP sparse, GRaSP sparse.
+# GRPO: random sparse, Wanda+OWL sparse, SNIP sparse, GRaSP sparse.
+# Export MASK_RUN_ID / paths before sbatch if you only need to re-queue training:
+#   bash scripts/orchestrate_queue_training_only.sh
 #
 # Submit from repo root:
 #   cd /path/to/rl_casino && sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
@@ -31,7 +34,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 # (Host RAM for the Python process — not GPU VRAM. Mask OOM is typically CUDA OOM, not this limit.)
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --job-name=orch_masks_queue
 #SBATCH --output=logs/orch_masks_queue_%j.out
 #SBATCH --error=logs/orch_masks_queue_%j.err
@@ -131,6 +134,23 @@ export ORCH_SCORE_SNR_CLAMP_MIN="${ORCH_SCORE_SNR_CLAMP_MIN:-0.0}"
 export ORCH_SCORE_SNR_CLAMP_MAX="${ORCH_SCORE_SNR_CLAMP_MAX:-50.0}"
 export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-8.0}"
 export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" # 1 to override RAM guard
+
+# SNIP/GRaSP mask layout: element (default) vs block (pool to B×B blocks then expand; BSR-friendly).
+export ORCH_MASK_GRANULARITY="${ORCH_MASK_GRANULARITY:-element}" # element|block
+export ORCH_MASK_BLOCK_SIZE="${ORCH_MASK_BLOCK_SIZE:-256}"
+export ORCH_MASK_BLOCK_REDUCTION="${ORCH_MASK_BLOCK_REDUCTION:-mean}" # mean|max
+# SNIP/GRaSP output filename suffix so element vs block never clobber each other:
+# - element (default): empty suffix (legacy filenames).
+# - block: defaults to "_block${ORCH_MASK_BLOCK_SIZE}" (e.g. _block256).
+# - Override anytime: export ORCH_MASK_FNAME_TAG=_elem   or   _block128_max
+case "${ORCH_MASK_GRANULARITY:-element}" in
+  block)
+    ORCH_MASK_FNAME_TAG="${ORCH_MASK_FNAME_TAG:-_block${ORCH_MASK_BLOCK_SIZE}}"
+    ;;
+  *)
+    ORCH_MASK_FNAME_TAG="${ORCH_MASK_FNAME_TAG:-}"
+    ;;
+esac
 
 # Output locations for masks
 export MASK_RUN_ID="${MASK_RUN_ID:-orch_masks_${SLURM_JOB_ID:-manual}}"
@@ -256,6 +276,8 @@ echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}  MIN_LAYER_KEEP_RATIO=${MIN_LAYER_KEE
 echo "DPO_SNIP_OBJECTIVE=${DPO_SNIP_OBJECTIVE}  GRPO_SNIP_OBJECTIVE=${GRPO_SNIP_OBJECTIVE}"
 echo "ORCH_CAV_IMPL=${ORCH_CAV_IMPL}  ORCH_CAV_WEIGHT_ABS=${ORCH_CAV_WEIGHT_ABS}  ORCH_CAV_INCLUDE_EMBEDS=${ORCH_CAV_INCLUDE_EMBEDS}"
 echo "ORCH_SCORE_SNR=${ORCH_SCORE_SNR} ORCH_SCORE_SNR_TRANSFORM=${ORCH_SCORE_SNR_TRANSFORM} ORCH_SCORE_SNR_EPS=${ORCH_SCORE_SNR_EPS}"
+echo "ORCH_MASK_GRANULARITY=${ORCH_MASK_GRANULARITY} ORCH_MASK_BLOCK_SIZE=${ORCH_MASK_BLOCK_SIZE} ORCH_MASK_BLOCK_REDUCTION=${ORCH_MASK_BLOCK_REDUCTION}"
+echo "ORCH_MASK_FNAME_TAG=${ORCH_MASK_FNAME_TAG:-}  (SNIP/GRaSP .pt suffix; empty = element-wise legacy names)"
 
 ########################################
 # 1) Helper functions for submission
@@ -359,20 +381,20 @@ export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 export MASK_RANDOM="${MASK_DIR}/random_${MODEL//\//_}_sparsity${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 export MASK_WANDA="${MASK_DIR}/wanda_owl_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_ORACLE_TULU3="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
-export MASK_SNIP="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_${DPO_DS_KEY}_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
+export MASK_SNIP="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_${DPO_DS_KEY}_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}${ORCH_MASK_FNAME_TAG}.pt"
 
 # DPO masks — Light-R1 (same model/sparsity; Wanda+OWL calibrated on Light-R1)
 export MASK_WANDA_LIGHT_R1="${MASK_DIR}/wanda_owl_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
-export MASK_SNIP_LIGHT_R1="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}.pt"
+export MASK_SNIP_LIGHT_R1="${MASK_DIR}/cold_snip_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${DPO_SNIP_OBJECTIVE}${ORCH_MASK_FNAME_TAG}.pt"
 export MASK_ORACLE_LIGHT_R1="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
 
 # GRPO: reuse MASK_RANDOM for sparse-random; Wanda+OWL + SNIP are GRPO-specific paths
-export MASK_GRASP_LIGHT_R1="${MASK_DIR}/cold_grasp_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${GRASP_OBJECTIVE}.pt"
+export MASK_GRASP_LIGHT_R1="${MASK_DIR}/cold_grasp_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${GRASP_OBJECTIVE}${ORCH_MASK_FNAME_TAG}.pt"
 
 export MASK_GRPO_RANDOM="${MASK_RANDOM}"
 export MASK_GRPO_WANDA="${GRPO_MASK_DIR}/grpo_wanda_owl_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
-export MASK_GRPO_SNIP="${GRPO_MASK_DIR}/grpo_snip_${GRPO_SNIP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
-export MASK_GRPO_GRASP="${GRPO_MASK_DIR}/grpo_grasp_${GRPO_GRASP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}.pt"
+export MASK_GRPO_SNIP="${GRPO_MASK_DIR}/grpo_snip_${GRPO_SNIP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}${ORCH_MASK_FNAME_TAG}.pt"
+export MASK_GRPO_GRASP="${GRPO_MASK_DIR}/grpo_grasp_${GRPO_GRASP_OBJECTIVE}_sp${SPARSITY_PERCENT/./}_$(sanitize_model_name "${MODEL}")_${GRPO_DATASET_HF##*/}${ORCH_MASK_FNAME_TAG}.pt"
 
 SNRS=()
 if [ "${ORCH_SCORE_SNR:-off}" != "off" ]; then
@@ -385,6 +407,13 @@ if [ "${ORCH_SCORE_SNR:-off}" != "off" ]; then
   if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
     SNRS+=( --score-snr-allow-large-ram )
   fi
+fi
+
+MG=()
+if [ "${ORCH_MASK_GRANULARITY:-element}" != "element" ]; then
+  MG+=( --mask-granularity "${ORCH_MASK_GRANULARITY}" )
+  MG+=( --mask-block-size "${ORCH_MASK_BLOCK_SIZE}" )
+  MG+=( --mask-block-reduction "${ORCH_MASK_BLOCK_REDUCTION}" )
 fi
 
 echo ""
@@ -464,6 +493,7 @@ set +e
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
   --snip-preference-beta "${DPO_BETA}" \
   "${SNRS[@]}" \
+  "${MG[@]}" \
   --output "${MASK_SNIP_LIGHT_R1}"
 set -e
 
@@ -492,6 +522,7 @@ set +e
   --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
   --grasp-preference-beta "${DPO_BETA}" \
   "${SNRS[@]}" \
+  "${MG[@]}" \
   --output "${MASK_GRASP_LIGHT_R1}"
 set -e
 
@@ -544,6 +575,7 @@ set +e
   --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
   --snip-preference-beta "${GRPO_SNIP_PREFERENCE_BETA}" \
   "${SNRS[@]}" \
+  "${MG[@]}" \
   --output "${MASK_GRPO_SNIP}"
 set -e
 
@@ -572,6 +604,7 @@ set +e
   --seed 42 \
   --grasp-preference-beta "${GRPO_GRASP_PREFERENCE_BETA}" \
   "${SNRS[@]}" \
+  "${MG[@]}" \
   --output "${MASK_GRPO_GRASP}"
 set -e
 

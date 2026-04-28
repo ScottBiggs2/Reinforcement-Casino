@@ -10,6 +10,7 @@ import torch.nn.functional as F
 
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
+    build_binary_masks_from_scores_blockwise,
     create_mask_from_scores_gpu_efficient,
     pooling_metadata,
 )
@@ -32,17 +33,33 @@ def build_snip_masks_from_scores(
     local_pool: bool = False,
     min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
     add_tie_break_noise: bool = True,
+    mask_granularity: Literal["element", "block"] = "element",
+    mask_block_size: int = 256,
+    mask_block_reduction: Literal["mean", "max"] = "mean",
 ) -> Dict[str, torch.Tensor]:
     """Top-k binary masks from SNIP saliency scores (``torch.bool``); same pooling rules as other cold masks."""
-    out = create_mask_from_scores_gpu_efficient(
-        scores,
-        sparsity_percent=sparsity_percent,
-        device=device,
-        add_tie_break_noise=add_tie_break_noise,
-        tie_break_noise_scale=1e-6,
-        min_layer_keep_ratio=min_layer_keep_ratio,
-        local_pool=local_pool,
-    )
+    if mask_granularity == "block":
+        # Block-grid selection (fewer tie-break ties at block boundaries); noise off like H200 benchmark.
+        out = build_binary_masks_from_scores_blockwise(
+            scores,
+            sparsity_percent=sparsity_percent,
+            block_size=int(mask_block_size),
+            device=device,
+            local_pool=local_pool,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+            reduction=mask_block_reduction,
+            add_tie_break_noise=False,
+        )
+    else:
+        out = create_mask_from_scores_gpu_efficient(
+            scores,
+            sparsity_percent=sparsity_percent,
+            device=device,
+            add_tie_break_noise=add_tie_break_noise,
+            tie_break_noise_scale=1e-6,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+            local_pool=local_pool,
+        )
     assert all(v.dtype == torch.bool for v in out.values()), "SNIP masks must be torch.bool"
     return out
 

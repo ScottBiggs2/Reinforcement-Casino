@@ -8,6 +8,7 @@ from transformers import AutoModelForCausalLM
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+# On-disk masks are torch.bool via ``save_masks`` (see ``src.utils.mask_utils`` module docstring).
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
     create_mask_from_scores_gpu_efficient,

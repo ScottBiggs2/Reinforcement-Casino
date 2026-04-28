@@ -1,3 +1,22 @@
+"""
+Utilities for building binary parameter masks from score tensors and saving them.
+
+**Memory / device choices**
+
+- **Saved masks**: ``save_masks`` stores ``torch.bool`` tensors (compact on disk).
+- **Global ranking** (``create_mask_from_scores_gpu_efficient``): for very large models the
+  selector copies scores to **CPU float32** and uses chunked histogram/top-k logic to avoid
+  multi-billion-element CUDA allocations and CUDA ``topk`` limits. Training-time SNIP/GRaSP
+  **scoring** still runs on GPU; mask selection favoring host RAM is intentional.
+- **Debug**: set ``RL_CASINO_MASK_ASSERT_BOOL=1`` to assert all masks are bool before save.
+
+**Block-structured masks**: see ``pool_element_scores_to_blocks`` and
+``build_binary_masks_from_scores_blockwise`` — pool element-wise scores to B×B blocks, select
+blocks globally, then expand (same pattern as ``generate_block_random_masks_cpu`` in
+``h200_sparse_dpo_bsr_benchmark.py``). Nominal ``sparsity_percent`` applies to **block grid**
+elements; realized **weight** sparsity after expansion may differ slightly from that nominal value.
+"""
+
 import torch
 import os
 import sys
@@ -728,8 +747,123 @@ def compute_jaccard_similarity(pred_masks, true_masks):
         _mask_log("No matching layers found for similarity computation.")
         return None
 
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def assert_masks_are_bool(masks: Dict[str, torch.Tensor], *, context: str = "") -> None:
+    """Raise if any mask is not torch.bool (optional guard via RL_CASINO_MASK_ASSERT_BOOL)."""
+    bad = [k for k, v in masks.items() if getattr(v, "dtype", None) != torch.bool]
+    if bad:
+        pref = f"{context}: " if context else ""
+        raise AssertionError(f"{pref}expected torch.bool masks; non-bool keys (sample): {bad[:12]}")
+
+
+def pool_element_scores_to_blocks(
+    scores: Dict[str, torch.Tensor],
+    block_size: int,
+    *,
+    reduction: str = "mean",
+) -> Dict[str, torch.Tensor]:
+    """
+    Pool each 2D score matrix into a block grid (ceil(M/B), ceil(N/B)) via mean or max over each B×B tile.
+
+    Partial edge tiles include padded zeros in the mean (matches standard avg-pool padding behavior).
+    """
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1, got {block_size}")
+    out: Dict[str, torch.Tensor] = {}
+    for name, s in scores.items():
+        if s.dim() != 2:
+            continue
+        s32 = s.detach().float().cpu().contiguous()
+        M, N = s32.shape
+        bm = (M + block_size - 1) // block_size
+        bn = (N + block_size - 1) // block_size
+        pad_m = bm * block_size - M
+        pad_n = bn * block_size - N
+        padded = torch.nn.functional.pad(s32, (0, pad_n, 0, pad_m), value=0.0)
+        # (bm, B, bn, B) -> (bm, bn, B*B)
+        x = padded.reshape(bm, block_size, bn, block_size).transpose(1, 2).contiguous()
+        flat = x.reshape(bm, bn, block_size * block_size)
+        if reduction == "mean":
+            out[name] = flat.mean(dim=-1)
+        elif reduction == "max":
+            out[name] = flat.max(dim=-1).values
+        else:
+            raise ValueError(f"Unknown reduction: {reduction!r}")
+    return out
+
+
+def expand_block_bool_masks_to_weights(
+    block_masks: Dict[str, torch.Tensor],
+    weight_shapes: Dict[str, torch.Size],
+    block_size: int,
+) -> Dict[str, torch.Tensor]:
+    """
+    Expand boolean block masks to full weight shapes using repeat_interleave, then crop (H200 benchmark pattern).
+    """
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1, got {block_size}")
+    final: Dict[str, torch.Tensor] = {}
+    for name, b_mask in block_masks.items():
+        if name not in weight_shapes:
+            continue
+        M, N = int(weight_shapes[name][0]), int(weight_shapes[name][1])
+        if b_mask.dim() != 2:
+            raise ValueError(f"block mask for {name} must be 2D, got {tuple(b_mask.shape)}")
+        expanded = b_mask.bool().repeat_interleave(block_size, dim=0).repeat_interleave(block_size, dim=1)
+        w = expanded[:M, :N]
+        if w.shape != (M, N):
+            raise RuntimeError(f"expand/crop shape mismatch for {name}: got {tuple(w.shape)}, want {(M, N)}")
+        final[name] = w
+    return final
+
+
+def build_binary_masks_from_scores_blockwise(
+    element_scores: Dict[str, torch.Tensor],
+    *,
+    sparsity_percent: float,
+    block_size: int,
+    device: str = "cpu",
+    local_pool: bool = False,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+    reduction: str = "mean",
+    add_tie_break_noise: bool = False,
+) -> Dict[str, torch.Tensor]:
+    """
+    Build inclusion masks by global selection on **block-pooled** scores, then expand to weight shapes.
+
+    ``sparsity_percent`` is applied by ``create_mask_from_scores_gpu_efficient`` on the **block**
+    score tensors (fewer elements than full weights). Tie-break noise defaults off for stable block boundaries.
+    """
+    if not element_scores:
+        return {}
+    block_scores = pool_element_scores_to_blocks(element_scores, block_size, reduction=reduction)
+    weight_shapes = {k: v.shape for k, v in element_scores.items() if k in block_scores}
+    block_masks = create_mask_from_scores_gpu_efficient(
+        block_scores,
+        sparsity_percent,
+        device=device,
+        add_tie_break_noise=add_tie_break_noise,
+        tie_break_noise_scale=1e-6,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+        local_pool=local_pool,
+    )
+    masks = expand_block_bool_masks_to_weights(block_masks, weight_shapes, block_size)
+    total_p = sum(m.numel() for m in masks.values())
+    kept = sum(m.sum().item() for m in masks.values())
+    eff = 100.0 * (1.0 - kept / max(total_p, 1))
+    _mask_log(
+        f"[block masks] block_size={block_size} reduction={reduction!r} "
+        f"→ realized weight sparsity ≈ {eff:.4f}% (nominal {sparsity_percent}% targets block-grid selection)"
+    )
+    return masks
+
+
 def save_masks(masks, output_file, metadata=None):
-    """Saves masks with optional metadata."""
+    """Save ``{"masks": bool_tensors, "metadata": ...}`` via ``torch.save``."""
     if os.path.dirname(output_file):
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
@@ -738,6 +872,8 @@ def save_masks(masks, output_file, metadata=None):
         k: (v if v.dtype == torch.bool else v.ne(0).to(dtype=torch.bool))
         for k, v in masks.items()
     }
+    if _env_truthy("RL_CASINO_MASK_ASSERT_BOOL"):
+        assert_masks_are_bool(masks, context="save_masks")
 
     save_dict = {"masks": masks}
     if metadata:

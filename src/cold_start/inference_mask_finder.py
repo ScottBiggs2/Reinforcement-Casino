@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
+    build_binary_masks_from_scores_blockwise,
     create_mask_from_scores_gpu_efficient,
     compute_jaccard_similarity,
     save_masks,
@@ -69,6 +70,18 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def maybe_print_block_sparsity_profile(masks: Dict[str, torch.Tensor], mask_granularity: str, mask_block_size: int, verbose: bool) -> None:
+    """Optional block hardware profile when masks are block-structured (verbose or RL_CASINO_MASK_PROFILE_BLOCKS=1)."""
+    if mask_granularity != "block":
+        return
+    env_on = os.environ.get("RL_CASINO_MASK_PROFILE_BLOCKS", "").strip().lower() in ("1", "true", "yes", "on")
+    if not (verbose or env_on):
+        return
+    from src.utils.block_profiler import print_block_sparsity_profile
+
+    print_block_sparsity_profile(masks, block_size=int(mask_block_size))
 
 
 def sanitize_model_name(model_name: str) -> str:
@@ -497,6 +510,9 @@ def summarize_effective_rank(masks: Dict[str, torch.Tensor], threshold: float = 
 def main(args):
     set_seed(args.seed)
 
+    if args.method in ("snip", "grasp") and args.mask_granularity == "block" and int(args.mask_block_size) < 1:
+        raise ValueError("--mask-block-size must be >= 1 when --mask-granularity is block")
+
     device = "cuda" if torch.cuda.is_available() and not args.force_cpu else "cpu"
     print(f"\n{'='*60}")
     _hdr = f"Cold-Start Mask Finder  [method={args.method}  mode={args.mode}]"
@@ -508,6 +524,11 @@ def main(args):
     print(f"  Mode       : {args.mode}")
     print(f"  N samples  : {args.n_samples}")
     print(f"  Sparsity   : {args.sparsity}%")
+    if args.method in ("snip", "grasp"):
+        extra = ""
+        if args.mask_granularity == "block":
+            extra = f"  block_size={args.mask_block_size}  reduction={args.mask_block_reduction}"
+        print(f"  Mask gran. : {args.mask_granularity}{extra}")
     print(f"  Output     : {args.output}")
     print(f"  Seed       : {args.seed}")
     print(f"  Device     : {device}")
@@ -659,13 +680,20 @@ def main(args):
             local_pool=args.local_pool,
             min_layer_keep_ratio=args.min_layer_keep_ratio,
             add_tie_break_noise=True,
+            mask_granularity=args.mask_granularity,
+            mask_block_size=args.mask_block_size,
+            mask_block_reduction=args.mask_block_reduction,
         )
+        maybe_print_block_sparsity_profile(masks, args.mask_granularity, args.mask_block_size, args.verbose)
         meta_extra = {
             "model_name": args.model_name,
             "mode": args.mode,
             "n_samples": args.n_samples,
             "dataset": effective_dataset,
             "seed": args.seed,
+            "mask_granularity": args.mask_granularity,
+            "mask_block_size": int(args.mask_block_size),
+            "mask_block_reduction": args.mask_block_reduction,
         }
         if args.score_snr != "off":
             meta_extra.update(
@@ -730,22 +758,38 @@ def main(args):
             score_snr_ram_budget_gb=args.score_snr_ram_budget_gb,
             score_snr_allow_large_ram=args.score_snr_allow_large_ram,
         )
-        
-        masks = create_mask_from_scores_gpu_efficient(
-            grasp_scores,
-            sparsity_percent=args.sparsity,
-            device="cpu",
-            local_pool=args.local_pool,
-            min_layer_keep_ratio=args.min_layer_keep_ratio,
-            add_tie_break_noise=True,
-        )
-        
+
+        if args.mask_granularity == "block":
+            masks = build_binary_masks_from_scores_blockwise(
+                grasp_scores,
+                sparsity_percent=args.sparsity,
+                block_size=int(args.mask_block_size),
+                device="cpu",
+                local_pool=args.local_pool,
+                min_layer_keep_ratio=args.min_layer_keep_ratio,
+                reduction=args.mask_block_reduction,
+                add_tie_break_noise=False,
+            )
+        else:
+            masks = create_mask_from_scores_gpu_efficient(
+                grasp_scores,
+                sparsity_percent=args.sparsity,
+                device="cpu",
+                local_pool=args.local_pool,
+                min_layer_keep_ratio=args.min_layer_keep_ratio,
+                add_tie_break_noise=True,
+            )
+        maybe_print_block_sparsity_profile(masks, args.mask_granularity, args.mask_block_size, args.verbose)
+
         meta_extra = {
             "model_name": args.model_name,
             "mode": args.mode,
             "n_samples": args.n_samples,
             "dataset": effective_dataset,
             "seed": args.seed,
+            "mask_granularity": args.mask_granularity,
+            "mask_block_size": int(args.mask_block_size),
+            "mask_block_reduction": args.mask_block_reduction,
         }
         if args.score_snr != "off":
             meta_extra.update(
@@ -950,6 +994,31 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="[score-snr per_weight] Override RAM budget guardrail (still may OOM).",
+    )
+
+    # ── Mask structure (SNIP / GRaSP) ─────────────────────────────────────────
+    parser.add_argument(
+        "--mask-granularity",
+        dest="mask_granularity",
+        choices=["element", "block"],
+        default="element",
+        help=(
+            "SNIP/GRaSP only: element = global top-k on weight-shaped scores (default). "
+            "block = pool scores to B×B blocks, select blocks globally, expand (BSR-friendly; "
+            "nominal sparsity targets block-grid mass; realized weight sparsity may differ)."
+        ),
+    )
+    parser.add_argument(
+        "--mask-block-size",
+        type=int,
+        default=256,
+        help="SNIP/GRaSP block mode: side length of each square block (e.g. 256).",
+    )
+    parser.add_argument(
+        "--mask-block-reduction",
+        choices=["mean", "max"],
+        default="mean",
+        help="How element scores inside each block are pooled before global block selection.",
     )
 
     # ── CAV-specific ──────────────────────────────────────────
