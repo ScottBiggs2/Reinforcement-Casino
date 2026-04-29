@@ -61,10 +61,18 @@ except ImportError as e:
     print("→ install with:  pip install torchao")
 PY
 
+A2_RHO_SWEEP="${A2_RHO_SWEEP:-0.0025,0.05,0.1,0.5}"
+A2_RHO_ARG=()
+if [ -n "${A2_RHO_SWEEP}" ]; then
+  A2_RHO_ARG=(--rho_sweep "${A2_RHO_SWEEP}")
+else
+  A2_RHO_ARG=(--rho "${A2_RHO:-0.5}")
+fi
+
 exec "$TRAIN_PY" scripts/bench_2to4_vs_bsr.py \
   --output_dir "$OUT_BASE" \
   --batch_tokens "${A2_BATCH_TOKENS:-2048}" \
-  --rho "${A2_RHO:-0.5}" \
+  "${A2_RHO_ARG[@]}" \
   --n_warmup "${A2_WARMUP:-5}" \
   --n_iters "${A2_ITERS:-100}" \
   --dtype "${A2_DTYPE:-bf16}"

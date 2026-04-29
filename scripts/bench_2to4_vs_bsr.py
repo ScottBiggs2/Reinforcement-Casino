@@ -38,6 +38,7 @@ class Result:
     layer: str
     shape: str
     method: str
+    rho: float
     fwd_ms: float
     bwd_ms: float
     total_ms: float
@@ -166,8 +167,11 @@ def run_one_shape(
     del bsr
     torch.cuda.empty_cache()
 
-    # ---- (3) torchao 2:4 ----
-    if HAS_TORCHAO:
+    # ---- (3) torchao 2:4 (only at rho=0.5 — hardware fixed) ----
+    skip_2to4 = abs(rho - 0.5) > 1e-6
+    if skip_2to4:
+        print(f"  [skip 2:4 phase: hardware fixed at rho=0.5, requested rho={rho}]")
+    if HAS_TORCHAO and not skip_2to4:
         try:
             ao_lin = nn.Linear(in_dim, out_dim, bias=False).to(device=device, dtype=dtype)
             mask_2to4 = make_2to4_mask(out_dim, in_dim, device=device)
@@ -193,7 +197,7 @@ def run_one_shape(
                 "peak_mem_mb": 0.0,
                 "output_max_abs_diff": 0.0,
             })
-    else:
+    elif not skip_2to4:
         print(f"  torchao not available: {_TORCHAO_ERR}")
         results.append({
             "method": "2to4_torchao_skipped",
@@ -213,6 +217,7 @@ def run_one_shape(
         Result(
             layer=name,
             shape=f"{out_dim}x{in_dim}",
+            rho=rho,
             n_iters=n_iters,
             **r,
         )
@@ -226,6 +231,7 @@ def main():
     p.add_argument("--output_dir", required=True)
     p.add_argument("--batch_tokens", type=int, default=2048, help="Total tokens (batch * seq_len), default matches sparse DPO bs=2 × max_len=1024")
     p.add_argument("--rho", type=float, default=0.5, help="BSR active block fraction (2:4 is fixed at 0.5 by hardware)")
+    p.add_argument("--rho_sweep", type=str, default=None, help="Comma-separated rho values to sweep, e.g. '0.005,0.05,0.1,0.5'. Overrides --rho.")
     p.add_argument("--n_warmup", type=int, default=5)
     p.add_argument("--n_iters", type=int, default=100)
     p.add_argument("--dtype", choices=["bf16", "fp16", "fp32"], default="bf16")
@@ -234,9 +240,14 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     dtype = {"bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[args.dtype]
 
+    if args.rho_sweep:
+        rhos = [float(x) for x in args.rho_sweep.split(",") if x.strip()]
+    else:
+        rhos = [args.rho]
+
     print(f"PyTorch {torch.__version__}  CUDA {torch.version.cuda}  device={torch.cuda.get_device_name(0)}")
     print(f"torchao available: {HAS_TORCHAO}")
-    print(f"Config: batch_tokens={args.batch_tokens}  rho={args.rho}  dtype={dtype}")
+    print(f"Config: batch_tokens={args.batch_tokens}  rhos={rhos}  dtype={dtype}")
     print(f"        n_warmup={args.n_warmup}  n_iters={args.n_iters}")
 
     # Llama-3.1-8B MLP shapes
@@ -246,9 +257,10 @@ def main():
     ]
 
     all_rows = []
-    for name, in_dim, out_dim in shapes:
-        rows = run_one_shape(name, in_dim, out_dim, args.batch_tokens, args.rho, dtype, args.n_warmup, args.n_iters)
-        all_rows.extend(rows)
+    for rho in rhos:
+        for name, in_dim, out_dim in shapes:
+            rows = run_one_shape(name, in_dim, out_dim, args.batch_tokens, rho, dtype, args.n_warmup, args.n_iters)
+            all_rows.extend(rows)
 
     # CSV
     csv_path = os.path.join(args.output_dir, "bench_2to4_vs_bsr.csv")
@@ -263,18 +275,18 @@ def main():
     md_path = os.path.join(args.output_dir, "bench_2to4_vs_bsr.md")
     with open(md_path, "w") as f:
         f.write(f"# 2:4 vs BSR-16 vs dense bench\n\n")
-        f.write(f"`{torch.cuda.get_device_name(0)}` / dtype={args.dtype} / rho={args.rho} / B={args.batch_tokens}\n\n")
-        f.write(f"| layer | shape | method | fwd_ms | bwd_ms | total_ms | peak_MB | speedup_vs_dense |\n")
-        f.write(f"|---|---|---|---:|---:|---:|---:|---:|\n")
-        # Group by layer; compute speedup vs dense baseline within each layer
-        by_layer: dict = {}
+        f.write(f"`{torch.cuda.get_device_name(0)}` / dtype={args.dtype} / rhos={rhos} / B={args.batch_tokens}\n\n")
+        f.write(f"| layer | shape | rho | method | fwd_ms | bwd_ms | total_ms | peak_MB | speedup_vs_dense |\n")
+        f.write(f"|---|---|---:|---|---:|---:|---:|---:|---:|\n")
+        # Group by (layer, rho); compute speedup vs dense baseline within that group
+        by_group: dict = {}
         for r in all_rows:
-            by_layer.setdefault(r.layer, []).append(r)
-        for layer, rs in by_layer.items():
+            by_group.setdefault((r.layer, r.rho), []).append(r)
+        for (layer, rho), rs in sorted(by_group.items(), key=lambda kv: (kv[0][0], kv[0][1])):
             dense_total = next((r.total_ms for r in rs if r.method == "dense"), float("nan"))
             for r in rs:
                 speedup = dense_total / r.total_ms if r.total_ms > 0 and r.total_ms == r.total_ms else float("nan")
-                f.write(f"| {r.layer} | {r.shape} | {r.method} | {r.fwd_ms:.3f} | {r.bwd_ms:.3f} | {r.total_ms:.3f} | {r.peak_mem_mb:.1f} | {speedup:.2f}× |\n")
+                f.write(f"| {r.layer} | {r.shape} | {r.rho:.4f} | {r.method} | {r.fwd_ms:.3f} | {r.bwd_ms:.3f} | {r.total_ms:.3f} | {r.peak_mem_mb:.1f} | {speedup:.2f}× |\n")
     print(f"Wrote {md_path}")
 
 
