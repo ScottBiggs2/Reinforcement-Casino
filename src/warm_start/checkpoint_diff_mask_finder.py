@@ -106,6 +106,7 @@ def main(args):
         param_count += 1
 
     print(f"Matched {match_count} parameters for scoring (out of {param_count} total).")
+    print(f"Key coverage (final ∩ initial): {100.0 * match_count / max(param_count, 1):.2f}%")
     
     # Clean up to save memory
     del initial_sd

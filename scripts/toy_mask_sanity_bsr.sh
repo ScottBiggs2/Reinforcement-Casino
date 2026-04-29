@@ -33,6 +33,7 @@ mkdir -p logs
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 OUT_BASE="${OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_toys}/${SLURM_JOB_ID:-local}"
 mkdir -p "$OUT_BASE"
+export OUT_BASE
 
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
@@ -49,6 +50,7 @@ export SPARSITY_PCT="${SPARSITY_PCT:-99.75}"
 export MASK_SEED="${MASK_SEED:-425259}"
 export BLOCK_SIZE_BSR="${BLOCK_SIZE_BSR:-16}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
+export MODEL SPARSITY_PCT MASK_SEED BLOCK_SIZE_BSR MIN_LAYER_KEEP_RATIO
 
 echo "OUT_BASE=${OUT_BASE}"
 echo "MODEL=${MODEL}"

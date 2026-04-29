@@ -34,6 +34,7 @@ mkdir -p logs
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 OUT_BASE="${OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_toys}/${SLURM_JOB_ID:-local}"
 mkdir -p "$OUT_BASE"
+export OUT_BASE
 
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
@@ -51,6 +52,7 @@ mkdir -p "${TRITON_CACHE_DIR}"
 
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
+export MODEL HF_DATASETS_CACHE
 
 # Force very frequent logging so our CSV reflects each step.
 export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-1}"

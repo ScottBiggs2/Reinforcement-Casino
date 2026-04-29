@@ -60,7 +60,14 @@ def run_once(*, dtype: torch.dtype, use_tf32: bool, device: torch.device) -> Non
     with torch.no_grad():
         w.mul_(mask.to(w.dtype))
 
+    # Make the reference path explicit. On H100/H200, PyTorch fp32 matmul often uses TF32
+    # by default, which can create ~1e-1 max_abs deltas vs a true-fp32 accumulation kernel.
+    # For the fp32 parity check, we disable TF32 so the dense reference is strict fp32.
+    prev_tf32 = torch.backends.cuda.matmul.allow_tf32
+    if dtype == torch.float32:
+        torch.backends.cuda.matmul.allow_tf32 = False
     dense = grad_out @ w
+    torch.backends.cuda.matmul.allow_tf32 = prev_tf32
 
     active_blocks = torch.nonzero(
         block_keep.flatten(), as_tuple=False
