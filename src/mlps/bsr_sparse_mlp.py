@@ -1,8 +1,10 @@
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from src.kernels.bsr_backward import sparse_weight_gradient_triton
+from src.kernels.bsr_backward import sparse_grad_input_triton, sparse_weight_gradient_triton
 from src.utils.slurm_safe_log import slurm_safe_print
 
 # ============================================================================
@@ -35,25 +37,33 @@ class SparseLinearFunction(torch.autograd.Function):
         
         grad_input = grad_weight = grad_bias = None
         
-        # Gradient w.r.t input
+        # Flatten inputs once (handles 3D->2D: [B, S, D] -> [B*S, D])
+        grad_output_flat = grad_output.reshape(-1, grad_output.shape[-1])
+        input_tensor_flat = input_tensor.reshape(-1, input_tensor.shape[-1])
+        if not grad_output_flat.is_contiguous():
+            grad_output_flat = grad_output_flat.contiguous()
+        if not input_tensor_flat.is_contiguous():
+            input_tensor_flat = input_tensor_flat.contiguous()
+
+        # Gradient w.r.t input. RL_CASINO_BSR_GRAD_INPUT_MODE = "sparse" routes through
+        # the sparse Triton kernel (active blocks only); "dense" (default) keeps the
+        # cublas matmul. Same env var Scott uses on cav_fixes.
         if ctx.needs_input_grad[0]:
-            grad_input = grad_output @ weight
-            
+            mode = os.environ.get("RL_CASINO_BSR_GRAD_INPUT_MODE", "dense").lower()
+            if mode == "sparse":
+                grad_input_flat = sparse_grad_input_triton(
+                    grad_output_flat, weight, mask,
+                    block_size=block_size,
+                    use_tf32=ctx.use_tf32,
+                )
+                grad_input = grad_input_flat.reshape(grad_output.shape[:-1] + (weight.shape[1],))
+            else:
+                grad_input = grad_output @ weight
+
         # SPARSE gradient w.r.t weight
         if ctx.needs_input_grad[1]:
-            # Flatten inputs for the kernel (handles 3D->2D: [B, S, D] -> [B*S, D])
-            # The kernel expects (batch_size, dim), so we merge batch and seq dims.
-            grad_output_flat = grad_output.reshape(-1, grad_output.shape[-1])
-            input_tensor_flat = input_tensor.reshape(-1, input_tensor.shape[-1])
-
-            # Ensure contiguous for Triton
-            if not grad_output_flat.is_contiguous():
-                grad_output_flat = grad_output_flat.contiguous()
-            if not input_tensor_flat.is_contiguous():
-                input_tensor_flat = input_tensor_flat.contiguous()
-                
             grad_weight = sparse_weight_gradient_triton(
-                grad_output_flat, input_tensor_flat, mask, 
+                grad_output_flat, input_tensor_flat, mask,
                 block_size=block_size,
                 use_tf32=ctx.use_tf32
             )
