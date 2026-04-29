@@ -155,7 +155,9 @@ def sparse_grad_input_kernel(
     Wblk = tl.load(weight_ptr + w_offs, mask=valid_w, other=0.0)
 
     m_offs = out_offsets[:, None] * stride_m_out + in_offsets[None, :] * stride_m_in
-    mask_block = tl.load(mask_ptr + m_offs, mask=valid_w, other=0.0)
+    # Cast mask to weight dtype: tl.load on bool with other=0.0 promotes to fp32 and
+    # breaks tl.dot dtype check on the non-TF32 path. Keep Wblk in its native dtype.
+    mask_block = tl.load(mask_ptr + m_offs, mask=valid_w, other=0).to(Wblk.dtype)
     Wblk = Wblk * mask_block
 
     for b_start in range(0, batch_size, BATCH_BLOCK_SIZE):
