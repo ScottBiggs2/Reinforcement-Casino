@@ -413,6 +413,17 @@ def triton_bsr_sparse_adamw_step_2d(
     grid = (n_active_blocks, n_row_tiles)
     use_sparse_states = (exp_avg.dim() == 1)
 
+    if os.environ.get("RL_CASINO_BSR_KERNEL_STATS", "").strip().lower() in ("1", "true", "yes"):
+        try:
+            print(
+                f"[bsr_kernel_stats] adamw_2d shape(p)={tuple(param.shape)} active_blocks={int(n_active_blocks)} "
+                f"block={int(block_size)} row_tile={int(row_tile)} grid=({int(n_active_blocks)},{int(n_row_tiles)}) "
+                f"sparse_states={bool(use_sparse_states)}",
+                flush=True,
+            )
+        except Exception:
+            pass
+
     num_warps = get_env_int("BSR_NUM_WARPS", 4)
     num_stages = get_env_int("BSR_NUM_STAGES", 2)
 

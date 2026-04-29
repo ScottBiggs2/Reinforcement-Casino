@@ -24,7 +24,7 @@ os.environ["WANDB_CONSOLE"] = "off"
 os.environ.setdefault("WANDB_SILENT", "true")
 
 import wandb
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import DPOTrainer, DPOConfig
 
 # Add project root to sys.path to resolve 'src' imports
@@ -292,6 +292,48 @@ def train(
 
     callbacks = []
 
+    # ---------------------------------------------------------------------
+    # Optional: segment timing for benchmarking (CUDA event based).
+    #
+    # Goal: separate optimizer-step time from the rest of the training step
+    # (forward + backward + trainer overhead). This is critical because BSR
+    # kernels only affect backward/optimizer, while end-to-end step time is
+    # dominated by many other ops (attention, DPO mechanics, recompute).
+    #
+    # This callback augments the Trainer's `logs` dict so the existing
+    # BenchmarkThroughputCallback writes timing columns into the same CSV.
+    # ---------------------------------------------------------------------
+    class _StepOptTimingCallback(TrainerCallback):
+        def __init__(self):
+            self._step_start_evt = None
+            self._last_step_ms = None
+            self._last_opt_ms = None
+
+        def set_last_opt_ms(self, ms: float) -> None:
+            self._last_opt_ms = float(ms)
+
+        def on_step_begin(self, args, state, control, **kwargs):
+            if torch.cuda.is_available():
+                self._step_start_evt = torch.cuda.Event(enable_timing=True)
+                self._step_start_evt.record()
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if torch.cuda.is_available() and self._step_start_evt is not None:
+                end_evt = torch.cuda.Event(enable_timing=True)
+                end_evt.record()
+                torch.cuda.synchronize()
+                self._last_step_ms = float(self._step_start_evt.elapsed_time(end_evt))
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if logs is None:
+                return
+            if self._last_step_ms is not None:
+                logs["t_step_total_ms"] = round(self._last_step_ms, 6)
+            if self._last_opt_ms is not None:
+                logs["t_optim_ms"] = round(self._last_opt_ms, 6)
+                if self._last_step_ms is not None:
+                    logs["t_nonoptim_ms"] = round(max(0.0, self._last_step_ms - self._last_opt_ms), 6)
+
     if not no_delta_callback:
         base_state = {}
         with torch.no_grad():
@@ -330,8 +372,14 @@ def train(
                 extra_log_fields=benchmark_extra_log_fields,
             )
         )
+        _timing_cb = _StepOptTimingCallback()
+        callbacks.append(_timing_cb)
     elif save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
+        _timing_cb = _StepOptTimingCallback()
+        callbacks.append(_timing_cb)
+    else:
+        _timing_cb = None
 
     warmup_kw = {}
     if warmup_steps and warmup_steps > 0:
@@ -378,6 +426,23 @@ def train(
     )
 
     collate_fn = make_dpo_collator(tokenizer, max_prompt_length, max_length)
+
+    # Wrap optimizer.step with CUDA-event timing so we can record optimizer-only time.
+    # This is intentionally lightweight and only enabled when we attached the timing callback.
+    if _timing_cb is not None and torch.cuda.is_available():
+        _orig_step = optimizer.step
+
+        def _timed_step(*args, **kwargs):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            out = _orig_step(*args, **kwargs)
+            end.record()
+            torch.cuda.synchronize()
+            _timing_cb.set_last_opt_ms(float(start.elapsed_time(end)))
+            return out
+
+        optimizer.step = _timed_step  # type: ignore[method-assign]
 
     trainer = DPOTrainer(
         model=model,

@@ -169,10 +169,12 @@ def sparse_grad_input_kernel(
     grad_input = grad_output @ W over active blocks only.
     Accumulates into grad_input via atomic_add (fp32) so overlapping active blocks are correct.
 
-    Grid is 1-D over active blocks only (one program per block, full batch in inner loops)
-    to avoid duplicate atomic_add when batch dimension would be split without atomics.
+    Grid is 2-D: (active_block, batch_chunk). Each program processes only its batch slice.
+    We still use atomic_add because multiple active blocks can contribute to the same input
+    columns for the same batch rows.
     """
     pid_block = tl.program_id(0)
+    pid_batch = tl.program_id(1)
 
     block_idx = tl.load(active_blocks_ptr + pid_block).to(tl.int32)
     num_blocks_in = tl.cdiv(input_dim, BLOCK_SIZE)
@@ -195,8 +197,11 @@ def sparse_grad_input_kernel(
     mask_block = tl.load(mask_ptr + m_offsets, mask=valid_w, other=0.0)
     Wblk = Wblk * mask_block
 
-    batch_start = 0
-    batch_end = batch_size
+    # Batch sharding to improve occupancy at extreme sparsity (few active blocks).
+    num_batch_chunks = tl.num_programs(1)
+    batch_chunk_size = tl.cdiv(batch_size, num_batch_chunks)
+    batch_start = pid_batch * batch_chunk_size
+    batch_end = tl.minimum(batch_start + batch_chunk_size, batch_size)
 
     for b_start in range(batch_start, batch_end, BATCH_BLOCK_SIZE):
         b_offsets = b_start + tl.arange(0, BATCH_BLOCK_SIZE)
@@ -240,6 +245,18 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
     num_active_blocks = active_blocks.shape[0]
     if num_active_blocks == 0:
         return grad_weight
+
+    if _env_flag("RL_CASINO_BSR_KERNEL_STATS", "0"):
+        try:
+            print(
+                f"[bsr_kernel_stats] grad_weight shape(go)={tuple(grad_output.shape)} shape(x)={tuple(input_tensor.shape)} "
+                f"shape(w)={(output_dim, input_dim)} active_blocks={int(num_active_blocks)} block={int(block_size)} "
+                f"use_tf32={bool(use_tf32)} BSR_BATCH_CHUNKS={int(get_env_int('BSR_BATCH_CHUNKS', 1))} "
+                f"BSR_USE_ATOMIC={int(get_env_int('BSR_USE_ATOMIC', 0))}",
+                flush=True,
+            )
+        except Exception:
+            pass
         
     # Parallelize over batch dimension for high sparsity (fewer active blocks)
     # H200 has ~132 SMs; we want enough programs to saturate them (target 1024+)
@@ -363,8 +380,23 @@ def sparse_grad_input_triton(
     if num_active_blocks == 0:
         return torch.zeros((batch_size, input_dim), device=device, dtype=out_dtype)
 
-    # One program per active block (full batch inner loop). Avoids duplicate atomic_add across batch shards.
-    grid = (num_active_blocks,)
+    # Parallelize over batch dimension for extreme sparsity (few active blocks).
+    num_batch_chunks = get_env_int("BSR_GRAD_INPUT_BATCH_CHUNKS", 1)
+    if num_batch_chunks == 1:
+        target_total_programs = 1024
+        num_batch_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
+    grid = (num_active_blocks, num_batch_chunks)
+
+    if _env_flag("RL_CASINO_BSR_KERNEL_STATS", "0"):
+        try:
+            print(
+                f"[bsr_kernel_stats] grad_input shape(go)={tuple(grad_output.shape)} shape(w)={tuple(weight.shape)} "
+                f"active_blocks={int(num_active_blocks)} block={int(block_size)} use_tf32={bool(use_tf32)} "
+                f"grid=({int(num_active_blocks)},{int(num_batch_chunks)})",
+                flush=True,
+            )
+        except Exception:
+            pass
 
     batch_block_size = get_env_int("BSR_BATCH_BLOCK_SIZE", 64)
     num_warps = get_env_int("BSR_NUM_WARPS", 4)

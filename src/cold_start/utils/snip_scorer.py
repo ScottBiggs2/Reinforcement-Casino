@@ -133,7 +133,11 @@ class SNIPScorer:
         gc_was_on = bool(getattr(model, "is_gradient_checkpointing", False))
         we_turned_gc_on = False
         if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable") and not gc_was_on:
-            model.gradient_checkpointing_enable()
+            # torch.utils.checkpoint reentrant mode is incompatible with torch.autograd.grad().
+            try:
+                model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            except TypeError:
+                model.gradient_checkpointing_enable()
             we_turned_gc_on = True
 
         model.train()
@@ -374,7 +378,11 @@ def compute_snip_scores(
     gc_was_on = bool(getattr(model, "is_gradient_checkpointing", False))
     we_turned_gc_on = False
     if gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable") and not gc_was_on:
-        model.gradient_checkpointing_enable()
+        # torch.utils.checkpoint reentrant mode is incompatible with torch.autograd.grad().
+        try:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        except TypeError:
+            model.gradient_checkpointing_enable()
         we_turned_gc_on = True
 
     model.train()
