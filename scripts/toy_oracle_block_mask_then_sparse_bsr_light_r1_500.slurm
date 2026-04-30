@@ -49,15 +49,16 @@ export PYTHONUNBUFFERED=1
 export HF_TOKEN="${HF_TOKEN:-}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
-# W&B: default OFF for toy runs (Slurm/NFS console capture can be flaky).
-# Enable by exporting USE_WANDB=1 and (if needed) WANDB_API_KEY / WANDB_ENTITY / WANDB_PROJECT.
-USE_WANDB="${USE_WANDB:-0}"
-if [ "${USE_WANDB}" != "1" ]; then
+# W&B: ON by default (you asked for reporting with no extra exports).
+# Opt out by exporting USE_WANDB=0.
+USE_WANDB="${USE_WANDB:-1}"
+if [ "${USE_WANDB}" = "0" ]; then
   export WANDB_MODE="disabled"
   export WANDB_DISABLED="true"
   export WANDB_CONSOLE="off"
   export WANDB_SILENT="true"
 else
+  # Keep console capture off (Slurm/NFS), but allow actual W&B reporting.
   unset WANDB_DISABLED || true
   export WANDB_CONSOLE="off"
   export WANDB_SILENT="true"
@@ -147,7 +148,7 @@ timeout --signal=TERM --kill-after=60 "${TIMEOUT_SECONDS}" \
     --optimizer sparse_adamw \
     --block_size_bsr "${BSR_BLOCK_SIZE}" \
     --block_size_adam "${ADAM_BLOCK_SIZE}" \
-    $( [ "${USE_WANDB}" = "1" ] && echo "--use_wandb" ) \
+    $( [ "${USE_WANDB}" != "0" ] && echo "--use_wandb" ) \
     --save_csv \
     --output_base_dir "${OUT_TRAIN_DIR}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
