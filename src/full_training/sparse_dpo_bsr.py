@@ -15,6 +15,7 @@ Key Features:
 import os
 import sys
 import argparse
+import types
 from typing import Any, Dict, Optional
 
 import torch
@@ -428,21 +429,27 @@ def train(
     collate_fn = make_dpo_collator(tokenizer, max_prompt_length, max_length)
 
     # Wrap optimizer.step with CUDA-event timing so we can record optimizer-only time.
-    # This is intentionally lightweight and only enabled when we attached the timing callback.
+    #
+    # IMPORTANT: assign a **bound method** (types.MethodType), not a bare function.
+    # PyTorch 2.x LR schedulers patch optimizer.step via step_fn.__func__; plain functions
+    # break LambdaLR construction (AttributeError: 'function' object has no attribute '__func__').
+    # Kernel launches / Triton are unaffected—this only wraps the Optimizer.step call.
     if _timing_cb is not None and torch.cuda.is_available():
-        _orig_step = optimizer.step
+        _orig_step = optimizer.step  # bound method (AdamW / AdamW8bit / SparseAdamW)
 
-        def _timed_step(*args, **kwargs):
+        def _timed_step(self, closure=None):
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
             start.record()
-            out = _orig_step(*args, **kwargs)
-            end.record()
-            torch.cuda.synchronize()
-            _timing_cb.set_last_opt_ms(float(start.elapsed_time(end)))
+            try:
+                out = _orig_step(closure)
+            finally:
+                end.record()
+                torch.cuda.synchronize()
+                _timing_cb.set_last_opt_ms(float(start.elapsed_time(end)))
             return out
 
-        optimizer.step = _timed_step  # type: ignore[method-assign]
+        optimizer.step = types.MethodType(_timed_step, optimizer)  # type: ignore[assignment]
 
     trainer = DPOTrainer(
         model=model,
