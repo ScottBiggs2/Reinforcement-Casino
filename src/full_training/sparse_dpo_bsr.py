@@ -474,9 +474,16 @@ def train(
 
         optimizer.step = types.MethodType(_timed_step, optimizer)  # type: ignore[assignment]
 
-    # Wrap forward (compute_loss) and backward (accelerator.backward) to separately time backprop.
-    # DPOTrainer subclasses HF Trainer; compute_loss encapsulates forward + loss computation, while
-    # accelerator.backward(loss) triggers autograd.
+    trainer = DPOTrainer(
+        model=model,
+        args=dpo_config,
+        train_dataset=dpo_dataset,
+        data_collator=collate_fn,
+        optimizers=(optimizer, None),
+        callbacks=callbacks,
+    )
+
+    # Wrap forward (compute_loss) and backward (accelerator.backward) AFTER trainer exists.
     if _timing_cb is not None and torch.cuda.is_available():
         _orig_compute_loss = trainer.compute_loss
 
@@ -513,15 +520,6 @@ def train(
 
         trainer.accelerator.backward = types.MethodType(_timed_backward, trainer.accelerator)  # type: ignore[assignment]
 
-    trainer = DPOTrainer(
-        model=model,
-        args=dpo_config,
-        train_dataset=dpo_dataset,
-        data_collator=collate_fn,
-        optimizers=(optimizer, None),
-        callbacks=callbacks,
-    )
-    
     trainer.train()
 
     # Optional: print BSR kernel compile/variant diagnostics for this phase.
