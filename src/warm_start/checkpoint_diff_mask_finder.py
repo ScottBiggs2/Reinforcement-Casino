@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from src.utils.mask_utils import (
     DEFAULT_MIN_LAYER_KEEP_RATIO,
+    build_binary_masks_from_scores_blockwise,
     create_mask_from_scores_gpu_efficient,
     save_masks,
     pooling_metadata,
@@ -117,13 +118,45 @@ def main(args):
     print(f"Using device for mask generation: {device}")
 
     # Generate masks
-    masks = create_mask_from_scores_gpu_efficient(
-        scores,
-        args.sparsity_percent,
-        device=device,
-        local_pool=args.local_pool,
-        min_layer_keep_ratio=args.min_layer_keep_ratio,
-    )
+    mask_granularity = str(getattr(args, "mask_granularity", "element") or "element").strip().lower()
+    if mask_granularity not in ("element", "block"):
+        raise ValueError(f"--mask-granularity must be one of: element, block (got {mask_granularity!r})")
+
+    if mask_granularity == "block":
+        # Block-wise oracle only applies to 2D tensors (weight matrices).
+        # Non-2D tensors get all-False masks so sparse training focuses on masked matmuls.
+        scores_2d = {k: v for k, v in scores.items() if getattr(v, "dim", lambda: -1)() == 2}
+        scores_other = {k: v for k, v in scores.items() if k not in scores_2d}
+        if int(args.mask_block_size) < 1:
+            raise ValueError(f"--mask-block-size must be >= 1 (got {args.mask_block_size})")
+        red = str(args.mask_block_reduction or "mean").strip().lower()
+        if red not in ("mean", "max"):
+            raise ValueError(f"--mask-block-reduction must be one of: mean, max (got {red!r})")
+        print(
+            f"Mask layout: block (block_size={int(args.mask_block_size)}, reduction={red}) "
+            "(nominal sparsity applies to the block grid; realized weight sparsity may differ slightly)"
+        )
+        masks = build_binary_masks_from_scores_blockwise(
+            scores_2d,
+            sparsity_percent=float(args.sparsity_percent),
+            block_size=int(args.mask_block_size),
+            device=device,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=float(args.min_layer_keep_ratio),
+            reduction=red,
+            add_tie_break_noise=False,
+        )
+        for k, v in scores_other.items():
+            masks[k] = torch.zeros_like(v, dtype=torch.bool).cpu()
+    else:
+        print("Mask layout: element")
+        masks = create_mask_from_scores_gpu_efficient(
+            scores,
+            args.sparsity_percent,
+            device=device,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
 
     # Convert to boolean for space efficiency
     print("Converting masks to boolean...")
@@ -135,11 +168,15 @@ def main(args):
     output_file = args.output_file or f"masks/checkpoint_diff_ground_truth_{model_name}_sparsity{args.sparsity_percent}pct.pt"
     
     metadata = {
-        "method": "checkpoint_difference_ground_truth",
+        "method": "checkpoint_difference_ground_truth" if mask_granularity == "element" else "checkpoint_difference_ground_truth_block",
         "sparsity_percent": args.sparsity_percent,
         "initial_model": args.initial_model,
         "final_model": args.final_model,
         "mlp_only": args.mlp_only,
+        "mask_granularity": mask_granularity,
+        "mask_block_size": int(args.mask_block_size) if mask_granularity == "block" else None,
+        "mask_block_reduction": str(args.mask_block_reduction) if mask_granularity == "block" else None,
+        "non2d_policy": "all_false" if mask_granularity == "block" else None,
         "device": device,
         **pooling_metadata(
             local_pool=args.local_pool,
@@ -161,6 +198,29 @@ if __name__ == "__main__":
     parser.add_argument("--local_pool", action="store_true", help="Use local (per-layer) pooling")
     parser.add_argument("--min_layer_keep_ratio", type=float, default=DEFAULT_MIN_LAYER_KEEP_RATIO, help="Per-layer keep floor")
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU for mask generation")
+    parser.add_argument(
+        "--mask-granularity",
+        "--mask_granularity",
+        type=str,
+        default="element",
+        choices=["element", "block"],
+        help="Mask layout: element-wise (default) or block-structured (2D weights only).",
+    )
+    parser.add_argument(
+        "--mask-block-size",
+        "--mask_block_size",
+        type=int,
+        default=16,
+        help="Block size B for block-structured oracle masks (B×B). Used only when --mask-granularity=block.",
+    )
+    parser.add_argument(
+        "--mask-block-reduction",
+        "--mask_block_reduction",
+        type=str,
+        default="mean",
+        choices=["mean", "max"],
+        help="How to pool element scores into blocks. Used only when --mask-granularity=block.",
+    )
     
     args = parser.parse_args()
     main(args)
