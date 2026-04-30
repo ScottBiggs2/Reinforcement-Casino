@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 1-hour GPU drop-in:
+# 7-hour GPU drop-in:
 #   1) Build an oracle *block-structured* mask from HF base vs a local checkpoint (|final-initial|).
 #   2) Run a 500-step sparse DPO BSR phase on Light-R1 with:
 #        - SparseAdamW using the 2D block kernel (RL_CASINO_ADAM_KERNEL=block_2d)
@@ -19,7 +19,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=01:00:00
+#SBATCH --time=07:00:00
 #SBATCH --job-name=toy_oracle_blk_bsr
 #SBATCH --output=logs/toy_oracle_blk_bsr_%j.out
 #SBATCH --error=logs/toy_oracle_blk_bsr_%j.err
@@ -128,7 +128,10 @@ ADAM_BLOCK_SIZE="${ADAM_BLOCK_SIZE:-128}"
 
 RUN_NAME="${RUN_NAME:-toy_oracle_block_bsr_light_r1_ckpt500_${SLURM_JOB_ID:-local}}"
 
-timeout --signal=TERM --kill-after=60 3500 \
+# Keep a small buffer under the Slurm wall time so we exit cleanly.
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-25000}"  # ~6h56m
+
+timeout --signal=TERM --kill-after=60 "${TIMEOUT_SECONDS}" \
   "$TRAIN_PY" src/full_training/sparse_dpo_bsr.py \
     --model_name "${BASE_MODEL}" \
     --checkpoint "${CKPT500_DIR}" \
