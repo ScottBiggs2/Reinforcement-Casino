@@ -232,6 +232,30 @@ class BenchmarkThroughputCallback(TrainerCallback):
         }
         row.update(self._extra_log_fields)
         row.update(logs)
+
+        # Derived FLOPs/s (proxy): use theory BSR backward FLOPs proxy divided by measured time.
+        # Units: proxy is "FLOPs" per optimizer step (see bsr_theory_metrics); timings are ms.
+        try:
+            flops = float(row.get("theory_bsr_backward_flops_proxy"))  # may be "" on dense phase
+        except Exception:
+            flops = None
+        if flops is not None and flops > 0:
+            try:
+                bwd_ms = float(row.get("t_backward_ms"))
+            except Exception:
+                bwd_ms = None
+            try:
+                step_ms = float(row.get("t_step_total_ms"))
+            except Exception:
+                step_ms = None
+
+            if bwd_ms is not None and bwd_ms > 0:
+                row["eff_bsr_backward_flops_per_s"] = round(flops / (bwd_ms / 1e3), 6)
+                row["eff_bsr_backward_tflops"] = round((flops / (bwd_ms / 1e3)) / 1e12, 6)
+            if step_ms is not None and step_ms > 0:
+                row["eff_bsr_backward_flops_per_s_over_e2e_step"] = round(flops / (step_ms / 1e3), 6)
+                row["eff_bsr_backward_tflops_over_e2e_step"] = round((flops / (step_ms / 1e3)) / 1e12, 6)
+
         self.sink.write_row(row)
 
         # Live timing printouts for Slurm .out monitoring.

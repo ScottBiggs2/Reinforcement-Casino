@@ -309,9 +309,17 @@ def train(
             self._step_start_evt = None
             self._last_step_ms = None
             self._last_opt_ms = None
+            self._last_fwd_ms = None
+            self._last_bwd_ms = None
 
         def set_last_opt_ms(self, ms: float) -> None:
             self._last_opt_ms = float(ms)
+
+        def set_last_fwd_ms(self, ms: float) -> None:
+            self._last_fwd_ms = float(ms)
+
+        def set_last_bwd_ms(self, ms: float) -> None:
+            self._last_bwd_ms = float(ms)
 
         def on_step_begin(self, args, state, control, **kwargs):
             if torch.cuda.is_available():
@@ -334,6 +342,21 @@ def train(
                 logs["t_optim_ms"] = round(self._last_opt_ms, 6)
                 if self._last_step_ms is not None:
                     logs["t_nonoptim_ms"] = round(max(0.0, self._last_step_ms - self._last_opt_ms), 6)
+            if self._last_fwd_ms is not None:
+                logs["t_forward_ms"] = round(self._last_fwd_ms, 6)
+            if self._last_bwd_ms is not None:
+                logs["t_backward_ms"] = round(self._last_bwd_ms, 6)
+            # If all three are present, provide a small reconciliation check.
+            if (
+                self._last_step_ms is not None
+                and self._last_opt_ms is not None
+                and self._last_fwd_ms is not None
+                and self._last_bwd_ms is not None
+            ):
+                logs["t_other_ms"] = round(
+                    max(0.0, float(self._last_step_ms) - float(self._last_opt_ms) - float(self._last_fwd_ms) - float(self._last_bwd_ms)),
+                    6,
+                )
 
     if not no_delta_callback:
         base_state = {}
@@ -450,6 +473,45 @@ def train(
             return out
 
         optimizer.step = types.MethodType(_timed_step, optimizer)  # type: ignore[assignment]
+
+    # Wrap forward (compute_loss) and backward (accelerator.backward) to separately time backprop.
+    # DPOTrainer subclasses HF Trainer; compute_loss encapsulates forward + loss computation, while
+    # accelerator.backward(loss) triggers autograd.
+    if _timing_cb is not None and torch.cuda.is_available():
+        _orig_compute_loss = trainer.compute_loss
+
+        def _timed_compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            try:
+                return _orig_compute_loss(
+                    model,
+                    inputs,
+                    return_outputs=return_outputs,
+                    num_items_in_batch=num_items_in_batch,
+                )
+            finally:
+                end.record()
+                torch.cuda.synchronize()
+                _timing_cb.set_last_fwd_ms(float(start.elapsed_time(end)))
+
+        trainer.compute_loss = types.MethodType(_timed_compute_loss, trainer)  # type: ignore[assignment]
+
+        _orig_backward = trainer.accelerator.backward
+
+        def _timed_backward(self, loss, **kwargs):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            try:
+                return _orig_backward(loss, **kwargs)
+            finally:
+                end.record()
+                torch.cuda.synchronize()
+                _timing_cb.set_last_bwd_ms(float(start.elapsed_time(end)))
+
+        trainer.accelerator.backward = types.MethodType(_timed_backward, trainer.accelerator)  # type: ignore[assignment]
 
     trainer = DPOTrainer(
         model=model,

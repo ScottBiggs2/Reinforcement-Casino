@@ -25,7 +25,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=03:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=h200_bsr_bench
 #SBATCH --output=logs/h200_bsr_bench_%j.out
 #SBATCH --error=logs/h200_bsr_bench_%j.err
@@ -108,9 +108,10 @@ export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
 # this value after each phase; the export here is only the fallback between phases / for tools.
 export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-sparse}"
 
-# Sparse grid sparsity targets (comma-separated). Each level adds 8 sparse phases:
-# element mask vs block mask × grad_input dense/sparse × Adam block_1d vs block_2d.
-export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75}"
+# Sparse grid sparsity targets (comma-separated).
+# This wrapper focuses on dense grad_input with SparseAdamW kernel block_1d vs block_2d; each level adds:
+# element mask vs block mask × Adam block_1d vs block_2d = 4 sparse phases (+ 1 dense baseline overall).
+export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
 
 # Trainer CSV rows follow logging frequency (default: every 25 steps). For short phases, set
 # RL_CASINO_LOGGING_STEPS=1 before sbatch so each step appears in benchmark_training_log.csv.
@@ -153,4 +154,6 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --device_map none \
   --run_label "h200_bsr_${SLURM_JOB_ID:-local}" \
   --benchmark_sparsities "$BENCHMARK_SPARSITIES" \
+  --phase_grad_input_modes "dense" \
+  --phase_adam_kernels "block_1d,block_2d" \
   "${GC_ARGS[@]}"

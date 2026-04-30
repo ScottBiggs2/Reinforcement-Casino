@@ -131,6 +131,14 @@ export GRPO_SPARSE_ADAMW_LAZY="${GRPO_SPARSE_ADAMW_LAZY:-0}"
 export GRPO_RUN_SLUG="${GRPO_RUN_SLUG:-}"
 export GRPO_RUN_NAME="${GRPO_RUN_NAME:-}"
 
+# Optional weight-delta logging (dense only). Required to build later magnitude/momentum/fisher masks
+# from a GRPO dense trajectory. Both unset = no delta logging (default; matches prior behavior).
+#   GRPO_DELTA_LOG_INTERVAL=50  → checkpoint deltas every 50 steps (vs init weights)
+#   GRPO_DELTA_LOG_END_STEP=200 → last step at which deltas are written
+# Files land under <run_dir>/deltas/{base_state.pt, deltas_step_<N>.pt}.
+export GRPO_DELTA_LOG_INTERVAL="${GRPO_DELTA_LOG_INTERVAL:-}"
+export GRPO_DELTA_LOG_END_STEP="${GRPO_DELTA_LOG_END_STEP:-}"
+
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "RL_CASINO_SCRATCH_ROOT=${RL_CASINO_SCRATCH_ROOT}"
 echo "GRPO_MASK_DIR=${GRPO_MASK_DIR}"
@@ -171,6 +179,15 @@ if [ "${GRPO_SPARSE_ADAMW_LAZY:-0}" = "1" ]; then
   SPARSE_LAZY_ARGS+=( --sparse_adamw_lazy_state )
 fi
 
+# Dense-only: forward optional weight-delta logging into GRPO_train.py.
+DELTA_ARGS=()
+if [ -n "${GRPO_DELTA_LOG_INTERVAL:-}" ]; then
+  DELTA_ARGS+=( --delta_log_interval "${GRPO_DELTA_LOG_INTERVAL}" )
+fi
+if [ -n "${GRPO_DELTA_LOG_END_STEP:-}" ]; then
+  DELTA_ARGS+=( --delta_log_end_step "${GRPO_DELTA_LOG_END_STEP}" )
+fi
+
 if [ "${GRPO_MODE}" = "dense" ]; then
   "${LAUNCHER[@]}" src/full_training/GRPO_train.py \
     --model_name "${MODEL}" \
@@ -194,7 +211,8 @@ if [ "${GRPO_MODE}" = "dense" ]; then
     "${WANDB_ARGS[@]}" \
     "${RUN_SLUG_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \
-    "${RESUME_ARGS[@]}"
+    "${RESUME_ARGS[@]}" \
+    "${DELTA_ARGS[@]}"
 elif [ "${GRPO_MODE}" = "sparse" ]; then
   if [ -z "${GRPO_MASK:-}" ] || [ ! -f "${GRPO_MASK}" ]; then
     echo "ERROR: set GRPO_MASK to a .pt mask file for sparse mode." >&2

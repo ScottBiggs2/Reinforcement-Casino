@@ -185,7 +185,13 @@ def generate_block_random_masks_cpu(
     return final_masks
 
 
-def _build_benchmark_phases(sparsity_levels: List[float]) -> List[Tuple]:
+def _build_benchmark_phases(
+    sparsity_levels: List[float],
+    *,
+    mask_types: Tuple[str, ...] = ("element", "block"),
+    grad_input_modes: Tuple[str, ...] = ("dense", "sparse"),
+    adam_kernels: Tuple[str, ...] = ("block_1d", "block_2d"),
+) -> List[Tuple]:
     """
     Full comparison grid (sparse phases):
 
@@ -200,10 +206,10 @@ def _build_benchmark_phases(sparsity_levels: List[float]) -> List[Tuple]:
     phases: List[Tuple] = [("dense", None, "adamw", "none", None, None)]
     for sp in sparsity_levels:
         sp_tag = str(sp).replace(".", "p")
-        for mask_type in ("element", "block"):
+        for mask_type in mask_types:
             mt_short = "elem" if mask_type == "element" else "blk"
-            for gi in ("dense", "sparse"):
-                for adam in ("block_1d", "block_2d"):
+            for gi in grad_input_modes:
+                for adam in adam_kernels:
                     phase_name = f"s{sp_tag}_{mt_short}_gi{gi}_{adam}"
                     phases.append((phase_name, sp, "sparse_adamw", mask_type, adam, gi))
     return phases
@@ -273,6 +279,24 @@ def main():
         help="Comma-separated target sparsity %% for sparse phases (e.g. 99.75,95). "
         "Each level expands to element/block mask × grad_input dense/sparse × Adam 1d/2d.",
     )
+    p.add_argument(
+        "--phase_mask_types",
+        type=str,
+        default="element,block",
+        help="Comma-separated mask types to benchmark: element,block.",
+    )
+    p.add_argument(
+        "--phase_grad_input_modes",
+        type=str,
+        default="dense,sparse",
+        help="Comma-separated grad_input modes: dense,sparse. Use 'dense' to focus on 1D/2D Adam kernels.",
+    )
+    p.add_argument(
+        "--phase_adam_kernels",
+        type=str,
+        default="block_1d,block_2d",
+        help="Comma-separated SparseAdamW kernels: block_1d,block_2d.",
+    )
     args = p.parse_args()
 
     sparsity_levels = [
@@ -280,14 +304,39 @@ def main():
         for x in str(args.benchmark_sparsities).split(",")
         if x.strip()
     ]
-    phases = _build_benchmark_phases(sparsity_levels)
+
+    mask_types = tuple(x.strip() for x in str(args.phase_mask_types).split(",") if x.strip())
+    grad_input_modes = tuple(x.strip() for x in str(args.phase_grad_input_modes).split(",") if x.strip())
+    adam_kernels = tuple(x.strip() for x in str(args.phase_adam_kernels).split(",") if x.strip())
+
+    _valid_mask_types = {"element", "block"}
+    _valid_gi = {"dense", "sparse"}
+    _valid_adam = {"block_1d", "block_2d"}
+    bad_mt = [x for x in mask_types if x not in _valid_mask_types]
+    bad_gi = [x for x in grad_input_modes if x not in _valid_gi]
+    bad_adam = [x for x in adam_kernels if x not in _valid_adam]
+    if bad_mt or bad_gi or bad_adam:
+        raise ValueError(
+            "Invalid phase-grid filters: "
+            f"mask_types bad={bad_mt} (valid={sorted(_valid_mask_types)}), "
+            f"grad_input_modes bad={bad_gi} (valid={sorted(_valid_gi)}), "
+            f"adam_kernels bad={bad_adam} (valid={sorted(_valid_adam)})"
+        )
+
+    phases = _build_benchmark_phases(
+        sparsity_levels,
+        mask_types=mask_types,
+        grad_input_modes=grad_input_modes,
+        adam_kernels=adam_kernels,
+    )
 
     slurm_safe_print(
         f"Benchmark config: n_steps per phase={args.n_steps}, batch={args.batch_size}, grad_accum={args.grad_accum}"
     )
     slurm_safe_print(
         f"Phase grid: {len(phases)} phases (1 dense + {len(phases) - 1} sparse), "
-        f"sparsity levels={sparsity_levels}"
+        f"sparsity levels={sparsity_levels}  mask_types={list(mask_types)}  "
+        f"grad_input_modes={list(grad_input_modes)}  adam_kernels={list(adam_kernels)}"
     )
 
     os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir or os.environ.get(
