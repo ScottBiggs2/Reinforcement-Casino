@@ -49,11 +49,19 @@ export PYTHONUNBUFFERED=1
 export HF_TOKEN="${HF_TOKEN:-}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
-# Hard-disable W&B for a toy run (avoid Slurm/NFS console capture surprises).
-export WANDB_MODE="disabled"
-export WANDB_DISABLED="true"
-export WANDB_CONSOLE="off"
-export WANDB_SILENT="true"
+# W&B: default OFF for toy runs (Slurm/NFS console capture can be flaky).
+# Enable by exporting USE_WANDB=1 and (if needed) WANDB_API_KEY / WANDB_ENTITY / WANDB_PROJECT.
+USE_WANDB="${USE_WANDB:-0}"
+if [ "${USE_WANDB}" != "1" ]; then
+  export WANDB_MODE="disabled"
+  export WANDB_DISABLED="true"
+  export WANDB_CONSOLE="off"
+  export WANDB_SILENT="true"
+else
+  unset WANDB_DISABLED || true
+  export WANDB_CONSOLE="off"
+  export WANDB_SILENT="true"
+fi
 
 # BSR training knobs requested: 2D optimizer blocks + sparse grad_input.
 export RL_CASINO_ADAM_KERNEL="${RL_CASINO_ADAM_KERNEL:-block_2d}"
@@ -136,6 +144,7 @@ timeout --signal=TERM --kill-after=60 3500 \
     --optimizer sparse_adamw \
     --block_size_bsr "${BSR_BLOCK_SIZE}" \
     --block_size_adam "${ADAM_BLOCK_SIZE}" \
+    $( [ "${USE_WANDB}" = "1" ] && echo "--use_wandb" ) \
     --save_csv \
     --output_base_dir "${OUT_TRAIN_DIR}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
