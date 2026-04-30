@@ -35,6 +35,7 @@ _force_wandb_inert_for_slurm_logs()
 import argparse
 import gc
 import json
+import hashlib
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -208,6 +209,37 @@ def _build_benchmark_phases(sparsity_levels: List[float]) -> List[Tuple]:
     return phases
 
 
+def _stable_mask_seed(*, base: int, sparsity_pct: float, mask_type: str) -> int:
+    """
+    Deterministic seed per (sparsity, mask_type), independent of phase order.
+    This enables mask reuse across the 4 variants (gi dense/sparse × Adam 1d/2d).
+    """
+    h = hashlib.sha256(f"{sparsity_pct:.5f}|{mask_type}".encode("utf-8")).hexdigest()
+    # take 31 bits to keep torch.manual_seed happy across platforms
+    return int(h[:8], 16) ^ int(base)
+
+
+def _mask_cache_path(
+    *,
+    out_dir: str,
+    sparsity_pct: float,
+    mask_type: str,
+    block_size: int,
+    mlp_only: bool,
+    min_layer_keep_ratio: float,
+) -> str:
+    tag = f"s{str(sparsity_pct).replace('.','p')}_{mask_type}_b{block_size}_mlp{int(mlp_only)}_floor{min_layer_keep_ratio:g}"
+    return os.path.join(out_dir, "masks", f"{tag}.pt")
+
+
+def _write_theory_sidecar(path: str, records: List[Dict[str, Any]]) -> None:
+    """Write theory JSON incrementally so partial runs still have a sidecar."""
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as tf:
+        json.dump(records, tf, indent=2)
+    os.replace(tmp, path)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
@@ -298,62 +330,92 @@ def main():
         )
         mask_path = None
         tmp_mask = None
-        seed = 424200 + idx * 31 + (int(sparsity_pct * 10) if sparsity_pct is not None else 0)
+        seed = None
 
         extra_log: Optional[Dict[str, Any]] = None
         if sparsity_pct is not None:
-            if mask_type == "block":
-                masks = generate_block_random_masks_cpu(
-                    args.model_name,
-                    args.checkpoint,
-                    sparsity_pct,
-                    seed=seed,
-                    mlp_only=args.mlp_only,
-                    min_layer_keep_ratio=args.min_layer_keep_ratio,
-                    block_size=args.block_size_bsr,
-                )
-            else:
-                masks = generate_random_masks_cpu(
-                    args.model_name,
-                    args.checkpoint,
-                    sparsity_pct,
-                    seed=seed,
-                    mlp_only=args.mlp_only,
-                    min_layer_keep_ratio=args.min_layer_keep_ratio,
-                )
-            bool_masks = {k: v.bool() if v.dtype != torch.bool else v for k, v in masks.items()}
-            
-            # Profile and print block sparsity BEFORE saving
-            print_block_sparsity_profile(bool_masks, block_size=args.block_size_bsr)
-            
-            extra_log = compute_sparse_mask_theory_metrics(bool_masks, b_tokens)
-            extra_log = dict(extra_log)
-            extra_log["mask_type"] = mask_type
-            extra_log["adam_kernel"] = adam_kernel or ""
-            extra_log["grad_input_mode"] = grad_input_mode or ""
-            theory_records.append(
-                {
-                    "phase": phase_name,
-                    "sparsity_target_pct": float(sparsity_pct),
-                    **{k: v for k, v in extra_log.items()},
-                }
+            # Mask reuse: cache one mask per (sparsity, mask_type, block_size, mlp_only, floor).
+            os.makedirs(os.path.join(args.output_dir, "masks"), exist_ok=True)
+            mt = "block" if mask_type == "block" else "element"
+            cache_path = _mask_cache_path(
+                out_dir=args.output_dir,
+                sparsity_pct=float(sparsity_pct),
+                mask_type=mt,
+                block_size=int(args.block_size_bsr),
+                mlp_only=bool(args.mlp_only),
+                min_layer_keep_ratio=float(args.min_layer_keep_ratio),
             )
-            fd, tmp_mask = tempfile.mkstemp(suffix=".pt", prefix="mask_")
-            os.close(fd)
-            meta = {
-                "method": "random_global_benchmark",
-                "sparsity_percent": sparsity_pct,
-                "seed": seed,
-                "format": "torch_bool_binary",
-            }
-            save_masks(bool_masks, tmp_mask, metadata=meta)
-            mask_path = tmp_mask
-            del masks
-            gc.collect()
+            seed = _stable_mask_seed(base=424200, sparsity_pct=float(sparsity_pct), mask_type=mt)
+
+            if os.path.isfile(cache_path):
+                slurm_safe_print(f"  Reusing cached mask: {cache_path}")
+                mask_path = cache_path
+                # We still need theory metrics for the CSV/theory sidecar.
+                from src.utils.mask_manager import SparseMaskManager
+                mm = SparseMaskManager(cache_path, device=torch.device("cpu"))
+                bool_masks = {k: mm.get_mask(k).bool() for k in mm.list_masks()}
+            else:
+                if mt == "block":
+                    masks = generate_block_random_masks_cpu(
+                        args.model_name,
+                        args.checkpoint,
+                        sparsity_pct,
+                        seed=seed,
+                        mlp_only=args.mlp_only,
+                        min_layer_keep_ratio=args.min_layer_keep_ratio,
+                        block_size=args.block_size_bsr,
+                    )
+                else:
+                    masks = generate_random_masks_cpu(
+                        args.model_name,
+                        args.checkpoint,
+                        sparsity_pct,
+                        seed=seed,
+                        mlp_only=args.mlp_only,
+                        min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    )
+                bool_masks = {k: v.bool() if v.dtype != torch.bool else v for k, v in masks.items()}
+
+                # Profile and print block sparsity BEFORE saving
+                print_block_sparsity_profile(bool_masks, block_size=args.block_size_bsr)
+
+                meta = {
+                    "method": "random_global_benchmark",
+                    "sparsity_percent": float(sparsity_pct),
+                    "seed": int(seed),
+                    "format": "torch_bool_binary",
+                    "mask_type": mt,
+                    "block_size_bsr": int(args.block_size_bsr),
+                    "mlp_only": bool(args.mlp_only),
+                    "min_layer_keep_ratio": float(args.min_layer_keep_ratio),
+                }
+                save_masks(bool_masks, cache_path, metadata=meta)
+                slurm_safe_print(f"  Saved cached mask: {cache_path}")
+                mask_path = cache_path
+                del masks
+                gc.collect()
+
+            base_log = dict(compute_sparse_mask_theory_metrics(bool_masks, b_tokens))
+            base_log["mask_type"] = mask_type
+            base_log["adam_kernel"] = adam_kernel or ""
+            base_log["grad_input_mode"] = grad_input_mode or ""
+            base_log["mask_seed"] = int(seed)
+            extra_log = base_log
+            theory_records.append(
+                {"phase": phase_name, "sparsity_target_pct": float(sparsity_pct), **base_log}
+            )
+            try:
+                _write_theory_sidecar(theory_json_path, theory_records)
+            except OSError as e:
+                print(f"WARNING: could not write incremental benchmark_theory.json: {e}", file=sys.stderr)
         else:
             stub = dense_phase_theory_stub(b_tokens=b_tokens)
             extra_log = stub
             theory_records.append({"phase": phase_name, "sparsity_target_pct": None, **stub})
+            try:
+                _write_theory_sidecar(theory_json_path, theory_records)
+            except OSError as e:
+                print(f"WARNING: could not write incremental benchmark_theory.json: {e}", file=sys.stderr)
 
         run_name = f"{args.run_label}_{phase_name}"
 
@@ -426,11 +488,7 @@ def main():
                 sink.flush()
             except OSError as e:
                 print(f"WARNING: could not flush benchmark CSV (disk/NFS issue): {e}", file=sys.stderr)
-            if tmp_mask and os.path.isfile(tmp_mask):
-                try:
-                    os.unlink(tmp_mask)
-                except OSError:
-                    pass
+            # tmp_mask path no longer used; masks are cached under output_dir/masks/.
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -439,9 +497,9 @@ def main():
         sink.close()
     except OSError as e:
         print(f"WARNING: final CSV flush failed: {e}", file=sys.stderr)
+    # Final theory write (incremental writes should already have succeeded).
     try:
-        with open(theory_json_path, "w", encoding="utf-8") as tf:
-            json.dump(theory_records, tf, indent=2)
+        _write_theory_sidecar(theory_json_path, theory_records)
     except OSError as e:
         print(f"WARNING: could not write benchmark_theory.json: {e}", file=sys.stderr)
     slurm_safe_print(f"\n✓ Benchmark complete. CSV: {csv_path}")

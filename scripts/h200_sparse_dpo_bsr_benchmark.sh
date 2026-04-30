@@ -25,7 +25,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --job-name=h200_bsr_bench
 #SBATCH --output=logs/h200_bsr_bench_%j.out
 #SBATCH --error=logs/h200_bsr_bench_%j.err
@@ -86,7 +86,7 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_DATASETS_CACHE_ROOT}"
 # Steps **per phase** (default 50). Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read
 # NUM_STEPS_DPO here, so a leftover export NUM_STEPS_DPO=500 from other README snippets
 # cannot silently turn this into a 500-step-per-phase run.
-export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-15}"
+export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-8}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
@@ -114,7 +114,12 @@ export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75}"
 
 # Trainer CSV rows follow logging frequency (default: every 25 steps). For short phases, set
 # RL_CASINO_LOGGING_STEPS=1 before sbatch so each step appears in benchmark_training_log.csv.
-export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-25}"
+export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-1}"
+# If caller overrides RL_CASINO_LOGGING_STEPS, ensure it isn't larger than the phase length.
+if [ "${RL_CASINO_LOGGING_STEPS}" -gt "${H200_BSR_STEPS_PER_PHASE}" ]; then
+  echo "WARNING: RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS} > H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE}; clamping to 1." >&2
+  export RL_CASINO_LOGGING_STEPS=1
+fi
 
 OUT_BASE="${H200_BSR_OUT:-${SCRATCH_USER_ROOT}/rl_casino_h200_bsr}/${RUN_ID:-${SLURM_JOB_ID:-local}}"
 mkdir -p "$OUT_BASE"
