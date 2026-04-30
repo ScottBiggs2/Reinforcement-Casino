@@ -2,8 +2,7 @@
 import torch
 import time
 from src.utils.mask_manager import SparseMaskManager
-from src.utils.slurm_safe_log import slurm_safe_print
-from src.kernels.sparse_adam import triton_sparse_adam_update
+from src.kernels.indexed_sparse_adam import triton_indexed_sparse_adamw_step
 
 class SparseAdamW(torch.optim.Optimizer):
     """
@@ -27,8 +26,6 @@ class SparseAdamW(torch.optim.Optimizer):
         block_size=128,
         mlp_only=False,
         max_grad_norm=1.0,
-        *,
-        eager_state_init: bool = True,
     ):
         self.param_to_name = {}
         params = []
@@ -49,44 +46,27 @@ class SparseAdamW(torch.optim.Optimizer):
             'dense_steps': 0,
             'nan_warnings': [],
         }
-        self.eager_state_init = eager_state_init
-
-        # Pre-allocating exp_avg/exp_avg_sq for every parameter spikes memory (2× model size on-device).
-        # Lazy init matches PyTorch Adam: allocate on first step — slower first step, much lower peak RAM/VRAM.
-        if self.eager_state_init:
-            slurm_safe_print(f"\nPre-initializing optimizer states for all parameters...")
-            init_start = time.time()
-            with torch.no_grad():
-                for group in self.param_groups:
-                    for p in group['params']:
-                        self._init_adam_state_tensors(p)
-
-            init_time = time.time() - init_start
-            slurm_safe_print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
-        else:
-            slurm_safe_print(
-                "\nSparseAdamW: lazy optimizer state (allocate on first step per parameter; lower peak memory)"
-            )
-
-        slurm_safe_print(f"✓ SparseAdamW optimizer ready")
-        slurm_safe_print(f"  MLP-only: {mlp_only}")
-        slurm_safe_print(f"  Block size: {block_size}")
-        slurm_safe_print(f"  Using indexed sparse kernels: TRUE")
-        slurm_safe_print(f"  Kernel recompilation fix: APPLIED")
-        slurm_safe_print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
-
-    def _init_adam_state_tensors(self, p: torch.Tensor) -> None:
-        state = self.state[p]
-        state["step"] = 0
-        state["exp_avg"] = torch.zeros_like(p, memory_format=torch.preserve_format)
-        state["exp_avg_sq"] = torch.zeros_like(p, memory_format=torch.preserve_format)
-
-    def _ensure_adam_state(self, p: torch.Tensor) -> None:
-        if not self.eager_state_init:
-            state = self.state[p]
-            if "exp_avg" not in state:
-                self._init_adam_state_tensors(p)
-
+        
+        # OPTIMIZATION: Pre-initialize all optimizer states upfront
+        print(f"\nPre-initializing optimizer states for all parameters...")
+        init_start = time.time()
+        with torch.no_grad():
+            for group in self.param_groups:
+                for p in group['params']:
+                    state = self.state[p]
+                    state['step'] = 0
+                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        
+        init_time = time.time() - init_start
+        print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
+        print(f"✓ SparseAdamW optimizer ready")
+        print(f"  MLP-only: {mlp_only}")
+        print(f"  Block size: {block_size}")
+        print(f"  Using indexed sparse kernels: TRUE")
+        print(f"  Kernel recompilation fix: APPLIED")
+        print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
+    
     @torch.no_grad()
     def step(self, closure=None):
         """Perform a single optimization step using Triton kernels."""
@@ -94,14 +74,12 @@ class SparseAdamW(torch.optim.Optimizer):
         if closure is not None:
             with torch.enable_grad():
                 loss = closure()
-
-        # Gradient clipping: do it once per param-group (not once per parameter).
-        # Per-parameter clipping is extremely slow at Llama-8B scale.
-        if self.max_grad_norm and self.max_grad_norm > 0:
-            for group in self.param_groups:
-                params = [p for p in group["params"] if p.grad is not None]
-                if params:
-                    torch.nn.utils.clip_grad_norm_(params, self.max_grad_norm)
+        
+        # Apply local gradient clipping to all parameters first to protect momentum
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is not None and self.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(p, self.max_grad_norm)
         
         for group in self.param_groups:
             for p in group['params']:
@@ -131,20 +109,19 @@ class SparseAdamW(torch.optim.Optimizer):
         """
         Sparse update using indexed Triton kernel (PERFORMANCE FIXED).
         """
-        self._ensure_adam_state(param)
         grad = param.grad
         mask = self.mask_manager.get_mask(param_name)
         nonzero_indices = self.mask_manager.get_nonzero_indices(param_name)
         
         if mask is None or nonzero_indices is None:
-            slurm_safe_print(f"WARNING: Missing mask or indices for {param_name}, falling back to dense")
+            print(f"WARNING: Missing mask or indices for {param_name}, falling back to dense")
             self._dense_step(param, group)
             return
         
         if mask.shape != param.shape:
-            slurm_safe_print(f"WARNING: Shape mismatch for {param_name}")
-            slurm_safe_print(f"  Param: {param.shape}, Mask: {mask.shape}")
-            slurm_safe_print(f"  Falling back to dense update")
+            print(f"WARNING: Shape mismatch for {param_name}")
+            print(f"  Param: {param.shape}, Mask: {mask.shape}")
+            print(f"  Falling back to dense update")
             self._dense_step(param, group)
             return
         
@@ -152,14 +129,11 @@ class SparseAdamW(torch.optim.Optimizer):
         state['step'] += 1
         
         try:
-            # Block-sparse AdamW kernel — same BLOCK_SIZE × BLOCK_SIZE tile
-            # structure as sparse_grad_weight_kernel (BSR backward), so writes
-            # land in the same contiguous regions the backward kernel touches.
-            # Avoids the random gather/scatter pattern of the indexed variant.
-            triton_sparse_adam_update(
-                weights=param,
-                gradient=grad,
-                mask=mask.to(torch.float32) if mask.dtype == torch.bool else mask,
+            # Use optimized indexed sparse kernel (with bias correction fix)
+            triton_indexed_sparse_adamw_step(
+                param=param,
+                grad=grad,
+                nonzero_indices=nonzero_indices,
                 exp_avg=state['exp_avg'],
                 exp_avg_sq=state['exp_avg_sq'],
                 lr=group['lr'],
@@ -168,16 +142,11 @@ class SparseAdamW(torch.optim.Optimizer):
                 eps=group['eps'],
                 weight_decay=group['weight_decay'],
                 step=state['step'],
-                adamw=True,
-                # block_size must match the BSR mask granularity (16) so the
-                # kernel's center-of-tile mask check samples a homogeneous block.
-                # self.block_size (default 128) was for the old indexed kernel's
-                # memory tile size and is unrelated to mask granularity.
-                block_size=16,
+                block_size=self.block_size,
             )
         except Exception as e:
-            slurm_safe_print(f"ERROR in block-sparse Triton kernel for {param_name}: {e}")
-            slurm_safe_print(f"  Falling back to dense update")
+            print(f"ERROR in indexed Triton kernel for {param_name}: {e}")
+            print(f"  Falling back to dense update")
             self._dense_step(param, group)
             return
         
@@ -185,7 +154,6 @@ class SparseAdamW(torch.optim.Optimizer):
     
     def _dense_step(self, param, group):
         """Standard dense AdamW update (fallback for non-masked params)."""
-        self._ensure_adam_state(param)
         grad = param.grad
         state = self.state[param]
         state['step'] += 1
@@ -220,15 +188,15 @@ class SparseAdamW(torch.optim.Optimizer):
                 nan_params.append((name, nan_count, inf_count))
         
         if nan_params:
-            slurm_safe_print(f"\n{'='*60}")
-            slurm_safe_print("WARNING: NaN/Inf DETECTED IN PARAMETERS")
-            slurm_safe_print(f"{'='*60}")
+            print(f"\n{'='*60}")
+            print("WARNING: NaN/Inf DETECTED IN PARAMETERS")
+            print(f"{'='*60}")
             for name, nan_count, inf_count in nan_params:
-                slurm_safe_print(f"  {name}: NaN={nan_count}, Inf={inf_count}")
-            slurm_safe_print(f"{'='*60}\n")
+                print(f"  {name}: NaN={nan_count}, Inf={inf_count}")
+            print(f"{'='*60}\n")
             self.stats['nan_warnings'] = nan_params
         else:
-            slurm_safe_print("\n✓ No NaN/Inf detected in parameters\n")
+            print("\n✓ No NaN/Inf detected in parameters\n")
     
     def print_stats(self):
         """Print optimizer statistics."""
@@ -236,10 +204,10 @@ class SparseAdamW(torch.optim.Optimizer):
         sparse = self.stats['sparse_steps']
         dense = self.stats['dense_steps']
         
-        slurm_safe_print(f"\n{'='*60}")
-        slurm_safe_print(f"SPARSE ADAMW OPTIMIZER STATISTICS")
-        slurm_safe_print(f"{'='*60}")
-        slurm_safe_print(f"Total steps:      {total:,}")
-        slurm_safe_print(f"Sparse steps:     {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
-        slurm_safe_print(f"Dense steps:      {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
-        slurm_safe_print(f"{'='*60}\n")
+        print(f"\n{'='*60}")
+        print(f"SPARSE ADAMW OPTIMIZER STATISTICS")
+        print(f"{'='*60}")
+        print(f"Total steps:      {total:,}")
+        print(f"Sparse steps:     {sparse:,} ({sparse/total*100 if total > 0 else 0:.1f}%)")
+        print(f"Dense steps:      {dense:,} ({dense/total*100 if total > 0 else 0:.1f}%)")
+        print(f"{'='*60}\n")

@@ -4,15 +4,6 @@ import triton
 import triton.language as tl
 
 
-# NOTE: NO autotune on this kernel. block_sparse_adam_2d_kernel mutates
-# weights / exp_avg / exp_avg_sq IN PLACE. @triton.autotune benchmarks each
-# config by RE-RUNNING the kernel on the same args, so 5 configs = 5 stacked
-# in-place updates per real call → weights blow up → bf16 overflow → NaN
-# logits in subsequent forward passes (observed in conv_sparse run 6335323:
-# loss stuck at ln(2), grad_norm 0, logits NaN from step 1 onward).
-# Could be re-enabled with `restore_value=['weights_ptr', 'exp_avg_ptr',
-# 'exp_avg_sq_ptr']` but the speed gain over a fixed config is small (5-15%
-# for memory-bound op) and not worth the snapshot memory + risk.
 @triton.jit
 def block_sparse_adam_2d_kernel(
     # Pointers to tensors
@@ -217,8 +208,7 @@ def triton_sparse_adam_update(weights, gradient, mask, exp_avg, exp_avg_sq,
     num_blocks_n = triton.cdiv(N, block_size)
     grid = (num_blocks_m * num_blocks_n,)
     
-    # Launch kernel — fixed num_warps=4, num_stages=2 (reasonable defaults for
-    # memory-bound op; previously autotuned but autotune corrupts in-place state).
+    # Launch kernel
     block_sparse_adam_2d_kernel[grid](
         weights, gradient, exp_avg, exp_avg_sq, mask,
         M, N,
@@ -232,6 +222,4 @@ def triton_sparse_adam_update(weights, gradient, mask, exp_avg, exp_avg_sq,
         adamw,
         False,  # use_sparse_storage (not used in this version)
         BLOCK_SIZE=block_size,
-        num_warps=4,
-        num_stages=2,
     )

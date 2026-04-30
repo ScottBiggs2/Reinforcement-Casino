@@ -2,20 +2,6 @@
 import triton
 import triton.language as tl
 
-
-# Autotune configs for indexed gather/scatter AdamW. The kernel is memory-bound
-# (irregular loads at nonzero indices), so BLOCK_SIZE drives SM occupancy vs
-# launch-overhead trade-off. Keys on n_indices so small params (early layers)
-# and large params (MLPs) can pick different configs.
-_INDEXED_SPARSE_ADAMW_CONFIGS = [
-    triton.Config({'BLOCK_SIZE': 64}, num_warps=4, num_stages=2),
-    triton.Config({'BLOCK_SIZE': 128}, num_warps=4, num_stages=2),
-    triton.Config({'BLOCK_SIZE': 256}, num_warps=4, num_stages=2),
-    triton.Config({'BLOCK_SIZE': 256}, num_warps=8, num_stages=2),
-]
-
-
-@triton.autotune(configs=_INDEXED_SPARSE_ADAMW_CONFIGS, key=['n_indices'])
 @triton.jit
 def indexed_sparse_adamw_kernel(
     # Pointers to FULL tensors (flattened)
@@ -27,15 +13,11 @@ def indexed_sparse_adamw_kernel(
     indices_ptr,
     n_indices,
     # Hyperparameters
-    # NOTE: lr and weight_decay are runtime args (not constexpr) — they change per
-    # step under LR schedulers, and making them constexpr forces a new Triton
-    # compilation for every unique value. beta1/beta2/eps stay constexpr because
-    # they really are constant and constexpr lets Triton fold (1 - beta) etc.
-    lr,
+    lr: tl.constexpr,
     beta1: tl.constexpr,
     beta2: tl.constexpr,
     eps: tl.constexpr,
-    weight_decay,
+    weight_decay: tl.constexpr,
     # Precomputed bias corrections (not constexpr to avoid recompilation)
     bias_correction1_val,
     bias_correction2_val,
@@ -115,11 +97,8 @@ def triton_indexed_sparse_adamw_step(
     if not exp_avg_sq_flat.is_contiguous():
         exp_avg_sq_flat = exp_avg_sq_flat.contiguous()
     
-    # `block_size` arg kept for API compat with SparseAdamW; actual BLOCK_SIZE
-    # is chosen by @triton.autotune and cached per n_indices key.
-    del block_size
-    grid = lambda META: (triton.cdiv(n_indices, META['BLOCK_SIZE']),)
-
+    grid = (triton.cdiv(n_indices, block_size),)
+    
     indexed_sparse_adamw_kernel[grid](
         param_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat,
         nonzero_indices,
@@ -131,6 +110,7 @@ def triton_indexed_sparse_adamw_step(
         weight_decay=weight_decay,
         bias_correction1_val=bias_correction1,
         bias_correction2_val=bias_correction2,
+        BLOCK_SIZE=block_size,
     )
     
     # Update .data directly to avoid overhead (modifications to views are reflected if contiguous)
