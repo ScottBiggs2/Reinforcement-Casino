@@ -32,9 +32,9 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 # (Host RAM for the Python process — not GPU VRAM. Mask OOM is typically CUDA OOM, not this limit.)
-#SBATCH --time=03:00:00
+#SBATCH --time=04:00:00
 #SBATCH --job-name=orch_masks_queue
 #SBATCH --output=logs/orch_masks_queue_%j.out
 #SBATCH --error=logs/orch_masks_queue_%j.err
@@ -108,8 +108,8 @@ export ORCH_CAV_INCLUDE_EMBEDS="${ORCH_CAV_INCLUDE_EMBEDS:-1}"
 export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-4}"
 
 # Calibration sizes
-export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-256}"
-export COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-16}"
+export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-1024}"
+export COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-32}"
 export GRPO_N_SAMPLES="${GRPO_N_SAMPLES:-64}"
 
 # SNIP/GRaSP objectives
@@ -132,8 +132,8 @@ export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}" # identity|
 export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
 export ORCH_SCORE_SNR_CLAMP_MIN="${ORCH_SCORE_SNR_CLAMP_MIN:-0.0}"
 export ORCH_SCORE_SNR_CLAMP_MAX="${ORCH_SCORE_SNR_CLAMP_MAX:-50.0}"
-export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-8.0}"
-export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" # 1 to override RAM guard
+export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-96.0}"
+export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-1}" # 1 to override RAM guard
 
 # SNIP/GRaSP mask layout: element (default) vs block (pool to B×B blocks then expand; BSR-friendly).
 export ORCH_MASK_GRANULARITY="${ORCH_MASK_GRANULARITY:-element}" # element|block
@@ -229,6 +229,21 @@ else
   unset WANDB_DISABLED || true
 fi
 export GRPO_USE_WANDB="${GRPO_USE_WANDB:-1}"
+
+########################################
+# Focus mode: Light-R1 GRaSP sweep (one-and-done)
+########################################
+# When enabled, this orchestrator will:
+# - Generate ONE random baseline mask
+# - Generate GRaSP masks for Light-R1:
+#     element/base, element/SNR, block/base, block/SNR
+# - Queue ONLY the corresponding Light-R1 sparse DPO training runs (500 steps)
+# - Exit early (skips Wanda/SNIP/GRPO/Tulu3/etc.)
+export ORCH_LIGHTR1_GRASP_FOCUS="${ORCH_LIGHTR1_GRASP_FOCUS:-1}"
+export ORCH_LIGHTR1_GRASP_TRAIN_STEPS="${ORCH_LIGHTR1_GRASP_TRAIN_STEPS:-500}"
+export ORCH_LIGHTR1_RANDOM_BASELINE="${ORCH_LIGHTR1_RANDOM_BASELINE:-1}"
+export ORCH_LIGHTR1_GRASP_BLOCK_SIZE="${ORCH_LIGHTR1_GRASP_BLOCK_SIZE:-${ORCH_MASK_BLOCK_SIZE:-256}}"
+export ORCH_LIGHTR1_GRASP_BLOCK_REDUCTION="${ORCH_LIGHTR1_GRASP_BLOCK_REDUCTION:-${ORCH_MASK_BLOCK_REDUCTION:-mean}}"
 
 ########################################
 # Preflight
@@ -442,6 +457,137 @@ if [ -f "${MASK_RANDOM}" ]; then
     "grpo_sp_rand_${GRPO_SPARSE_RANDOM_RUN_NAME}"
 else
   echo "WARNING: Random mask generation failed; skipping associated jobs."
+fi
+
+########################################
+# Focus mode implementation (Light-R1 GRaSP sweep)
+########################################
+if [ "${ORCH_LIGHTR1_GRASP_FOCUS}" = "1" ]; then
+  echo ""
+  echo "=== ORCH_LIGHTR1_GRASP_FOCUS=1: Light-R1 GRaSP sweep (500-step sparse DPO) ==="
+
+  # Force 500 steps for this sweep (does not affect other scripts unless they inherit env).
+  export NUM_STEPS_DPO="${ORCH_LIGHTR1_GRASP_TRAIN_STEPS}"
+
+  # Stable, collision-resistant run IDs (W&B run_name includes mask stem + RUN_ID).
+  export DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1="${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1:-dpo500_sparse_random_light-r1_v1}"
+  export DPO_SPARSE_GRASP_ELEM_BASE_RUN_ID_LIGHT_R1="${DPO_SPARSE_GRASP_ELEM_BASE_RUN_ID_LIGHT_R1:-dpo500_sparse_grasp_elem_base_light-r1_v1}"
+  export DPO_SPARSE_GRASP_ELEM_SNR_RUN_ID_LIGHT_R1="${DPO_SPARSE_GRASP_ELEM_SNR_RUN_ID_LIGHT_R1:-dpo500_sparse_grasp_elem_snr_light-r1_v1}"
+  export DPO_SPARSE_GRASP_BLOCK_BASE_RUN_ID_LIGHT_R1="${DPO_SPARSE_GRASP_BLOCK_BASE_RUN_ID_LIGHT_R1:-dpo500_sparse_grasp_block_base_light-r1_v1}"
+  export DPO_SPARSE_GRASP_BLOCK_SNR_RUN_ID_LIGHT_R1="${DPO_SPARSE_GRASP_BLOCK_SNR_RUN_ID_LIGHT_R1:-dpo500_sparse_grasp_block_snr_light-r1_v1}"
+
+  # Masks (explicit names; keep under MASK_DIR for scratch hygiene).
+  export MASK_RANDOM_LIGHT_R1="${MASK_RANDOM}"
+  export MASK_GRASP_ELEM_BASE_LIGHT_R1="${MASK_DIR}/cold_grasp_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${GRASP_OBJECTIVE}_elem_base.pt"
+  export MASK_GRASP_ELEM_SNR_LIGHT_R1="${MASK_DIR}/cold_grasp_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${GRASP_OBJECTIVE}_elem_snr${ORCH_SCORE_SNR:-per_weight}_${ORCH_SCORE_SNR_TRANSFORM}.pt"
+  export MASK_GRASP_BLOCK_BASE_LIGHT_R1="${MASK_DIR}/cold_grasp_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${GRASP_OBJECTIVE}_block${ORCH_LIGHTR1_GRASP_BLOCK_SIZE}_${ORCH_LIGHTR1_GRASP_BLOCK_REDUCTION}_base.pt"
+  export MASK_GRASP_BLOCK_SNR_LIGHT_R1="${MASK_DIR}/cold_grasp_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct_${GRASP_OBJECTIVE}_block${ORCH_LIGHTR1_GRASP_BLOCK_SIZE}_${ORCH_LIGHTR1_GRASP_BLOCK_REDUCTION}_snr${ORCH_SCORE_SNR:-per_weight}_${ORCH_SCORE_SNR_TRANSFORM}.pt"
+
+  # SNR args for the SNR variants only.
+  SNRS_ON=( --score-snr "${ORCH_SCORE_SNR:-per_weight}" )
+  SNRS_ON+=( --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}" )
+  SNRS_ON+=( --score-snr-eps "${ORCH_SCORE_SNR_EPS}" )
+  SNRS_ON+=( --score-snr-clamp-min "${ORCH_SCORE_SNR_CLAMP_MIN}" )
+  SNRS_ON+=( --score-snr-clamp-max "${ORCH_SCORE_SNR_CLAMP_MAX}" )
+  SNRS_ON+=( --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+  if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
+    SNRS_ON+=( --score-snr-allow-large-ram )
+  fi
+  SNRS_OFF=()
+
+  echo "Sweep knobs: NUM_STEPS_DPO=${NUM_STEPS_DPO} COLD_CAV_SUBSET=${COLD_CAV_SUBSET} COLD_CAV_NUM_BATCHES=${COLD_CAV_NUM_BATCHES}"
+  echo "SNR knobs: ORCH_SCORE_SNR=${ORCH_SCORE_SNR:-per_weight} RAM_BUDGET_GB=${ORCH_SCORE_SNR_RAM_BUDGET_GB} ALLOW_LARGE_RAM=${ORCH_SCORE_SNR_ALLOW_LARGE_RAM}"
+
+  if [ "${ORCH_LIGHTR1_RANDOM_BASELINE}" = "1" ] && [ -f "${MASK_RANDOM_LIGHT_R1}" ]; then
+    echo "--- Submitting Light-R1 random baseline (sparse) ---"
+    submit_training_job "DPO sparse random Light-R1" \
+      "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+      sparse_dpo \
+      "PIPELINE_RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_RANDOM_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1},NUM_STEPS_DPO=${NUM_STEPS_DPO}" \
+      "dpo500_sp_rand_lr1_${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1}"
+  else
+    echo "Skipping random baseline submit (ORCH_LIGHTR1_RANDOM_BASELINE=${ORCH_LIGHTR1_RANDOM_BASELINE}, mask_exists=$([ -f "${MASK_RANDOM_LIGHT_R1}" ] && echo 1 || echo 0))"
+  fi
+
+  # Helper: generate GRaSP mask with explicit granularity + SNR toggle.
+  gen_grasp_lr1() {
+    local label="$1"
+    local out_path="$2"
+    local granularity="$3" # element|block
+    local use_snr="$4"     # 0|1
+    local -a MG_LOCAL=()
+    if [ "${granularity}" != "element" ]; then
+      MG_LOCAL+=( --mask-granularity block )
+      MG_LOCAL+=( --mask-block-size "${ORCH_LIGHTR1_GRASP_BLOCK_SIZE}" )
+      MG_LOCAL+=( --mask-block-reduction "${ORCH_LIGHTR1_GRASP_BLOCK_REDUCTION}" )
+    fi
+    local -a SNRS_LOCAL=()
+    if [ "${use_snr}" = "1" ]; then
+      SNRS_LOCAL=( "${SNRS_ON[@]}" )
+    fi
+    echo ""
+    echo "=== Generating ${label} → ${out_path}"
+    set +e
+    "$TRAIN_PY" src/cold_start/inference_mask_finder.py \
+      --model_name "${MODEL}" \
+      --method grasp \
+      --mode dpo \
+      --dataset_name "${DPO_DS_KEY_LIGHT_R1}" \
+      --grasp-objective "${GRASP_OBJECTIVE}" \
+      --n_samples "${COLD_CAV_SUBSET}" \
+      --sparsity "${SPARSITY_PERCENT}" \
+      --batch_size 1 \
+      --max_length "${DPO_MAX_LENGTH}" \
+      --min-layer-keep-ratio "${MIN_LAYER_KEEP_RATIO}" \
+      --grasp-preference-beta "${DPO_BETA}" \
+      --snip-num-batches "${COLD_CAV_NUM_BATCHES}" \
+      "${SNRS_LOCAL[@]}" \
+      "${MG_LOCAL[@]}" \
+      --output "${out_path}"
+    set -e
+  }
+
+  gen_grasp_lr1 "Light-R1 GRaSP element/base (dense grads scoring)" "${MASK_GRASP_ELEM_BASE_LIGHT_R1}" "element" "0"
+  gen_grasp_lr1 "Light-R1 GRaSP element/SNR (dense grads scoring)"  "${MASK_GRASP_ELEM_SNR_LIGHT_R1}"  "element" "1"
+  gen_grasp_lr1 "Light-R1 GRaSP block/base (block pooled → sparse-grad friendly)" "${MASK_GRASP_BLOCK_BASE_LIGHT_R1}" "block" "0"
+  gen_grasp_lr1 "Light-R1 GRaSP block/SNR (block pooled → sparse-grad friendly)"  "${MASK_GRASP_BLOCK_SNR_LIGHT_R1}"  "block" "1"
+
+  echo ""
+  echo "--- Submitting Light-R1 GRaSP sparse runs (500 steps) ---"
+  if [ -f "${MASK_GRASP_ELEM_BASE_LIGHT_R1}" ]; then
+    submit_training_job "DPO sparse GRaSP elem/base Light-R1" \
+      "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+      sparse_dpo \
+      "PIPELINE_RUN_ID=${DPO_SPARSE_GRASP_ELEM_BASE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_GRASP_ELEM_BASE_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_GRASP_ELEM_BASE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1},NUM_STEPS_DPO=${NUM_STEPS_DPO}" \
+      "dpo500_sp_grasp_elem_base_lr1"
+  fi
+  if [ -f "${MASK_GRASP_ELEM_SNR_LIGHT_R1}" ]; then
+    submit_training_job "DPO sparse GRaSP elem/SNR Light-R1" \
+      "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+      sparse_dpo \
+      "PIPELINE_RUN_ID=${DPO_SPARSE_GRASP_ELEM_SNR_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_GRASP_ELEM_SNR_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_GRASP_ELEM_SNR_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1},NUM_STEPS_DPO=${NUM_STEPS_DPO}" \
+      "dpo500_sp_grasp_elem_snr_lr1"
+  fi
+  if [ -f "${MASK_GRASP_BLOCK_BASE_LIGHT_R1}" ]; then
+    submit_training_job "DPO sparse GRaSP block/base Light-R1" \
+      "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+      sparse_dpo \
+      "PIPELINE_RUN_ID=${DPO_SPARSE_GRASP_BLOCK_BASE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_GRASP_BLOCK_BASE_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_GRASP_BLOCK_BASE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1},NUM_STEPS_DPO=${NUM_STEPS_DPO}" \
+      "dpo500_sp_grasp_block_base_lr1"
+  fi
+  if [ -f "${MASK_GRASP_BLOCK_SNR_LIGHT_R1}" ]; then
+    submit_training_job "DPO sparse GRaSP block/SNR Light-R1" \
+      "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+      sparse_dpo \
+      "PIPELINE_RUN_ID=${DPO_SPARSE_GRASP_BLOCK_SNR_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_GRASP_BLOCK_SNR_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_GRASP_BLOCK_SNR_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1},NUM_STEPS_DPO=${NUM_STEPS_DPO}" \
+      "dpo500_sp_grasp_block_snr_lr1"
+  fi
+
+  echo ""
+  echo "=== Focus sweep complete (queued requested jobs). Exiting early. ==="
+  echo "Mask dir: ${MASK_DIR}"
+  echo "Monitor: squeue -u ${USER:-<user>}"
+  exit 0
 fi
 
 echo ""

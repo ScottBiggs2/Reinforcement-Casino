@@ -95,9 +95,16 @@ class GRaSPScorer:
             # HF Transformers supports non-reentrant via gradient_checkpointing_kwargs in newer versions.
             try:
                 model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+                we_turned_gc_on = True
             except TypeError:
-                model.gradient_checkpointing_enable()
-            we_turned_gc_on = True
+                # Older Transformers: cannot request non-reentrant. Enabling gradient checkpointing
+                # would likely default to reentrant=True and crash when we call autograd.grad().
+                # Prefer correctness over memory here; the caller can still reduce VRAM via batch_size=1.
+                print(
+                    "[GRaSP] WARNING: gradient_checkpointing_kwargs not supported by this Transformers version; "
+                    "disabling gradient checkpointing to avoid reentrant checkpoint + autograd.grad() crash."
+                )
+                gradient_checkpointing = False
 
         model.train()
         
