@@ -353,7 +353,8 @@ def main():
                 # We still need theory metrics for the CSV/theory sidecar.
                 from src.utils.mask_manager import SparseMaskManager
                 mm = SparseMaskManager(cache_path, device=torch.device("cpu"))
-                bool_masks = {k: mm.get_mask(k).bool() for k in mm.list_masks()}
+                # SparseMaskManager stores the loaded mask tensors in `mm.masks` (no `list_masks()` helper).
+                bool_masks = {k: mm.get_mask(k).bool() for k in mm.masks.keys()}
             else:
                 if mt == "block":
                     masks = generate_block_random_masks_cpu(
