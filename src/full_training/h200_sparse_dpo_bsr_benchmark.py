@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-H200-oriented multi-phase BSR DPO benchmark: one dense + several random-mask sparse runs.
+H200-oriented multi-phase BSR DPO benchmark: one dense baseline plus a **full sparse grid**
+(mask element vs block, grad_input dense vs Triton sparse, SparseAdamW block_1d vs block_2d)
+per ``--benchmark_sparsities``.
 
 - **Tokenizer + DPO dataset:** loaded once and reused across phases.
 - **Training model:** each phase calls ``sparse_dpo_train``, which loads weights from the Hub/local
@@ -34,7 +36,7 @@ import argparse
 import gc
 import json
 import tempfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -182,6 +184,30 @@ def generate_block_random_masks_cpu(
     return final_masks
 
 
+def _build_benchmark_phases(sparsity_levels: List[float]) -> List[Tuple]:
+    """
+    Full comparison grid (sparse phases):
+
+    - **Mask:** element-wise random (`generate_random_masks_cpu`) vs block-random (`generate_block_random_masks_cpu`).
+    - **Grad input:** dense ``grad_output @ weight`` vs Triton block-sparse grad_input
+      (``RL_CASINO_BSR_GRAD_INPUT_MODE`` = dense vs sparse).
+    - **SparseAdamW kernel:** ``RL_CASINO_ADAM_KERNEL`` = block_1d vs block_2d.
+
+    Tuple: (phase_name, sparsity_pct, optimizer_type, mask_type, adam_kernel, grad_input_mode)
+    ``grad_input_mode`` is None for the dense baseline; otherwise ``dense`` or ``sparse``.
+    """
+    phases: List[Tuple] = [("dense", None, "adamw", "none", None, None)]
+    for sp in sparsity_levels:
+        sp_tag = str(sp).replace(".", "p")
+        for mask_type in ("element", "block"):
+            mt_short = "elem" if mask_type == "element" else "blk"
+            for gi in ("dense", "sparse"):
+                for adam in ("block_1d", "block_2d"):
+                    phase_name = f"s{sp_tag}_{mt_short}_gi{gi}_{adam}"
+                    phases.append((phase_name, sp, "sparse_adamw", mask_type, adam, gi))
+    return phases
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model_name", type=str, default="meta-llama/Llama-3.1-8B-Instruct")
@@ -208,10 +234,28 @@ def main():
     p.add_argument("--output_dir", type=str, required=True)
     p.add_argument("--dataset_cache_dir", type=str, default=None)
     p.add_argument("--run_label", type=str, default="h200_bsr_bench")
+    p.add_argument(
+        "--benchmark_sparsities",
+        type=str,
+        default="99.75",
+        help="Comma-separated target sparsity %% for sparse phases (e.g. 99.75,95). "
+        "Each level expands to element/block mask × grad_input dense/sparse × Adam 1d/2d.",
+    )
     args = p.parse_args()
+
+    sparsity_levels = [
+        float(x.strip())
+        for x in str(args.benchmark_sparsities).split(",")
+        if x.strip()
+    ]
+    phases = _build_benchmark_phases(sparsity_levels)
 
     slurm_safe_print(
         f"Benchmark config: n_steps per phase={args.n_steps}, batch={args.batch_size}, grad_accum={args.grad_accum}"
+    )
+    slurm_safe_print(
+        f"Phase grid: {len(phases)} phases (1 dense + {len(phases) - 1} sparse), "
+        f"sparsity levels={sparsity_levels}"
     )
 
     os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir or os.environ.get(
@@ -239,26 +283,18 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     dpo_ds = registry_load_dpo(args.dataset, subset_size=args.subset_size)
 
-    # Always run a comparison matrix for the manuscript:
-    # - dense baseline
-    # - sparse with block masks using block_1d Adam kernel
-    # - sparse with block masks using block_2d Adam kernel
-    #
-    # Note: the optimizer selects the actual kernel via RL_CASINO_ADAM_KERNEL.
-    phases = [
-        ("dense", None, "adamw", "none", None),
-        ("block_sparse_99_75_block1d", 99.75, "sparse_adamw", "block", "block_1d"),
-        ("block_sparse_99_75_block2d", 99.75, "sparse_adamw", "block", "block_2d"),
-    ]
-
     gc_flag = not args.no_gradient_checkpointing
     dm = args.device_map
     if dm.lower() in ("none", "null"):
         dm = "none"
 
-    for idx, (phase_name, sparsity_pct, opt, mask_type, adam_kernel) in enumerate(phases):
+    for idx, (phase_name, sparsity_pct, opt, mask_type, adam_kernel, grad_input_mode) in enumerate(
+        phases
+    ):
         slurm_safe_print(
-            f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt} mask_type={mask_type}\n{'#'*60}\n"
+            f"\n{'#'*60}\nPHASE {phase_name}  sparsity={sparsity_pct}  optimizer={opt} "
+            f"mask_type={mask_type}  grad_input={grad_input_mode or 'n/a'}  adam_kernel={adam_kernel or 'n/a'}\n"
+            f"{'#'*60}\n"
         )
         mask_path = None
         tmp_mask = None
@@ -294,6 +330,7 @@ def main():
             extra_log = dict(extra_log)
             extra_log["mask_type"] = mask_type
             extra_log["adam_kernel"] = adam_kernel or ""
+            extra_log["grad_input_mode"] = grad_input_mode or ""
             theory_records.append(
                 {
                     "phase": phase_name,
@@ -322,8 +359,11 @@ def main():
 
         try:
             prev_kernel = os.environ.get("RL_CASINO_ADAM_KERNEL", None)
+            prev_gi = os.environ.get("RL_CASINO_BSR_GRAD_INPUT_MODE", None)
             if adam_kernel:
                 os.environ["RL_CASINO_ADAM_KERNEL"] = adam_kernel
+            if grad_input_mode:
+                os.environ["RL_CASINO_BSR_GRAD_INPUT_MODE"] = grad_input_mode
             sparse_dpo_train(
                 model_name=args.model_name,
                 checkpoint_path=args.checkpoint,
@@ -355,7 +395,7 @@ def main():
                 dataset_key=args.dataset,
                 output_base_dir=args.output_dir,
                 dataset_cache_dir=args.dataset_cache_dir or os.environ["HF_DATASETS_CACHE"],
-                dense_baseline=(phase_name == "dense"),
+                dense_baseline=(sparsity_pct is None),
                 no_delta_callback=True,
                 lr_scheduler_type="linear",
                 num_train_epochs=1,
@@ -377,6 +417,11 @@ def main():
                     os.environ.pop("RL_CASINO_ADAM_KERNEL", None)
                 else:
                     os.environ["RL_CASINO_ADAM_KERNEL"] = prev_kernel
+            if grad_input_mode:
+                if prev_gi is None:
+                    os.environ.pop("RL_CASINO_BSR_GRAD_INPUT_MODE", None)
+                else:
+                    os.environ["RL_CASINO_BSR_GRAD_INPUT_MODE"] = prev_gi
             try:
                 sink.flush()
             except OSError as e:

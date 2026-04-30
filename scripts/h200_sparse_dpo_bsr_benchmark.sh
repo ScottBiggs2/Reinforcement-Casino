@@ -104,8 +104,13 @@ export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
 export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
 
 # Block-sparse grad_input (RL_CASINO_BSR_GRAD_INPUT_MODE=sparse) vs dense matmul.
-# Dense baseline phase does not use SparseLinearLayer; sparse phases benefit from this default.
+# The benchmark driver sets **per-phase** grad_input (dense vs sparse) from the phase grid and restores
+# this value after each phase; the export here is only the fallback between phases / for tools.
 export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-sparse}"
+
+# Sparse grid sparsity targets (comma-separated). Each level adds 8 sparse phases:
+# element mask vs block mask × grad_input dense/sparse × Adam block_1d vs block_2d.
+export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75}"
 
 # Trainer CSV rows follow logging frequency (default: every 25 steps). For short phases, set
 # RL_CASINO_LOGGING_STEPS=1 before sbatch so each step appears in benchmark_training_log.csv.
@@ -121,6 +126,7 @@ echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per 
 echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)"
 echo "TRITON_CACHE_DIR=${TRITON_CACHE_DIR}  RL_CASINO_BSR_QUIET_INJECTION=${RL_CASINO_BSR_QUIET_INJECTION}"
 echo "RL_CASINO_BSR_GRAD_INPUT_MODE=${RL_CASINO_BSR_GRAD_INPUT_MODE}  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS}"
+echo "BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}  (each level → +8 sparse phases; see driver Phase grid line)"
 
 GC_ARGS=()
 if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
@@ -141,4 +147,5 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --dataset_cache_dir "$HF_DATASETS_CACHE" \
   --device_map none \
   --run_label "h200_bsr_${SLURM_JOB_ID:-local}" \
+  --benchmark_sparsities "$BENCHMARK_SPARSITIES" \
   "${GC_ARGS[@]}"
