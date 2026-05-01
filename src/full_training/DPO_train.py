@@ -1,4 +1,15 @@
 import os
+import sys
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+os.environ.pop("WANDB_DISABLED", None)
+os.environ["WANDB_MODE"] = "online"
+os.environ.pop("WANDB_SILENT", None)
+os.environ.setdefault("WANDB_CONSOLE", "off")
+
 import json
 import argparse
 import torch
@@ -54,7 +65,6 @@ def parse_args() -> argparse.Namespace:
         help="Dataset key from registry (light-r1, tulu3, math-step-dpo, codepref) or HuggingFace ID",
     )
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB")
-    parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
     parser.add_argument(
         "--num_steps",
         type=int,
@@ -153,8 +163,7 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     resume_ckpt = resolve_resume_checkpoint(output_dir, args.resume_from_checkpoint)
-    if args.use_wandb:
-        maybe_load_wandb_resume_env(base_dir, resume_ckpt)
+    maybe_load_wandb_resume_env(base_dir, resume_ckpt)
 
     num_steps = args.num_steps
     subset_size = args.subset_size
@@ -270,7 +279,7 @@ def main() -> None:
     cfg = DPOConfig(
         output_dir=output_dir,
         run_name=wandb_run_name,
-        report_to=["wandb"] if args.use_wandb else [],
+        report_to=["wandb"],
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
@@ -323,8 +332,7 @@ def main() -> None:
     }
     trainer.add_callback(RunManifestCallback(base_dir, manifest))
 
-    if args.use_wandb:
-        trainer.add_callback(WandbRunIdCallback(base_dir))
+    trainer.add_callback(WandbRunIdCallback(base_dir))
 
     class FlexibleCheckpointCallback(TrainerCallback):
         """Saves weight deltas vs θ(0) for warm-start masks (omit when resuming from HF checkpoint)."""

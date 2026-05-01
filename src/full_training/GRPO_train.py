@@ -21,6 +21,12 @@ from src.utils.trl_vllm_import_guard import apply_trl_vllm_skip
 
 apply_trl_vllm_skip()
 
+# Training runs always log to W&B; login-node env often disables wandb before `import wandb`.
+os.environ.pop("WANDB_DISABLED", None)
+os.environ["WANDB_MODE"] = "online"
+os.environ.pop("WANDB_SILENT", None)
+os.environ.setdefault("WANDB_CONSOLE", "off")
+
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
@@ -134,7 +140,6 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Subdirectory under output_base_dir for this run (default: model_dataset_grpo_dense).",
     )
-    p.add_argument("--use_wandb", action="store_true")
     p.add_argument("--num_steps", type=int, default=1000)
     p.add_argument("--subset_size", type=int, default=None)
     p.add_argument(
@@ -224,13 +229,11 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     resume_ckpt = resolve_resume_checkpoint(output_dir, args.resume_from_checkpoint)
-    if args.use_wandb:
-        maybe_load_wandb_resume_env(run_dir, resume_ckpt)
+    maybe_load_wandb_resume_env(run_dir, resume_ckpt)
 
     num_steps = args.num_steps
     wandb_project = os.environ.get("WANDB_PROJECT", "huggingface")
-    if args.use_wandb:
-        os.environ["WANDB_PROJECT"] = wandb_project
+    os.environ["WANDB_PROJECT"] = wandb_project
     run_display_name = args.run_name or f"{model_sanitized}_{dataset_sanitized}_grpo_{num_steps}steps"
 
     reward_prof = normalize_reward_profile(args.grpo_reward_profile)
@@ -278,7 +281,7 @@ def main() -> None:
     cfg = GRPOConfig(
         output_dir=output_dir,
         run_name=run_display_name,
-        report_to=["wandb"] if args.use_wandb else ["none"],
+        report_to=["wandb"],
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
@@ -364,7 +367,7 @@ def main() -> None:
     print(f"\n{'=' * 60}\nDense GRPO | run_dir={run_dir}\nresume={resume_ckpt!r}\n{'=' * 60}\n")
     trainer.train(resume_from_checkpoint=resume_ckpt)
 
-    if args.use_wandb and wandb.run is not None:
+    if wandb.run is not None:
         wandb.finish()
 
 

@@ -15,14 +15,20 @@ Key Features:
 
 import os
 import sys
+
+# Add project root to sys.path to resolve 'src' imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
+
+os.environ.pop("WANDB_DISABLED", None)
+os.environ["WANDB_MODE"] = "online"
+os.environ.pop("WANDB_SILENT", None)
+os.environ.setdefault("WANDB_CONSOLE", "off")
+
 import argparse
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
-
-# Add project root to sys.path to resolve 'src' imports
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
@@ -54,7 +60,6 @@ def train(
     mlp_only,
     block_size,
     optimizer_type,
-    use_wandb,
     save_csv,
     grad_accum,
     save_model,
@@ -94,8 +99,7 @@ def train(
     os.makedirs(output_dir, exist_ok=True)
 
     resume_ckpt = resolve_resume_checkpoint(output_dir, resume_from_checkpoint)
-    if use_wandb:
-        maybe_load_wandb_resume_env(run_dir, resume_ckpt)
+    maybe_load_wandb_resume_env(run_dir, resume_ckpt)
 
     use_hf_rolling = save_steps is not None and save_steps > 0 and save_steps < 10**9
     hf_save_total_limit = save_total_limit if save_total_limit is not None else 3
@@ -106,7 +110,7 @@ def train(
     print(f"Run Directory: {run_dir}")
     print(f"Dataset: {dataset_key} ({dataset_name})")
     print(f"Optimizer: {optimizer_type}")
-    print(f"WandB: {use_wandb}, CSV: {save_csv}")
+    print(f"WandB: on (always), CSV: {save_csv}")
     print(
         f"DPO training: max_steps={n_steps}, num_train_epochs=1, peak_lr={learning_rate}, "
         f"warmup_ratio={warmup_ratio}, lr_scheduler=linear (Trainer; align with DPO_train.py / pipeline NUM_STEPS_DPO)"
@@ -168,8 +172,7 @@ def train(
         "hf_save_total_limit": hf_save_total_limit if use_hf_rolling else None,
     }
     callbacks.append(RunManifestCallback(run_dir, manifest))
-    if use_wandb:
-        callbacks.append(WandbRunIdCallback(run_dir))
+    callbacks.append(WandbRunIdCallback(run_dir))
 
     if not resume_ckpt:
         base_state = {}
@@ -189,7 +192,7 @@ def train(
                 batch_size=batch_size,
                 grad_accum=grad_accum,
                 run_name=run_name,
-                use_wandb=use_wandb,
+                use_wandb=True,
                 wandb_project=wandb_project,
             )
         )
@@ -226,7 +229,7 @@ def train(
         save_strategy=save_strategy,
         save_steps=cfg_save_steps,
         save_total_limit=cfg_save_total,
-        report_to="wandb" if use_wandb else "none",
+        report_to="wandb",
         run_name=run_name,
         remove_unused_columns=False,
         bf16=True,
@@ -287,7 +290,6 @@ if __name__ == "__main__":
         default=False,
         help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
     )
-    parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--dataset", type=str, default="light-r1",
                        help="Dataset key (light-r1, tulu3, math-step-dpo, codepref) or HuggingFace ID")
@@ -337,7 +339,6 @@ if __name__ == "__main__":
         mlp_only=args.mlp_only,
         block_size=args.block_size,
         optimizer_type=args.optimizer,
-        use_wandb=args.use_wandb,
         save_csv=args.save_csv,
         grad_accum=args.grad_accum,
         save_model=args.save_model,

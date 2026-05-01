@@ -92,16 +92,9 @@ export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-1}"
 # Set ORCH_DO_RANDOM_MASKS=1 to re-enable.
 export ORCH_DO_RANDOM_MASKS="${ORCH_DO_RANDOM_MASKS:-0}"
 
-# W&B: keep enabled by default; these names come from mask filename + RUN_ID in pipeline_common.sh
-export ORCH_DISABLE_WANDB="${ORCH_DISABLE_WANDB:-0}"
-if [ "${ORCH_DISABLE_WANDB}" = "1" ]; then
-  export WANDB_MODE="disabled"
-  export WANDB_DISABLED="true"
-  export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
-  export WANDB_SILENT="${WANDB_SILENT:-true}"
-else
-  unset WANDB_DISABLED || true
-fi
+unset WANDB_DISABLED 2>/dev/null || true
+unset WANDB_SILENT 2>/dev/null || true
+export WANDB_MODE="online"
 
 ########################################
 # Derived paths + preflight

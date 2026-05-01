@@ -205,24 +205,10 @@ pipeline_setup() {
   export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
   export PYTHONUNBUFFERED=1
 
-  # W&B: dense/sparse helpers below always pass `--use_wandb`, but Explorer login shells frequently
-  # export WANDB_MODE=disabled/WANDB_DISABLED=true (copy-pastes, benchmarks). Nested sbatch
-  # `--export=ALL,...` preserves those vars and HF Trainer will not log despite the CLI flag unless
-  # we clear them. Opt out explicitly with PIPELINE_DISABLE_WANDB=1.
-  PIPELINE_DISABLE_WANDB="${PIPELINE_DISABLE_WANDB:-0}"
-  if [ "${PIPELINE_DISABLE_WANDB}" != "1" ]; then
-    unset WANDB_DISABLED 2>/dev/null || true
-    unset WANDB_SILENT 2>/dev/null || true
-    case "${WANDB_MODE:-}" in
-      ""|disabled)
-        export WANDB_MODE="online"
-        ;;
-      *)
-        :
-        ;;
-    esac
-  fi
-  echo "W&B pipeline: PIPELINE_DISABLE_WANDB=${PIPELINE_DISABLE_WANDB} WANDB_MODE=${WANDB_MODE:-unset}"
+  # DPO_train.py / sparse_dpo_efficiency.py always log to W&B; scrub login-shell disables.
+  unset WANDB_DISABLED 2>/dev/null || true
+  unset WANDB_SILENT 2>/dev/null || true
+  export WANDB_MODE="online"
 
   # Default cuda: warm mask delta scoring uses GPU so Slurm GPU allocations stay utilized (some sites
   # cancel "idle" GPU jobs). even_better_mask_finder.py honors this for magnitude/momentum/fisher.
@@ -385,7 +371,6 @@ run_dense_dpo() {
         "${dpo_ckpt_args[@]}" \
         --output_base_dir "$out_base" \
         --dataset_cache_dir "$cache_dir" \
-        --use_wandb \
         --run_name "$run_name" 2>&1 | tee "logs/full_pipeline_dpo_${ds}_${RUN_ID}.log"
 
     local rc=$?
@@ -822,7 +807,6 @@ run_sparse_dpo_one_mask() {
       "${sparse_ckpt_args[@]}" \
       --optimizer sparse_adamw \
       --block_size 32 \
-      --use_wandb \
       --save_csv \
       --output_base_dir "$out_base" \
       --dataset_cache_dir "$cache_dir" \

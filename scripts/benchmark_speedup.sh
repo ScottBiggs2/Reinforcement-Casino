@@ -109,7 +109,6 @@ run_and_track "Dense + AdamW" \
         --generation_batch_size "$GEN_BATCH_SIZE" \
         --lr "$LR" \
         --optimizer adamw \
-        --use_wandb \
         --output_base_dir "$OUTPUT_DIR" \
         --dataset_cache_dir "$CACHE_DIR"
 
@@ -126,7 +125,6 @@ run_and_track "Dense + SGD" \
         --generation_batch_size "$GEN_BATCH_SIZE" \
         --lr "$LR" \
         --optimizer sgd \
-        --use_wandb \
         --output_base_dir "$OUTPUT_DIR" \
         --dataset_cache_dir "$CACHE_DIR"
 
@@ -146,7 +144,6 @@ run_and_track "Sparse BSR + SparseAdamW" \
         --mask "$MASK_PATH" \
         --block_size_bsr 16 \
         --block_size_adam 128 \
-        --use_wandb \
         --output_base_dir "$OUTPUT_DIR" \
         --dataset_cache_dir "$CACHE_DIR" \
         --save_model false

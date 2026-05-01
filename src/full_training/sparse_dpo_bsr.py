@@ -20,10 +20,6 @@ from typing import Any, Dict, Optional
 
 import torch
 
-# Must override any inherited login-node exports before importing wandb (NFS Slurm logs + console_capture).
-os.environ["WANDB_CONSOLE"] = "off"
-os.environ.setdefault("WANDB_SILENT", "true")
-
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from trl import DPOTrainer, DPOConfig
@@ -143,7 +139,15 @@ def train(
     
     # Set dataset cache directory
     os.environ["HF_DATASETS_CACHE"] = dataset_cache_dir
-    
+
+    # CLI / non-benchmark runs always enable W&B; H200 benchmark calls train(use_wandb=False) after
+    # forcing env disabled — do not override that path.
+    if use_wandb:
+        os.environ.pop("WANDB_DISABLED", None)
+        os.environ["WANDB_MODE"] = "online"
+        os.environ.pop("WANDB_SILENT", None)
+        os.environ.setdefault("WANDB_CONSOLE", "off")
+
     # Resolve dataset via registry
     ds_config = get_dataset_config(dataset_key)
     dataset_name = ds_config["hf_id"]
@@ -563,7 +567,6 @@ if __name__ == "__main__":
         default=False,
         help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
     )
-    parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--save_csv", action="store_true")
     parser.add_argument("--run_name", type=str, default=None, help="Custom run name for WandB and results directory")
     parser.add_argument("--dataset", type=str, default="light-r1",
@@ -624,7 +627,7 @@ if __name__ == "__main__":
         block_size_bsr=args.block_size_bsr,
         block_size_adam=args.block_size_adam,
         optimizer_type=args.optimizer,
-        use_wandb=args.use_wandb,
+        use_wandb=True,
         save_csv=args.save_csv,
         grad_accum=args.grad_accum,
         max_grad_norm=args.max_grad_norm,

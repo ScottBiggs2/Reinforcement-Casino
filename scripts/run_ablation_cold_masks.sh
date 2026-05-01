@@ -52,7 +52,6 @@ run_mask_ablation() {
         --lr $LR \
         --subset_size $SUBSET \
         --optimizer "sparse_adamw" \
-        --use_wandb \
         --run_name "ablation_${MASK_NAME}_dense_bp"
 
     # 2. Sparse Backprop (BSR)
@@ -66,7 +65,6 @@ run_mask_ablation() {
         --lr $LR \
         --subset_size $SUBSET \
         --optimizer "sparse_adamw" \
-        --use_wandb \
         --run_name "ablation_${MASK_NAME}_sparse_bp"
 }
 

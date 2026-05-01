@@ -34,7 +34,7 @@ echo "Starting Random & Ground Truth Mask Ablation..."
 echo "=================================================="
 echo "1. Running Baseline DPO Training"
 echo "=================================================="
-python src/full_training/DPO_train.py --model_name "$MODEL" --use_wandb --run_name "ablation_baseline_dpo"
+python src/full_training/DPO_train.py --model_name "$MODEL" --run_name "ablation_baseline_dpo"
 
 # --- 2. Calculate GT Mask ---
 echo "=================================================="
@@ -93,7 +93,6 @@ run_mask_ablation() {
         --lr $LR \
         --subset_size $SUBSET \
         --optimizer "sparse_adamw" \
-        --use_wandb \
         --run_name "ablation_${MASK_NAME}_dense_bp"
 
     # 2. Sparse Backprop (BSR)
@@ -107,7 +106,6 @@ run_mask_ablation() {
         --lr $LR \
         --subset_size $SUBSET \
         --optimizer "sparse_adamw" \
-        --use_wandb \
         --run_name "ablation_${MASK_NAME}_sparse_bp"
 }
 

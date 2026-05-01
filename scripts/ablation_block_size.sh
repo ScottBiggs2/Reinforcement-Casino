@@ -104,7 +104,6 @@ run_sparse() {
         --output_base_dir "$OUTPUT_DIR" \
         --dataset_cache_dir "$CACHE_DIR" \
         --save_model false \
-        --use_wandb \
         --run_name "$RUN_NAME"; then
         echo "  -> $LABEL: PASSED"
         PASS=$((PASS + 1))

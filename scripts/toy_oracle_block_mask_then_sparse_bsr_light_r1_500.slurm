@@ -49,20 +49,10 @@ export PYTHONUNBUFFERED=1
 export HF_TOKEN="${HF_TOKEN:-}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
-# W&B: ON by default (you asked for reporting with no extra exports).
-# Opt out by exporting USE_WANDB=0.
-USE_WANDB="${USE_WANDB:-1}"
-if [ "${USE_WANDB}" = "0" ]; then
-  export WANDB_MODE="disabled"
-  export WANDB_DISABLED="true"
-  export WANDB_CONSOLE="off"
-  export WANDB_SILENT="true"
-else
-  # Keep console capture off (Slurm/NFS), but allow actual W&B reporting.
-  unset WANDB_DISABLED || true
-  export WANDB_CONSOLE="off"
-  export WANDB_SILENT="true"
-fi
+unset WANDB_DISABLED 2>/dev/null || true
+unset WANDB_SILENT 2>/dev/null || true
+export WANDB_MODE="online"
+export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
 
 # BSR training knobs requested: 2D optimizer blocks + sparse grad_input.
 export RL_CASINO_ADAM_KERNEL="${RL_CASINO_ADAM_KERNEL:-block_2d}"
@@ -148,7 +138,6 @@ timeout --signal=TERM --kill-after=60 "${TIMEOUT_SECONDS}" \
     --optimizer sparse_adamw \
     --block_size_bsr "${BSR_BLOCK_SIZE}" \
     --block_size_adam "${ADAM_BLOCK_SIZE}" \
-    $( [ "${USE_WANDB}" != "0" ] && echo "--use_wandb" ) \
     --save_csv \
     --output_base_dir "${OUT_TRAIN_DIR}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \

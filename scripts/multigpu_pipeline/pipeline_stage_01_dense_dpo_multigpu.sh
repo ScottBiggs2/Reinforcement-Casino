@@ -109,7 +109,6 @@ timeout --signal=TERM --kill-after=60 "${TRAIN_TIMEOUT_PER_DATASET}" \
       "${subset_args[@]}" \
       --output_base_dir "$out_base" \
       --dataset_cache_dir "$cache_dir" \
-      --use_wandb \
       --run_name "$run_name" 2>&1 | tee "logs/full_pipeline_dpo_multigpu_${ds}_${RUN_ID}.log"
 
 echo "===== MULTIGPU STAGE 1 COMPLETE (${RUN_ID}) ====="

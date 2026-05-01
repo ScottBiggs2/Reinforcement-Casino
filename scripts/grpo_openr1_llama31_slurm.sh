@@ -122,28 +122,10 @@ export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
 # openr1_tags | llama_cot — see src/utils/grpo_rewards.py (default: delimiter-aware for Instruct models)
 export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
-# 1 = pass --use_wandb to training; 0 = offline / no W&B UI integration
-export GRPO_USE_WANDB="${GRPO_USE_WANDB:-1}"
-# Login shells / benchmarks often export WANDB_MODE=disabled or WANDB_DISABLED=true; `--export=ALL`
-# on nested sbatch keeps those overrides so HF Trainer never logs despite --use_wandb.
-# When GRPO_USE_WANDB=1, strip disables and insist on a real wandb session (preserve explicit offline/sync).
-if [ "${GRPO_USE_WANDB:-1}" = "1" ]; then
-  unset WANDB_DISABLED 2>/dev/null || true
-  unset WANDB_SILENT 2>/dev/null || true
-  case "${WANDB_MODE:-}" in
-    ""|disabled)
-      export WANDB_MODE="online"
-      ;;
-    *)
-      # Keep e.g. offline / dryrun if user explicitly set them.
-      :
-      ;;
-  esac
-else
-  export WANDB_MODE="${WANDB_MODE:-disabled}"
-  export WANDB_DISABLED="${WANDB_DISABLED:-true}"
-fi
-echo "W&B GRPO env: GRPO_USE_WANDB=${GRPO_USE_WANDB} WANDB_MODE=${WANDB_MODE:-unset} WANDB_DISABLED=${WANDB_DISABLED:-<unset>}"
+# GRPO_train.py / sparse_grpo_bsr.py always log to W&B; scrub login-shell disables that survive sbatch --export=ALL.
+unset WANDB_DISABLED 2>/dev/null || true
+unset WANDB_SILENT 2>/dev/null || true
+export WANDB_MODE="online"
 
 # Sparse only: set 1 to pass --sparse_adamw_lazy_state (lower peak VRAM during SparseAdamW init)
 export GRPO_SPARSE_ADAMW_LAZY="${GRPO_SPARSE_ADAMW_LAZY:-0}"
@@ -190,11 +172,6 @@ if [ -n "${GRPO_RUN_NAME:-}" ]; then
   RUN_NAME_ARGS+=( --run_name "${GRPO_RUN_NAME}" )
 fi
 
-WANDB_ARGS=()
-if [ "${GRPO_USE_WANDB:-1}" = "1" ]; then
-  WANDB_ARGS+=( --use_wandb )
-fi
-
 SPARSE_LAZY_ARGS=()
 if [ "${GRPO_SPARSE_ADAMW_LAZY:-0}" = "1" ]; then
   SPARSE_LAZY_ARGS+=( --sparse_adamw_lazy_state )
@@ -229,7 +206,6 @@ if [ "${GRPO_MODE}" = "dense" ]; then
     --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
     --output_base_dir "${GRPO_DENSE_OUTPUT_BASE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
-    "${WANDB_ARGS[@]}" \
     "${RUN_SLUG_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \
     "${RESUME_ARGS[@]}" \
@@ -259,7 +235,6 @@ elif [ "${GRPO_MODE}" = "sparse" ]; then
     --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
     --output_base_dir "${GRPO_SPARSE_OUTPUT_BASE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
-    "${WANDB_ARGS[@]}" \
     "${RUN_NAME_ARGS[@]}" \
     "${RESUME_ARGS[@]}" \
     "${SPARSE_LAZY_ARGS[@]}"

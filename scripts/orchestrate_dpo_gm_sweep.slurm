@@ -104,9 +104,6 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
 export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-50}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-3}"
 export DPO_CHILD_WALL="${DPO_CHILD_WALL:-07:45:00}"
-# Sparse GPU children pass `--use_wandb`; this overrides inherited WANDB_MODE=disabled on submissions.
-export DPO_SBATCH_WANDB_MODE="${DPO_SBATCH_WANDB_MODE:-online}"
-
 # Mask run id (single dir for this sweep so all 4 masks are colocated).
 export MASK_RUN_ID="${MASK_RUN_ID:-orch_dpo_gm_${SLURM_JOB_ID:-manual}}"
 export MASK_DIR="${MASK_OUT_BASE}/${MASK_RUN_ID}"
@@ -280,9 +277,7 @@ submit_sparse_dpo_child() {
   export_str+=",DPO_SAVE_TOTAL_LIMIT=${DPO_SAVE_TOTAL_LIMIT}"
   export_str+=",DPO_BETA=${DPO_BETA}"
   export_str+=",SPARSE_OUT_BASE=${SPARSE_OUT_BASE}"
-  # Counteract Explorer login-node WANDB disables that survive `sbatch --export=ALL,...`.
-  export_str+=",WANDB_MODE=${DPO_SBATCH_WANDB_MODE:-online}"
-  export_str+=",PIPELINE_DISABLE_WANDB=0"
+  export_str+=",WANDB_MODE=online"
 
   local jid
   jid=$(sbatch --parsable \

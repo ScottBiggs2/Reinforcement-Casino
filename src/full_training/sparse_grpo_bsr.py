@@ -22,6 +22,11 @@ from src.utils.trl_vllm_import_guard import apply_trl_vllm_skip
 
 apply_trl_vllm_skip()
 
+os.environ.pop("WANDB_DISABLED", None)
+os.environ["WANDB_MODE"] = "online"
+os.environ.pop("WANDB_SILENT", None)
+os.environ.setdefault("WANDB_CONSOLE", "off")
+
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
@@ -102,7 +107,6 @@ def train(
     block_size_bsr: int,
     block_size_adam: int,
     optimizer_type: str,
-    use_wandb: bool,
     max_grad_norm: float,
     adam_beta1: float,
     adam_beta2: float,
@@ -146,16 +150,14 @@ def train(
         run_name = "_".join(parts)
 
     wandb_project = os.environ.get("WANDB_PROJECT", "huggingface")
-    if use_wandb:
-        os.environ["WANDB_PROJECT"] = wandb_project
+    os.environ["WANDB_PROJECT"] = wandb_project
 
     run_dir = os.path.join(output_base_dir, run_name)
     output_dir = os.path.join(run_dir, "checkpoints")
     os.makedirs(output_dir, exist_ok=True)
 
     resume_ckpt = resolve_resume_checkpoint(output_dir, resume_from_checkpoint)
-    if use_wandb:
-        maybe_load_wandb_resume_env(run_dir, resume_ckpt)
+    maybe_load_wandb_resume_env(run_dir, resume_ckpt)
 
     print(f"\n{'=' * 60}\nSPARSE GRPO MATH TRAINING\n{'=' * 60}")
     print(f"Dataset: {dataset_key} ({dataset_name})")
@@ -301,7 +303,7 @@ def train(
     cfg = GRPOConfig(
         output_dir=output_dir,
         run_name=run_name,
-        report_to=["wandb"] if use_wandb else ["none"],
+        report_to=["wandb"],
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=grad_accum,
         learning_rate=learning_rate,
@@ -389,7 +391,7 @@ def train(
         tokenizer.save_pretrained(final_save_dir)
         print(f"✓ Full checkpoint saved to {final_save_dir}")
 
-    if use_wandb and wandb.run is not None:
+    if wandb.run is not None:
         wandb.finish()
 
 
@@ -414,7 +416,6 @@ if __name__ == "__main__":
         default=False,
         help="Restrict sparse updates to MLP layers only (default: full model where masks exist)",
     )
-    parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--dataset", type=str, default="math-220k")
     parser.add_argument("--output_base_dir", type=str, default=default_grpo_sparse_outputs())
@@ -490,7 +491,6 @@ if __name__ == "__main__":
         block_size_bsr=args.block_size_bsr,
         block_size_adam=args.block_size_adam,
         optimizer_type=args.optimizer,
-        use_wandb=args.use_wandb,
         max_grad_norm=args.max_grad_norm,
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,

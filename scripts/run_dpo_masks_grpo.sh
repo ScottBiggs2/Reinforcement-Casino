@@ -93,7 +93,6 @@ if [ -n "${MASK_PATH:-}" ] && [ -f "$MASK_PATH" ]; then
         --mask "$MASK_PATH" \
         --output_base_dir "$OUTPUT_DIR" \
         --dataset_cache_dir "$CACHE_DIR" \
-        --use_wandb \
         --save_model true \
         --run_name "$RUN_NAME" 2>&1
 else
@@ -111,7 +110,6 @@ else
         --dataset_cache_dir "$CACHE_DIR" \
         --num_generations "$NUM_GENERATIONS" \
         --generation_batch_size "$GEN_BATCH_SIZE" \
-        --use_wandb \
         --run_name "$RUN_NAME" 2>&1
 fi
 
