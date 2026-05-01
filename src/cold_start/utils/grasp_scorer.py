@@ -1,4 +1,23 @@
-"""Score weights from gradient signal preservation (GRaSP)."""
+"""
+Score weights from gradient signal preservation (GRaSP).
+
+Implementation notes
+--------------------
+- **Sign convention**: this module returns ``S = -(H g) ⊙ w`` for each weight matrix
+  (Wang, Zhang, Grosse, ICLR 2020, eqn. 8). Canonical GraSP pruning keeps the **most
+  negative** scores (i.e., removes weights with the highest scores). Some follow-up work
+  (Frankle et al., ICLR 2021) recommends the **GraSP-ABS** variant that ranks by ``|S|``
+  at high sparsity.
+- **SDPA backend**: the Pass 2 ``with _sdp_force_math_backend_cuda():`` block is purely
+  about attention-kernel selection. Flash / mem-efficient SDPA do not implement
+  higher-order autograd; HVPs through attention require the math backend. This is
+  **decoupled** from mask granularity — element-vs-block selection happens later
+  in ``src/cold_start/inference_mask_finder.py`` via ``--mask-granularity``.
+- **VRAM**: Pass 2 computes an HVP via ``create_graph=True`` and then ``grad(z, params)``.
+  Do not upcast intermediate per-parameter grads to fp32 inside the autograd graph for
+  large models: it can double the graph footprint and trigger CUDA OOM. Keep the inner
+  reduction in bf16 (or the autocast dtype) and only accumulate the final HVPs on CPU.
+"""
 
 from __future__ import annotations
 
@@ -333,10 +352,11 @@ class GRaSPScorer:
                 # Compute current batch gradient g_B with create_graph=True
                 grads_B = torch.autograd.grad(loss, params_to_score, create_graph=True)
 
-                # Scalar z in fp32 for stability and slightly lower graph overhead for bf16 grads.
-                z = torch.zeros((), device=device, dtype=torch.float32)
+                # Scalar z: keep in the same dtype as stored g_avg to avoid fp32 upcasts
+                # on the autograd graph at 8B scale.
+                z = torch.zeros((), device=device, dtype=g_avg_dev[0].dtype)
                 for g_B, g_A in zip(grads_B, g_avg_dev):
-                    z = z + (g_B.float() * g_A.float()).sum()
+                    z = z + (g_B * g_A).sum()
 
                 # Compute grad(z) w.r.t params -> this is H_B * g_avg
                 hvp_B = torch.autograd.grad(z, params_to_score)

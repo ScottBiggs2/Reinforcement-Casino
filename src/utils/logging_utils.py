@@ -235,6 +235,8 @@ class BenchmarkThroughputCallback(TrainerCallback):
 
         # Derived FLOPs/s (proxy): use theory BSR backward FLOPs proxy divided by measured time.
         # Units: proxy is "FLOPs" per optimizer step (see bsr_theory_metrics); timings are ms.
+        # Caveat: t_backward_ms is the **last** gradient-accum micro-batch when detailed timing is on;
+        # eff_bsr_backward_* is indicative only when gradient_accumulation_steps == 1 or for rough trends.
         try:
             flops = float(row.get("theory_bsr_backward_flops_proxy"))  # may be "" on dense phase
         except Exception:

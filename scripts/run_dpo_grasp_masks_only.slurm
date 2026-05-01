@@ -55,12 +55,12 @@ export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 export DPO_GRASP_OBJECTIVE="${DPO_GRASP_OBJECTIVE:-dpo_preference}"
 export DPO_BETA="${DPO_BETA:-0.1}"
-export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-512}"
+export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-256}"
 export COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-32}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-1}"
 
-export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-per_weight}"
+export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-off}"
 export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}"
 export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
 export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-48}"
@@ -98,12 +98,15 @@ if not torch.cuda.is_available():
 print(f"CUDA OK {torch.cuda.get_device_name(0)!r}")
 PY
 
-SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
-           --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
-           --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
-           --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
-if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
-  SNR_ARGS+=( --score-snr-allow-large-ram )
+SNR_ARGS=()
+if [ "${ORCH_SCORE_SNR_MODE}" != "off" ]; then
+  SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
+             --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
+             --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
+             --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+  if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
+    SNR_ARGS+=( --score-snr-allow-large-ram )
+  fi
 fi
 
 run_one_grasp() {

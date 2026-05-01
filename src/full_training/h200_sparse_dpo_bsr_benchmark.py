@@ -13,6 +13,8 @@ per ``--benchmark_sparsities``.
   materialization per sparse phase). Falls back to a full CPU load if meta init fails.
 
 CSV: <output_dir>/benchmark_training_log.csv (via BenchmarkRunLogSink + BenchmarkThroughputCallback).
+**CUDA segment columns** (``t_step_total_ms``, ``t_forward_ms``, ``t_backward_ms``, etc.) are written only
+when ``RL_CASINO_BSR_DETAILED_TIMING=1`` (see ``sparse_dpo_bsr.train``); default is **off** so sweeps stay fast.
 Theory: <output_dir>/benchmark_theory.json (one object per phase) plus ``theory_*`` columns duplicated on
 each CSV row from ``sparse_training_complexity.md``-style proxies (see ``src/utils/bsr_theory_metrics.py``).
 """

@@ -83,13 +83,13 @@ export MAGNITUDE_TARGET_STEP="${MAGNITUDE_TARGET_STEP:-200}"
 # DPO GraSP knobs (mask calibration; uses dpo_preference objective).
 export DPO_GRASP_OBJECTIVE="${DPO_GRASP_OBJECTIVE:-dpo_preference}"
 export DPO_BETA="${DPO_BETA:-0.1}"
-export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-512}"
+export COLD_CAV_SUBSET="${COLD_CAV_SUBSET:-256}"
 export COLD_CAV_NUM_BATCHES="${COLD_CAV_NUM_BATCHES:-32}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-1}"
 
 # SNR knobs (per_weight + log1p — the focused setting).
-export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-per_weight}"
+export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-off}"
 export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}"
 export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
 export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-48}"
@@ -211,12 +211,15 @@ build_grasp_dpo_mask() {
   local out_path="$2"
   local label="$3"
 
-  local SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
-                   --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
-                   --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
-                   --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
-  if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
-    SNR_ARGS+=( --score-snr-allow-large-ram )
+  local -a SNR_ARGS=()
+  if [ "${ORCH_SCORE_SNR_MODE}" != "off" ]; then
+    SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
+               --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
+               --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
+               --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+    if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
+      SNR_ARGS+=( --score-snr-allow-large-ram )
+    fi
   fi
 
   echo ""

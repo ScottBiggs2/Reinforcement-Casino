@@ -72,7 +72,7 @@ export GRPO_N_SAMPLES="${GRPO_N_SAMPLES:-256}"
 export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-1}"
 
 # SNR knobs (per_weight + log1p — the focused setting requested).
-export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-per_weight}"
+export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-off}"
 export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}"
 export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
 export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-96}"
@@ -162,12 +162,15 @@ echo "Delta logging: every ${GRPO_DELTA_LOG_INTERVAL} up to ${GRPO_DELTA_LOG_END
 # 1) Generate GraSP element/SNR mask
 ########################################
 
-SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
-           --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
-           --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
-           --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
-if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
-  SNR_ARGS+=( --score-snr-allow-large-ram )
+SNR_ARGS=()
+if [ "${ORCH_SCORE_SNR_MODE}" != "off" ]; then
+  SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
+             --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
+             --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
+             --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+  if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
+    SNR_ARGS+=( --score-snr-allow-large-ram )
+  fi
 fi
 
 echo ""

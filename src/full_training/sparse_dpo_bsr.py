@@ -50,6 +50,10 @@ def sanitize_model_name(model_name: str) -> str:
     return "".join(c if c.isalnum() or c == "_" else "_" for c in sanitized).strip("_")
 
 
+def _env_truthy(key: str) -> bool:
+    return os.environ.get(key, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _dense_optimizer_torch_or_8bit(
     model: torch.nn.Module,
     *,
@@ -296,13 +300,15 @@ def train(
     # ---------------------------------------------------------------------
     # Optional: segment timing for benchmarking (CUDA event based).
     #
-    # Goal: separate optimizer-step time from the rest of the training step
-    # (forward + backward + trainer overhead). This is critical because BSR
-    # kernels only affect backward/optimizer, while end-to-end step time is
-    # dominated by many other ops (attention, DPO mechanics, recompute).
+    # **Disabled by default.** Set RL_CASINO_BSR_DETAILED_TIMING=1 to enable.
+    # When enabled, wraps compute_loss / accelerator.backward / optimizer.step
+    # with torch.cuda.synchronize() on **every** micro-batch — with large
+    # gradient_accumulation_steps this can slash throughput (serialization vs
+    # overlap). t_forward_ms / t_backward_ms reflect the **last** micro-batch
+    # only; do not sum them to reconcile t_step_total_ms.
     #
-    # This callback augments the Trainer's `logs` dict so the existing
-    # BenchmarkThroughputCallback writes timing columns into the same CSV.
+    # Goal when enabled: separate optimizer-step time from the rest of the
+    # training step (forward + backward + trainer overhead).
     # ---------------------------------------------------------------------
     class _StepOptTimingCallback(TrainerCallback):
         def __init__(self):
@@ -382,6 +388,9 @@ def train(
             )
         )
 
+    _detailed_timing = _env_truthy("RL_CASINO_BSR_DETAILED_TIMING")
+    _timing_cb = None
+
     if benchmark_log_sink is not None and benchmark_phase:
         label = benchmark_optimizer_label or eff_optimizer
         _te = os.environ.get("RL_CASINO_THROUGHPUT_PRINT_EVERY", "").strip()
@@ -396,14 +405,14 @@ def train(
                 extra_log_fields=benchmark_extra_log_fields,
             )
         )
-        _timing_cb = _StepOptTimingCallback()
-        callbacks.append(_timing_cb)
+        if _detailed_timing:
+            _timing_cb = _StepOptTimingCallback()
+            callbacks.append(_timing_cb)
     elif save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
-        _timing_cb = _StepOptTimingCallback()
-        callbacks.append(_timing_cb)
-    else:
-        _timing_cb = None
+        if _detailed_timing:
+            _timing_cb = _StepOptTimingCallback()
+            callbacks.append(_timing_cb)
 
     warmup_kw = {}
     if warmup_steps and warmup_steps > 0:

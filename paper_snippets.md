@@ -105,3 +105,150 @@ Per-device batch size, gradient accumulation, learning rate, LR warmup fraction,
   \item \textbf{Logging:} \texttt{benchmark\_training\_log.csv}: \texttt{t\_step\_total\_ms}, \texttt{t\_forward\_ms}, \texttt{t\_backward\_ms}, \texttt{t\_optim\_ms}; throughput \texttt{cumulative\_steps\_per\_s}, \texttt{cumulative\_samples\_per\_s}; proxy FLOPs from \texttt{theory\_*} and \texttt{eff\_bsr\_backward\_tflops} (theory-bound for masked-linear backward, not full forward pass).
 \end{itemize}
 ```
+
+---
+
+## Appendix — DPO/GRPO hyperparameter transparency tables (env vars)
+
+The project primarily wires hyperparameters through **environment variables** in Slurm wrappers (then forwarded as CLI flags into Python entrypoints). For reviewer transparency, I recommend capturing **two artifacts** per run:
+
+- **(A) “Declared defaults”**: the defaults in the repo scripts (tables below).
+- **(B) “As-run snapshot”**: a sorted env dump from the Slurm `.out` *right before* launching Python.
+
+### How to capture the “as-run snapshot” on HPC (copy/paste)
+
+Put this near the top of your Slurm script (or run in an interactive allocation *before* `sbatch`), then paste the output into the Value column of the tables.
+
+```bash
+echo "=== ENV SNAPSHOT (DPO/GRPO/sparse) ==="
+printenv | egrep '^(MODEL|HF_|SCRATCH_|TRAIN_|EVAL_|(DPO|GRPO|RL_CASINO|BSR|SPARSE|NUM_STEPS)_)[A-Z0-9_]*=' | sort
+echo "=== /ENV SNAPSHOT ==="
+```
+
+---
+
+### DPO (dense + sparse) — pipeline-style env knobs
+
+Defaults are primarily set/propagated by `scripts/pipeline_common.sh` (dense stage) and used again by sparse stages; long-run copy/paste blocks also live in `scripts/dpo_5k_hpc_copypaste.md`.
+
+```latex
+% Requires: \usepackage{booktabs}
+\begin{table}[t]
+  \centering
+  \small
+  \caption{DPO dense/sparse training hyperparameters and runtime knobs (environment variables). Negative numeric entries are placeholders if you haven’t copied the run-time snapshot yet.}
+  \label{tab:appendix-dpo-env}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    Env var & Default (repo) & Value used (paste from snapshot) \\
+    \midrule
+    \texttt{MODEL} & \texttt{meta-llama/Llama-3.1-8B-Instruct} & \texttt{NEG} \\
+    \texttt{DPO\_DATASET\_KEY} & \texttt{tulu3} & \texttt{NEG} \\
+    \texttt{NUM\_STEPS\_DPO} & 250 (\texttt{pipeline\_common.sh}) / 5000 (\texttt{orchestrate\_*}) & -1 \\
+    \texttt{DPO\_LEARNING\_RATE} & \texttt{5e-7} & \texttt{NEG} \\
+    \texttt{DPO\_WARMUP\_RATIO} & \texttt{0.1} & \texttt{NEG} \\
+    \texttt{DPO\_WEIGHT\_DECAY} & \textit{(often 0.0)} & \texttt{NEG} \\
+    \texttt{DPO\_BETA} & \texttt{0.1} & \texttt{NEG} \\
+    \texttt{DPO\_MAX\_LENGTH} & \texttt{1024} & -1 \\
+    \texttt{DPO\_MAX\_PROMPT\_LENGTH} & \texttt{1024} & -1 \\
+    \texttt{DPO\_PER\_DEVICE\_TRAIN\_BATCH\_SIZE} & 2 & -1 \\
+    \texttt{DPO\_GRADIENT\_ACCUMULATION\_STEPS} & 64 & -1 \\
+    \texttt{DPO\_GRADIENT\_CHECKPOINTING} & 1 (typical) & -1 \\
+    \texttt{DPO\_OPTIM} & \texttt{adamw\_8bit} (dense baseline default) & \texttt{NEG} \\
+    \texttt{DPO\_SAVE\_STEPS} & 50 & -1 \\
+    \texttt{DPO\_SAVE\_TOTAL\_LIMIT} & 3 & -1 \\
+    \texttt{HF\_DATASETS\_CACHE} & \textit{scratch path} & \texttt{NEG} \\
+    \texttt{TRAIN\_ENV} & \textit{scratch path} & \texttt{NEG} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+---
+
+### GRPO (Open-R1) — dense + sparse env knobs
+
+Defaults are set by `scripts/grpo_openr1_llama31_slurm.sh` (and optionally orchestrated via `scripts/orchestrate_masks_then_queue_dpo_grpo.slurm` for multi-job pipelines).
+
+```latex
+\begin{table}[t]
+  \centering
+  \small
+  \caption{GRPO (Open-R1 style) training hyperparameters and runtime knobs (environment variables). Negative numeric entries are placeholders.}
+  \label{tab:appendix-grpo-env}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    Env var & Default (repo) & Value used (paste from snapshot) \\
+    \midrule
+    \texttt{MODEL} & \texttt{meta-llama/Llama-3.1-8B-Instruct} & \texttt{NEG} \\
+    \texttt{GRPO\_DATASET} & \texttt{math-220k} & \texttt{NEG} \\
+    \texttt{GRPO\_MODE} & \texttt{dense} & \texttt{NEG} \\
+    \texttt{GRPO\_TARGET\_STEPS} & 1000 (\texttt{grpo\_openr1\_*}) / 5000 (\texttt{orchestrate\_*}) & -1 \\
+    \texttt{GRPO\_RESUME} & \textit{empty} & \texttt{NEG} \\
+    \texttt{GRPO\_LR} & \texttt{5e-6} & \texttt{NEG} \\
+    \texttt{GRPO\_BETA} & \texttt{0.025} & \texttt{NEG} \\
+    \texttt{GRPO\_PER\_DEVICE\_BS} & 2 & -1 \\
+    \texttt{GRPO\_GRAD\_ACCUM} & 4 & -1 \\
+    \texttt{GRPO\_NUM\_GEN} & 8 & -1 \\
+    \texttt{GRPO\_GEN\_BATCH} & 8 & -1 \\
+    \texttt{GRPO\_MAX\_PROMPT\_LENGTH} & 512 & -1 \\
+    \texttt{GRPO\_MAX\_COMPLETION\_LENGTH} & 1024 (\texttt{grpo\_openr1\_*}) / 2048 (\texttt{orchestrate\_*}) & -1 \\
+    \texttt{GRPO\_REWARD\_PROFILE} & \texttt{llama\_cot} & \texttt{NEG} \\
+    \texttt{GRPO\_OPTIM} & \texttt{adamw\_8bit} & \texttt{NEG} \\
+    \texttt{GRPO\_PRECISION} & \texttt{bf16} & \texttt{NEG} \\
+    \texttt{GRPO\_SAVE\_STEPS} & 50 & -1 \\
+    \texttt{GRPO\_SAVE\_TOTAL\_LIMIT} & 3 & -1 \\
+    \texttt{GRPO\_MASK} (sparse) & \textit{unset} & \texttt{NEG} \\
+    \texttt{GRPO\_SPARSE\_ADAMW\_LAZY} & 0 & -1 \\
+    \texttt{HF\_DATASETS\_CACHE} & \textit{scratch path} & \texttt{NEG} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+---
+
+### Sparse-kernel / speed-ablation knobs (BSR + SparseAdamW)
+
+These apply when using BSR sparse backprop and/or SparseAdamW (DPO or GRPO), including the H200 benchmark scripts.
+
+```latex
+\begin{table}[t]
+  \centering
+  \small
+  \caption{Sparse-kernel and logging knobs used in speed ablations (environment variables / flags). Negative numeric entries are placeholders.}
+  \label{tab:appendix-sparse-kernel-knobs}
+  \begin{tabular}{@{}lll@{}}
+    \toprule
+    Knob & Default (repo) & Value used \\
+    \midrule
+    \texttt{RL\_CASINO\_ADAM\_KERNEL} & \texttt{block\_1d} / \texttt{block\_2d} (phase grid) & \texttt{NEG} \\
+    \texttt{RL\_CASINO\_BSR\_GRAD\_INPUT\_MODE} & \texttt{dense} or \texttt{sparse} (phase grid) & \texttt{NEG} \\
+    \texttt{BSR\_USE\_ATOMIC} & 0 & -1 \\
+    \texttt{BSR\_BATCH\_CHUNKS} & 8 & -1 \\
+    \texttt{TRITON\_CACHE\_DIR} & \textit{scratch path} & \texttt{NEG} \\
+    \texttt{RL\_CASINO\_LOGGING\_STEPS} & 1 (benchmark-style) & -1 \\
+    \texttt{RL\_CASINO\_DISABLE\_TQDM} & 1 (Slurm-safe) & -1 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+---
+
+### Note: some “speed ablation” scripts hard-code values
+
+For example `scripts/benchmark_speedup.sh` and `scripts/run_ablation_warm_masks.sh` set several hyperparameters as local bash variables (not env vars). If you use those for a paper figure, consider adding a small table in the appendix that directly lists those script-local settings (model, subset size, steps, batch, grad accum, LR, sparsity, etc.) alongside the git commit hash.
+
+
+python src/warm_start/checkpoint_diff_mask_finder.py \
+  --initial_model "meta-llama/Llama-3.1-8B-Instruct" \
+  --final_model "/scratch/biggs.s/rl_casino_grpo/dense/grpo_dense_openr1_steps800_with_deltas_v1/checkpoints/checkpoint-500" \
+  --sparsity_percent 97.5
+
+  sbatch --export=ALL,HF_TOKEN="$HF_TOKEN",WANDB_API_KEY="$WANDB_API_KEY",\
+GRPO_MODE=sparse,\
+GRPO_TARGET_STEPS=500,\
+GRPO_MASK="/scratch/$USER/rl_casino_grpo/masks/checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt",\
+GRPO_RUN_NAME="grpo_oracle_500", \
+scripts/grpo_openr1_llama31_slurm.sh

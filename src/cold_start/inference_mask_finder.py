@@ -60,6 +60,8 @@ from src.utils.dataset_registry import resolve_hf_dataset_id
 DPO_DATASET_NAME = "tulu3"
 GRPO_DATASET_NAME = "open-r1/OpenR1-Math-220k"
 
+GRASP_RANK_DIRECTIONS = ("abs", "smallest", "largest")
+
 
 # ══════════════════════════════════════════════════════════════
 #  Utilities
@@ -71,6 +73,72 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _grasp_rank_transform_scores(
+    scores: Dict[str, torch.Tensor],
+    *,
+    direction: str,
+) -> Dict[str, torch.Tensor]:
+    """
+    Transform signed GraSP scores so the existing selectors (which keep the *largest*)
+    implement a desired ranking:
+
+    - direction='largest': keep the most positive signed scores (legacy / non-canonical)
+    - direction='smallest': keep the most negative signed scores (canonical GraSP)
+    - direction='abs': keep the largest |score| (GraSP-ABS; Frankle et al. 2021)
+    """
+    if direction not in GRASP_RANK_DIRECTIONS:
+        raise ValueError(f"Unknown grasp rank direction: {direction!r}")
+    if direction == "largest":
+        return scores
+    if direction == "smallest":
+        # selector keeps largest; negate so keeping largest(-s) == keeping smallest(s)
+        return {k: (-v) for k, v in scores.items()}
+    # abs
+    return {k: v.abs() for k, v in scores.items()}
+
+
+def _random_mask_like_counts(
+    masks: Dict[str, torch.Tensor],
+    *,
+    seed: int,
+) -> Dict[str, torch.Tensor]:
+    rng = torch.Generator(device="cpu")
+    rng.manual_seed(int(seed))
+    out: Dict[str, torch.Tensor] = {}
+    for name, m in masks.items():
+        flat = m.reshape(-1)
+        k = int(flat.sum().item())
+        n = int(flat.numel())
+        if k <= 0:
+            out[name] = torch.zeros_like(m, dtype=torch.bool)
+            continue
+        if k >= n:
+            out[name] = torch.ones_like(m, dtype=torch.bool)
+            continue
+        # Random permutation indices then take first k.
+        perm = torch.randperm(n, generator=rng)
+        idx = perm[:k]
+        r = torch.zeros(n, dtype=torch.bool)
+        r[idx] = True
+        out[name] = r.reshape(m.shape)
+    return out
+
+
+def _within_layer_shuffle_mask(
+    masks: Dict[str, torch.Tensor],
+    *,
+    seed: int,
+) -> Dict[str, torch.Tensor]:
+    rng = torch.Generator(device="cpu")
+    rng.manual_seed(int(seed))
+    out: Dict[str, torch.Tensor] = {}
+    for name, m in masks.items():
+        flat = m.reshape(-1)
+        perm = torch.randperm(int(flat.numel()), generator=rng)
+        out[name] = flat[perm].reshape(m.shape).clone()
+    return out
 
 
 def maybe_print_block_sparsity_profile(masks: Dict[str, torch.Tensor], mask_granularity: str, mask_block_size: int, verbose: bool) -> None:
@@ -738,7 +806,7 @@ def main(args):
         else:
             print("[GRaSP] Objective=lm (standard GRaSP: CE loss on chosen sequences)")
 
-        grasp_scores = scorer.score(
+        grasp_scores_signed = scorer.score(
             model,
             tokenizer,
             chosen_texts,
@@ -759,6 +827,9 @@ def main(args):
             score_snr_ram_budget_gb=args.score_snr_ram_budget_gb,
             score_snr_allow_large_ram=args.score_snr_allow_large_ram,
         )
+
+        # Rank-direction transform (default: abs / GraSP-ABS).
+        grasp_scores = _grasp_rank_transform_scores(grasp_scores_signed, direction=args.grasp_rank_direction)
 
         if args.mask_granularity == "block":
             masks = build_binary_masks_from_scores_blockwise(
@@ -782,6 +853,92 @@ def main(args):
             )
         maybe_print_block_sparsity_profile(masks, args.mask_granularity, args.mask_block_size, args.verbose)
 
+        # Optionally emit companion masks from the same cached scores.
+        extra_emits: List[Tuple[str, Dict[str, torch.Tensor]]] = []
+        if args.also_emit_rank_variants:
+            for d in ("largest", "smallest"):
+                variant_scores = _grasp_rank_transform_scores(grasp_scores_signed, direction=d)
+                if args.mask_granularity == "block":
+                    vm = build_binary_masks_from_scores_blockwise(
+                        variant_scores,
+                        sparsity_percent=args.sparsity,
+                        block_size=int(args.mask_block_size),
+                        device="cpu",
+                        local_pool=args.local_pool,
+                        min_layer_keep_ratio=args.min_layer_keep_ratio,
+                        reduction=args.mask_block_reduction,
+                        add_tie_break_noise=False,
+                    )
+                else:
+                    vm = create_mask_from_scores_gpu_efficient(
+                        variant_scores,
+                        sparsity_percent=args.sparsity,
+                        device="cpu",
+                        local_pool=args.local_pool,
+                        min_layer_keep_ratio=args.min_layer_keep_ratio,
+                        add_tie_break_noise=True,
+                    )
+                extra_emits.append((f"_keep_{d}", vm))
+
+        if args.also_emit_no_snr_mask and args.score_snr != "off":
+            # Re-rank using the signed scores already returned (no SNR was applied to these),
+            # but with the same rank-direction as the primary output.
+            # NOTE: SNR multipliers are applied inside GRaSPScorer.score() before returning
+            # final scores. If score_snr != off, grasp_scores_signed already contains SNR-weighted
+            # scores. To get a true "no-SNR" companion, we must re-run scoring with score_snr=off.
+            print(
+                "[GRaSP] also-emit-no-snr-mask requested but score_snr is enabled; "
+                "recomputing scores with score_snr=off (extra work)."
+            )
+            grasp_scores_no_snr_signed = scorer.score(
+                model,
+                tokenizer,
+                chosen_texts,
+                train_device,
+                max_length=args.max_length,
+                batch_size=args.batch_size,
+                mlp_only=False,
+                objective=args.grasp_objective,
+                gradient_checkpointing=args.grasp_gradient_checkpointing,
+                use_autocast=not args.grasp_no_autocast,
+                dataloader=pref_loader,
+                preference_beta=args.grasp_preference_beta,
+                score_snr="off",
+                score_snr_eps=args.score_snr_eps,
+                score_snr_transform=args.score_snr_transform,
+                score_snr_clamp_min=args.score_snr_clamp_min,
+                score_snr_clamp_max=args.score_snr_clamp_max,
+                score_snr_ram_budget_gb=args.score_snr_ram_budget_gb,
+                score_snr_allow_large_ram=args.score_snr_allow_large_ram,
+            )
+            grasp_scores_no_snr = _grasp_rank_transform_scores(
+                grasp_scores_no_snr_signed, direction=args.grasp_rank_direction
+            )
+            if args.mask_granularity == "block":
+                no_snr_masks = build_binary_masks_from_scores_blockwise(
+                    grasp_scores_no_snr,
+                    sparsity_percent=args.sparsity,
+                    block_size=int(args.mask_block_size),
+                    device="cpu",
+                    local_pool=args.local_pool,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    reduction=args.mask_block_reduction,
+                    add_tie_break_noise=False,
+                )
+            else:
+                no_snr_masks = create_mask_from_scores_gpu_efficient(
+                    grasp_scores_no_snr,
+                    sparsity_percent=args.sparsity,
+                    device="cpu",
+                    local_pool=args.local_pool,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    add_tie_break_noise=True,
+                )
+            extra_emits.append(("_no_snr", no_snr_masks))
+        elif args.also_emit_no_snr_mask and args.score_snr == "off":
+            # If SNR is already off, just duplicate (useful for scripting).
+            extra_emits.append(("_no_snr", masks))
+
         meta_extra = {
             "model_name": args.model_name,
             "mode": args.mode,
@@ -791,6 +948,7 @@ def main(args):
             "mask_granularity": args.mask_granularity,
             "mask_block_size": int(args.mask_block_size),
             "mask_block_reduction": args.mask_block_reduction,
+            "grasp_rank_direction": args.grasp_rank_direction,
         }
         if args.score_snr != "off":
             meta_extra.update(
@@ -897,6 +1055,77 @@ def main(args):
             output_path = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity}pct.pt"
 
     save_masks(masks, output_path, metadata)
+
+    # ── Optional additional mask emissions (GraSP) ─────────────
+    if args.method == "grasp":
+        for suffix, m2 in extra_emits:
+            out2 = output_path.replace(".pt", f"{suffix}.pt")
+            md2 = dict(metadata)
+            md2["variant_suffix"] = suffix
+            save_masks(m2, out2, md2)
+
+        # ── GraSP diagnostics ─────────────────────────────────
+        # Keep this light: one random baseline, one |w| baseline, and a Frankle-style within-layer shuffle.
+        diag: Dict[str, object] = {}
+        try:
+            random_masks = _random_mask_like_counts(masks, seed=args.seed + 1)
+            j_rand = compute_jaccard_similarity(masks, random_masks)
+            if j_rand:
+                diag["mean_jaccard_vs_random_layercountmatched"] = float(j_rand["mean_jaccard"])
+                diag["aggregate_jaccard_vs_random_layercountmatched"] = float(j_rand["aggregate_jaccard"])
+        except Exception as e:
+            diag["random_baseline_error"] = repr(e)
+
+        try:
+            # |w| baseline on the same subset of parameters we score (2D params).
+            mag_scores: Dict[str, torch.Tensor] = {}
+            for name, p in model.named_parameters():
+                if p is None or (not getattr(p, "requires_grad", False)):
+                    continue
+                if p.dim() != 2:
+                    continue
+                mag_scores[name] = p.detach().abs().to(device="cpu", dtype=torch.float32)
+            if args.mask_granularity == "block":
+                mag_masks = build_binary_masks_from_scores_blockwise(
+                    mag_scores,
+                    sparsity_percent=args.sparsity,
+                    block_size=int(args.mask_block_size),
+                    device="cpu",
+                    local_pool=args.local_pool,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    reduction=args.mask_block_reduction,
+                    add_tie_break_noise=False,
+                )
+            else:
+                mag_masks = create_mask_from_scores_gpu_efficient(
+                    mag_scores,
+                    sparsity_percent=args.sparsity,
+                    device="cpu",
+                    local_pool=args.local_pool,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    add_tie_break_noise=False,
+                )
+            j_mag = compute_jaccard_similarity(masks, mag_masks)
+            if j_mag:
+                diag["mean_jaccard_vs_magnitude_absw"] = float(j_mag["mean_jaccard"])
+                diag["aggregate_jaccard_vs_magnitude_absw"] = float(j_mag["aggregate_jaccard"])
+        except Exception as e:
+            diag["magnitude_baseline_error"] = repr(e)
+
+        try:
+            shuffled = _within_layer_shuffle_mask(masks, seed=args.seed + 2)
+            j_shuf = compute_jaccard_similarity(masks, shuffled)
+            if j_shuf:
+                diag["mean_jaccard_vs_within_layer_shuffled_self"] = float(j_shuf["mean_jaccard"])
+                diag["aggregate_jaccard_vs_within_layer_shuffled_self"] = float(j_shuf["aggregate_jaccard"])
+        except Exception as e:
+            diag["shuffle_baseline_error"] = repr(e)
+
+        if diag:
+            diag_path = output_path.replace(".pt", "_diag.json")
+            with open(diag_path, "w") as f:
+                json.dump(diag, f, indent=2)
+            print(f"GraSP diagnostics saved to: {diag_path}")
 
     if jaccard_results:
         jaccard_file = output_path.replace(".pt", "_jaccard.json")
@@ -1111,6 +1340,18 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--grasp-rank-direction",
+        dest="grasp_rank_direction",
+        choices=list(GRASP_RANK_DIRECTIONS),
+        default="abs",
+        help=(
+            "[GRaSP] How to convert signed scores into a ranking before mask selection. "
+            "abs = GraSP-ABS (keep largest |S|; recommended at high sparsity). "
+            "smallest = canonical GraSP (keep most negative S). "
+            "largest = legacy / non-canonical (kept for research toggling)."
+        ),
+    )
+    parser.add_argument(
         "--grasp-preference-beta",
         type=float,
         default=1.0,
@@ -1128,6 +1369,23 @@ if __name__ == "__main__":
         action="store_true",
         default=False,
         help="[GRaSP] Disable CUDA bf16 autocast.",
+    )
+    parser.add_argument(
+        "--also-emit-rank-variants",
+        dest="also_emit_rank_variants",
+        action="store_true",
+        default=False,
+        help="[GRaSP] Also write companion masks for keep_largest and keep_smallest from the same cached scores.",
+    )
+    parser.add_argument(
+        "--also-emit-no-snr-mask",
+        dest="also_emit_no_snr_mask",
+        action="store_true",
+        default=False,
+        help=(
+            "[GRaSP] Also write a companion mask with SNR weighting disabled. "
+            "If --score-snr is enabled, this triggers an extra scoring pass."
+        ),
     )
 
     args = parser.parse_args()

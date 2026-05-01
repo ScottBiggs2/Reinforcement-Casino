@@ -60,7 +60,7 @@ export GRPO_N_SAMPLES="${GRPO_N_SAMPLES:-256}"
 export ORCH_MASK_BATCH_SIZE="${ORCH_MASK_BATCH_SIZE:-1}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 
-export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-per_weight}"
+export ORCH_SCORE_SNR_MODE="${ORCH_SCORE_SNR_MODE:-off}"
 export ORCH_SCORE_SNR_TRANSFORM="${ORCH_SCORE_SNR_TRANSFORM:-log1p}"
 export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
 export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-96}"
@@ -105,12 +105,15 @@ sanitize_model_name() {
 MODEL_SANITIZED="$(sanitize_model_name "$MODEL")"
 MASK_GRPO_GRASP_ELEM_SNR="${MASK_GRPO_GRASP_ELEM_SNR:-${GRPO_MASK_DIR}/grpo_grasp_${GRPO_GRASP_OBJECTIVE}_sp${SPARSITY_PERCENT/./_}_${MODEL_SANITIZED}_${GRPO_DATASET_HF##*/}_elem_snr${ORCH_SCORE_SNR_MODE}_${ORCH_SCORE_SNR_TRANSFORM}.pt}"
 
-SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
-           --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
-           --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
-           --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
-if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
-  SNR_ARGS+=( --score-snr-allow-large-ram )
+SNR_ARGS=()
+if [ "${ORCH_SCORE_SNR_MODE}" != "off" ]; then
+  SNR_ARGS=( --score-snr "${ORCH_SCORE_SNR_MODE}"
+             --score-snr-transform "${ORCH_SCORE_SNR_TRANSFORM}"
+             --score-snr-eps "${ORCH_SCORE_SNR_EPS}"
+             --score-snr-ram-budget-gb "${ORCH_SCORE_SNR_RAM_BUDGET_GB}" )
+  if [ "${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-0}" = "1" ]; then
+    SNR_ARGS+=( --score-snr-allow-large-ram )
+  fi
 fi
 
 echo "Sparse output base: ${GRPO_SPARSE_OUTPUT_BASE}"

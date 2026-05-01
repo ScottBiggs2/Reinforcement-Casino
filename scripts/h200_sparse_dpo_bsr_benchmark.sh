@@ -3,8 +3,8 @@
 # Submit from repo root:  sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 #
 # --- Why end-to-end [throughput] often differs only ~few % across phases ---
-# 1) Sparse phases DO use sparse backprop: SparseLinearLayer backward calls Triton (grad_w; optional
-#    sparse grad_i via RL_CASINO_BSR_GRAD_INPUT_MODE). Only the *forward* matmul is still dense F.linear.
+# 1) Sparse phases use Triton for sparse grad_w; this benchmark pins RL_CASINO_BSR_GRAD_INPUT_MODE to
+#    **dense** (standard grad_output @ weight for grad_input). Only the *forward* matmul is dense F.linear.
 #    The dense baseline phase skips injection entirely (standard nn.Linear + dense optimizer).
 # 2) A Llama-style step is dominated by attention/Flash, norms, activations, DPO/ref forward paths,
 #    data loading, and (with GC) extra recomputation — not only MLP/linear matmuls.
@@ -40,6 +40,10 @@ else
 fi
 cd "$REPO_ROOT"
 mkdir -p logs
+
+# Archive-friendly baseline line (also printed below): commit + Slurm job id + scratch output root.
+echo "GIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+echo "SLURM_JOB_ID=${SLURM_JOB_ID:-n/a}"
 
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 # If H200_BSR_OUT was exported before SCRATCH_USER_ROOT existed, it becomes
@@ -103,15 +107,17 @@ export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
 export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
 export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
 
-# Block-sparse grad_input (RL_CASINO_BSR_GRAD_INPUT_MODE=sparse) vs dense matmul.
-# The benchmark driver sets **per-phase** grad_input (dense vs sparse) from the phase grid and restores
-# this value after each phase; the export here is only the fallback between phases / for tools.
-export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-sparse}"
+# Grad_input for BSR backward: **dense** only for this job (no Triton sparse grad_i path).
+# The driver passes --phase_grad_input_modes dense; this export is the fallback if anything reads env early.
+export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-dense}"
 
 # Sparse grid sparsity targets (comma-separated).
-# This wrapper focuses on dense grad_input with SparseAdamW kernel block_1d vs block_2d; each level adds:
-# element mask vs block mask × Adam block_1d vs block_2d = 4 sparse phases (+ 1 dense baseline overall).
+# Each level: element mask vs block mask × Adam block_1d vs block_2d = 4 sparse phases (+ 1 dense baseline overall).
 export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
+
+# Per-micro-batch CUDA timing + synchronize() for CSV columns t_* — default OFF (large gradient_accum
+# makes this path ruin throughput). Set RL_CASINO_BSR_DETAILED_TIMING=1 only for short debug phases.
+export RL_CASINO_BSR_DETAILED_TIMING="${RL_CASINO_BSR_DETAILED_TIMING:-0}"
 
 # Trainer CSV rows follow logging frequency (default: every 25 steps). For short phases, set
 # RL_CASINO_LOGGING_STEPS=1 before sbatch so each step appears in benchmark_training_log.csv.
@@ -131,8 +137,8 @@ echo "MODEL=${MODEL}"
 echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per dense/sparse phase)"
 echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)"
 echo "TRITON_CACHE_DIR=${TRITON_CACHE_DIR}  RL_CASINO_BSR_QUIET_INJECTION=${RL_CASINO_BSR_QUIET_INJECTION}"
-echo "RL_CASINO_BSR_GRAD_INPUT_MODE=${RL_CASINO_BSR_GRAD_INPUT_MODE}  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS}"
-echo "BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}  (each level → +8 sparse phases; see driver Phase grid line)"
+echo "RL_CASINO_BSR_DETAILED_TIMING=${RL_CASINO_BSR_DETAILED_TIMING}  RL_CASINO_BSR_GRAD_INPUT_MODE=${RL_CASINO_BSR_GRAD_INPUT_MODE}  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS}"
+echo "BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}  (each level → +4 sparse phases: elem|block × block_1d|block_2d; grad_input=dense only)"
 
 GC_ARGS=()
 if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
