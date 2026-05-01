@@ -17,6 +17,7 @@
 # This deliberately re-makes GraSP masks rather than relying on the older orch_lr1_grasp6_*
 # outputs, which never finished writing (Pass 1 silently died inside torch.autograd.grad due to
 # reentrant gradient checkpointing on older Transformers; fixed on cav_fixes commit dbbebbc).
+# GRaSP Pass 2 (HVP) can also OOM with checkpointing enabled — see grasp_scorer.py (disable GC for Pass 2).
 #
 #SBATCH --partition=gpu
 #SBATCH --nodes=1

@@ -1,6 +1,11 @@
 
 import os
 
+# Avoid wandb patching sys.stdout for console capture when only callbacks import wandb;
+# cluster stdouts (NFS-backed Slurm .out) can hit errno 116 on wrapped writes.
+os.environ["WANDB_CONSOLE"] = "off"
+os.environ.setdefault("WANDB_SILENT", "true")
+
 import json
 import csv
 import time

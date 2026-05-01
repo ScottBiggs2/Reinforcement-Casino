@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
-from typing import Dict, List, Literal, Optional, Tuple
+from contextlib import contextmanager, nullcontext
+from typing import Dict, Generator, List, Literal, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -22,6 +22,66 @@ from src.cold_start.utils.snr_weighting import (
 # Reuse the same objectives as SNIP
 GRASP_OBJECTIVE_LM = "lm"
 GRASP_OBJECTIVE_DPO_PREFERENCE = "dpo_preference"
+
+
+@contextmanager
+def _sdp_force_math_backend_cuda() -> Generator[None, None, None]:
+    """
+    Flash / memory-efficient SDPA backends do not implement higher-order autograd
+    (GraSP Pass 2 hits: RuntimeError derivative for …_scaled_dot_product_flash_attention_backward).
+    Restrict to the math backend for Pass 2; restore prior flags on exit.
+    """
+    if not torch.cuda.is_available():
+        yield
+        return
+    try:
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        with sdpa_kernel(SDPBackend.MATH):
+            yield
+            return
+    except Exception:
+        pass
+    cuda = torch.backends.cuda
+    ctx = getattr(cuda, "sdp_kernel", None)
+    if ctx is not None:
+        try:
+            with ctx(enable_flash=False, enable_mem_efficient=False, enable_math=True):
+                yield
+                return
+        except Exception:
+            pass
+    getter_setter = []
+    pairs = (
+        ("enable_flash_sdp", "flash_sdp_enabled"),
+        ("enable_mem_efficient_sdp", "mem_efficient_sdp_enabled"),
+        ("enable_math_sdp", "math_sdp_enabled"),
+    )
+    for ena_name, get_name in pairs:
+        enabler = getattr(cuda, ena_name, None)
+        getter = getattr(cuda, get_name, None)
+        if enabler is not None and callable(enabler) and getter is not None and callable(getter):
+            try:
+                getter_setter.append((enabler, bool(getter())))
+            except Exception:
+                continue
+    if not getter_setter:
+        yield
+        return
+    try:
+        if getattr(cuda, "enable_flash_sdp", None):
+            cuda.enable_flash_sdp(False)
+        if getattr(cuda, "enable_mem_efficient_sdp", None):
+            cuda.enable_mem_efficient_sdp(False)
+        if getattr(cuda, "enable_math_sdp", None):
+            cuda.enable_math_sdp(True)
+        yield
+    finally:
+        for enabler, prev in getter_setter:
+            try:
+                enabler(prev)
+            except Exception:
+                pass
 
 
 def _sequence_logprob(logits, input_ids, attention_mask):
@@ -233,11 +293,30 @@ class GRaSPScorer:
         # ---------------------------------------------------------------------
         # Pass 2: Compute H * g_avg using HVPs
         # ---------------------------------------------------------------------
+        # Second-order HVPs (`create_graph=True` then `grad(z, params)`) with gradient
+        # checkpointing still enabled can trigger several failure modes (including CUDA OOM,
+        # or autograd/runtime errors depending on Torch/Transformer build). Pass 1 is done —
+        # disable checkpointing for Pass 2 only to run a standard forward/backward graph.
+        _gc_was_on_before_pass2 = False
+        try:
+            _gc_was_on_before_pass2 = bool(getattr(model, "is_gradient_checkpointing", False))
+        except Exception:
+            _gc_was_on_before_pass2 = False
+        if _gc_was_on_before_pass2 and hasattr(model, "gradient_checkpointing_disable"):
+            print(
+                "[GRaSP] Disabling gradient checkpointing for Pass 2 "
+                "(2nd-order HVPs — avoids checkpoint × create_graph VRAM spike)."
+            )
+            model.gradient_checkpointing_disable()
+
         print(f"[GRaSP] Pass 2: Computing Hessian-gradient product (seen_samples={seen_samples})...")
         hgp_avg = [torch.zeros_like(p, dtype=torch.float32, device="cpu") for p in params_to_score]
-        
-        # Move g_avg to device for HVP calculation
-        g_avg_dev = [g.to(device) for g in g_avg]
+
+        # g_avg as a constant on device; bf16 halves GPU footprint vs fp32 copies.
+        g_avg_store_dtype = amp_dtype if (use_cuda and use_autocast) else torch.float32
+        g_avg_dev = [
+            g.to(device=device, dtype=g_avg_store_dtype, non_blocking=True) for g in g_avg
+        ]
 
         # Reset iterator
         if dataloader is not None:
@@ -245,36 +324,36 @@ class GRaSPScorer:
         else:
             data_iter = range(0, num_samples, batch_size)
 
-        for i, batch_data in enumerate(data_iter):
-            model.zero_grad(set_to_none=True)
-            loss = get_loss(batch_data, i)
-            
-            # Compute current batch gradient g_B with create_graph=True
-            grads_B = torch.autograd.grad(loss, params_to_score, create_graph=True)
-            
-            # Compute scalar product Z = sum(g_B * g_avg)
-            # We must keep the graph for grads_B
-            z = 0
-            for g_B, g_A in zip(grads_B, g_avg_dev):
-                z = z + (g_B * g_A).sum()
-            
-            # Compute grad(z) w.r.t params -> this is H_B * g_avg
-            # We don't need create_graph=True here unless we wanted 3rd order
-            hvp_B = torch.autograd.grad(z, params_to_score)
-            
-            bs = batch_data["chosen_input_ids"].shape[0] if isinstance(batch_data, dict) else batch_size
-            
-            # Accumulate
-            for j, hvp in enumerate(hvp_B):
-                hgp_avg[j] += hvp.detach().cpu().float() * (float(bs) / float(seen_samples))
-            
-            if i % 10 == 0:
-                print(f"  [Pass 2] Batch {i} processed...")
-            
-            # Cleanup to save memory
-            del loss, grads_B, z, hvp_B
-            if use_cuda:
-                torch.cuda.empty_cache()
+        # Pass 2: second derivative through attention — requires math SDPA backend.
+        with _sdp_force_math_backend_cuda():
+            for i, batch_data in enumerate(data_iter):
+                model.zero_grad(set_to_none=True)
+                loss = get_loss(batch_data, i)
+
+                # Compute current batch gradient g_B with create_graph=True
+                grads_B = torch.autograd.grad(loss, params_to_score, create_graph=True)
+
+                # Scalar z in fp32 for stability and slightly lower graph overhead for bf16 grads.
+                z = torch.zeros((), device=device, dtype=torch.float32)
+                for g_B, g_A in zip(grads_B, g_avg_dev):
+                    z = z + (g_B.float() * g_A.float()).sum()
+
+                # Compute grad(z) w.r.t params -> this is H_B * g_avg
+                hvp_B = torch.autograd.grad(z, params_to_score)
+
+                bs = batch_data["chosen_input_ids"].shape[0] if isinstance(batch_data, dict) else batch_size
+
+                # Accumulate
+                for j, hvp in enumerate(hvp_B):
+                    hgp_avg[j] += hvp.detach().cpu().float() * (float(bs) / float(seen_samples))
+
+                if i % 10 == 0:
+                    print(f"  [Pass 2] Batch {i} processed...")
+
+                # Cleanup to save memory
+                del loss, grads_B, z, hvp_B
+                if use_cuda:
+                    torch.cuda.empty_cache()
 
         # ---------------------------------------------------------------------
         # Final: Compute scores S = - (H * g) * w

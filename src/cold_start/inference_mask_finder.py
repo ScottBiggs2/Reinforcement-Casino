@@ -17,6 +17,7 @@ import math
 import os
 import random
 import sys
+import traceback
 from functools import partial
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -1130,4 +1131,13 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    main(args)
+    try:
+        main(args)
+    except BrokenPipeError:
+        raise
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        raise SystemExit(1) from None
