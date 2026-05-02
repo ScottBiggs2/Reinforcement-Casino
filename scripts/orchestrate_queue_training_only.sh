@@ -4,15 +4,31 @@
 # need to drop the afterok dependency on the orchestrator job.
 #
 # From repo root on a login node (Explorer):
-#   export MASK_RUN_ID=orch_masks_6262915   # required; must match the directory under rl_casino_masks
+#   export MASK_RUN_ID=orch_masks_<id>   # required: basename of the mask folder under rl_casino_masks/
+#       Use the same string you passed when running scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
+#       (MASK_RUN_ID, default orch_masks_${SLURM_JOB_ID} → folder orch_masks_6262915 if that job was 6262915).
 #   export ORCH_USE_TRAIN_AUTO_RESUME=1
-#   # match whatever you used for the full orchestrator (paths, steps, ORCH_TRAIN_* , etc.)
+#   # Match paths/steps with that orchestrator run: SCRATCH_USER_ROOT, MASK_OUT_BASE, NUM_STEPS_DPO, ORCH_TRAIN_* , etc.
 #   bash scripts/orchestrate_queue_training_only.sh
 #
-# Dense DPO (Tulu3 + Light-R1) + checkpoint-diff oracle masks + sparse oracle only (no GRPO / no other masks):
+# --- ORCH_QUEUE_DPO_DENSE_AND_ORACLE_ONLY=1 (still export MASK_RUN_ID so MASK_DIR resolves; skips GRPO block) ---
+# Launches:
+#   • sbatch dense_dpo  scripts/pipeline_stage_01_dense.sh  — Tulu3   (DPO_DENSE_RUN_ID, DPO_DATASET_KEY=tulu3)
+#   • sbatch dense_dpo  scripts/pipeline_stage_01_dense.sh  — Light-R1 (DPO_DENSE_RUN_ID_LIGHT_R1)
+#   • If ORCH_QUEUE_ORACLE_MASK_TRAINING=1 (default): run checkpoint_diff_mask_finder.py on the login shell for each
+#     dataset whose ORACLE_FINAL_CKPT_* dir exists, then sbatch sparse_dpo scripts/pipeline_sparse_one_mask.sh for
+#     each oracle .pt that was written (Tulu3 + Light-R1); masks/oracle outputs live under MASK_DIR for this MASK_RUN_ID.
+# Does NOT launch:
+#   • Any GRPO job (dense or sparse), random/Wanda/SNIP/CAV/GRaSP DPO/GRPO from the “training only” GRPO section below
+#   • Mask-generation orchestrator steps (this script never regenerates random/cold masks); sparse oracle needs existing
+#     dense checkpoints at ORACLE_FINAL_CKPT_DIR / ORACLE_FINAL_CKPT_DIR_TULU3 or those oracle lines are skipped with a warning.
+# Dense uses ORCH_TRAIN_GRES (default gpu:h200:1); sparse oracle uses ORCH_TRAIN_GRES_SPARSE (default gpu:a100:1).
+#
+# Example:
+#   export MASK_RUN_ID=orch_masks_6262915
 #   export ORCH_QUEUE_DPO_DENSE_AND_ORACLE_ONLY=1
-#   export ORACLE_FINAL_CKPT_DIR=/scratch/$USER/.../checkpoint-500   # Light-R1 dense output
-#   export ORACLE_FINAL_CKPT_DIR_TULU3=/scratch/$USER/.../checkpoint-500
+#   export ORACLE_FINAL_CKPT_DIR="$SCRATCH_USER_ROOT/rl_casino_train/<run>/checkpoints/.../checkpoint-500"
+#   export ORACLE_FINAL_CKPT_DIR_TULU3="$SCRATCH_USER_ROOT/rl_casino_train/<run>/checkpoints/.../checkpoint-500"
 #   bash scripts/orchestrate_queue_training_only.sh
 #
 # Optional: ORCH_SBATCH_DEPENDENCY=afterok:12345   # only if you want an explicit dependency
