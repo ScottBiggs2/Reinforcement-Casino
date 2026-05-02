@@ -11,7 +11,7 @@ Numeric tables in the **export block** below come from [`scripts/export_h200_bsr
 **Caveats when detailed timing is on:**
 
 - `t_forward_ms` / `t_backward_ms` reflect the **last gradient-accumulation micro-batch only**, not the full optimizer step; `t_other_ms` can look huge if interpreted as “unexplained” time.
-- `eff_bsr_backward_tflops` / `eff_bsr_backward_flops_per_s` divide theory proxies by `t_backward_ms`; treat as **indicative** when grad accum \(>1\).
+- `eff_bsr_backward_tflops` / `eff_bsr_backward_flops_per_s` divide theory (per optimizer step) by backward time; `t_backward_ms` is **one** micro-batch, so downstream code scales by ``trainer_grad_accum_steps``. **Older CSVs** before that fix may be inflated by ~`grad_accum` on those columns — run [`scripts/recalc_benchmark_training_log_eff.py`](scripts/recalc_benchmark_training_log_eff.py) to rewrite them without retraining.
 
 **Quick per-phase summary on-cluster or locally:**
 
@@ -172,6 +172,97 @@ echo "=== /ENV SNAPSHOT ==="
 
 ---
 
+### Mask Construction Stuff
+
+This section matches the implementation in \texttt{src/warm\_start/checkpoint\_diff\_mask\_finder.py} (checkpoint-difference oracle scores) and \texttt{src/utils/mask\_utils.py} (mask selection). \textbf{Scores} are elementwise absolute weight movement,
+\(
+S_p = \bigl| W^{\mathrm{final}}_p - W^{\mathrm{initial}}_p \bigr|
+\)
+for every parameter $p$ present in both state dicts (optional restriction to MLP weight name patterns). \textbf{Masks} are boolean \emph{inclusion} tensors (same shape as $W_p$): train/update only where the mask is true.
+
+The repository’s \textbf{default} selection mode is a \emph{hybrid}: \emph{global} competition for most of the keep budget, plus a small \emph{per-tensor keep floor} so no layer is fully starved at extreme sparsity. Concretely, \texttt{create\_mask\_from\_scores\_gpu\_efficient} uses \texttt{min\_layer\_keep\_ratio}\,$=$\,\texttt{DEFAULT\_MIN\_LAYER\_KEEP\_RATIO}\,$=$\,$0.0025$ unless overridden; the CLI flag \texttt{--local\_pool} switches to strict per-tensor ranking instead. For very large models, the same hybrid logic runs on CPU via a chunked threshold selector (histogram refinement plus a boundary $\mathrm{topk}$); smaller models use a single concatenated score vector and two-pass $\mathrm{topk}$ on the remainder after masking floor positions.
+
+\textbf{Block-structured masks} (\texttt{--mask-granularity block} in the checkpoint script): two-dimensional weight scores are padded to a multiple of $B\times B$, each tile is reduced to one block score (mean or max over the $B^2$ elements), the same hybrid (or local) selector runs on the \emph{block grid}, and selected blocks are expanded to full weight masks by tiling; non-2D parameters get all-false masks so training focuses on masked matrix multiply paths. In \texttt{checkpoint\_diff\_mask\_finder.py}, block masks call the selector with tie-break noise disabled (\texttt{add\_tie\_break\_noise=False}); elementwise checkpoint masks use the API default (noise on).
+
+\begin{algorithm}[h]
+\caption{Checkpoint-difference scores (oracle)}
+\label{alg:mask-scores-ckpt-diff}
+\begin{algorithmic}[1]
+\Require Initial weights $\{W^{\mathrm{init}}_p\}$, final weights $\{W^{\mathrm{fin}}_p\}$; optional MLP-only filter
+\Ensure Score tensors $\{S_p\}$ aligned with trainable parameters
+\For{each name $p$ in $\mathrm{keys}(W^{\mathrm{fin}}) \cap \mathrm{keys}(W^{\mathrm{init}})$}
+    \If{MLP-only mode and $p$ does not match MLP name patterns}
+        \State \textbf{skip} $p$
+    \EndIf
+    \State $S_p \gets \bigl| W^{\mathrm{fin}}_p - W^{\mathrm{init}}_p \bigr|$ (elementwise, promoted to float32 for subtraction)
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{Default hybrid mask: global budget with per-tensor keep floor (\texttt{local\_pool}$=$ false, \texttt{min\_layer\_keep\_ratio}$=r$)}
+\label{alg:mask-hybrid-default}
+\begin{algorithmic}[1]
+\Require Score tensors $\{S_p\}$; target exclusion fraction $\rho \in [0,1]$; floor ratio $r \in [0,1]$; optional tie-break noise on scores (default on in API)
+\Ensure Binary inclusion masks $\{m_p\}$ with total kept count $k_{\mathrm{keep}} = \lfloor (1-\rho)\,N \rfloor$, $N=\sum_p \mathrm{numel}(S_p)$
+\State Sanitize $S_p$ (replace NaN/Inf; dtype float32)
+\If{tie-break enabled}
+    \State add i.i.d.\ Gaussian noise to each $S_p$ with scale $\propto$ global max $|S|$ (fixed RNG seed in code)
+\EndIf
+\State Initialize all $m_p \gets 0$
+\State \textbf{Floor pass:} for each $p$, set $f_p \gets \lfloor r \cdot \mathrm{numel}(S_p) \rfloor$; if $\sum_p f_p > k_{\mathrm{keep}}$, multiply all $f_p$ by $k_{\mathrm{keep}}/\sum_q f_q$ and round down within each layer’s size
+\For{each $p$ with $f_p>0$}
+    \State $I_p^{\mathrm{floor}} \gets$ indices of the top-$f_p$ elements of $\mathrm{vec}(S_p)$
+    \State set $m_p[i]=1$ for $i \in I_p^{\mathrm{floor}}$
+\EndFor
+\State $k_{\mathrm{rem}} \gets k_{\mathrm{keep}} - \sum_p |I_p^{\mathrm{floor}}|$
+\State \textbf{Global pass:} among positions not fixed by the floor, select the $k_{\mathrm{rem}}$ largest scores (implementation: flat $\mathrm{topk}$ on masked concatenated scores if $N$ is below an internal threshold; otherwise chunked threshold search on CPU with histogram refinement, then $\mathrm{topk}$ within the final score bin)
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{Strict local mode (\texttt{--local\_pool}): uniform sparsity per tensor}
+\label{alg:mask-local}
+\begin{algorithmic}[1]
+\Require Score tensors $\{S_p\}$; target exclusion fraction $\rho \in [0,1]$
+\Ensure Binary masks $m_p \in \{0,1\}^{\mathrm{shape}(p)}$
+\State $\alpha \gets 1 - \rho$ \Comment{fraction to keep}
+\For{each tensor $p$}
+    \State $k \gets \max(1,\lfloor \alpha \cdot \mathrm{numel}(S_p) \rfloor)$
+    \State Optionally add tie-break noise to flattened $S_p$
+    \State Let $I$ be indices of top-$k$ values of $\mathrm{vec}(S_p)$
+    \State $m_p \gets 0$; set $m_p[i]=1$ for $i \in I$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{Pure global selection ($r=0$): single ranking across all scored elements}
+\label{alg:mask-global-pure}
+\begin{algorithmic}[1]
+\Require Valid score tensors $\{S_p\}$; target exclusion $\rho$; optional tie-break noise
+\Ensure Binary masks $\{m_p\}$ with $\approx \rho$ fraction of zeros globally
+\State Algorithm~\ref{alg:mask-hybrid-default} with $r=0$ (floor pass empty): keep top-$k_{\mathrm{keep}}$ scores across $\bigcup_p \mathrm{vec}(S_p)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{Block-pooled masks ($B\times B$ tiles on 2D weights only)}
+\label{alg:mask-block}
+\begin{algorithmic}[1]
+\Require Element scores $\{S_p\}$ for 2D tensors; block size $B$; reduction $\in \{\mathrm{mean},\max\}$; same $\rho$, $r$, and \texttt{local\_pool} as above
+\Ensure Expanded inclusion masks per 2D $p$; for non-2D parameters, all-false masks
+\For{each 2D $S_p$ of shape $M\times N$}
+    \State pad $S_p$ to $(M',N')$ multiples of $B$; reduce each $B\times B$ tile to one block score $\tilde{S}_{p,i,j}$ (mean or max over the tile)
+\EndFor
+\State Run Algorithm~\ref{alg:mask-hybrid-default} or \ref{alg:mask-local} on $\{\tilde{S}\}$ with the same $\rho$ (sparsity applies to \emph{blocks}; realized weight sparsity may differ slightly)
+\State Expand each selected block to $B\times B$ ones on the padded grid, crop to $(M,N)$
+\end{algorithmic}
+\end{algorithm}
+
+
+---
+
 ### DPO (dense + sparse) — pipeline-style env knobs
 
 Defaults are primarily set/propagated by `scripts/pipeline_common.sh` (dense stage) and used again by sparse stages; long-run copy/paste blocks also live in `scripts/dpo_5k_hpc_copypaste.md`.
@@ -210,6 +301,47 @@ Defaults are primarily set/propagated by `scripts/pipeline_common.sh` (dense sta
 ```
 
 ---
+
+### GRPO (Open-R1) — training hyperparameters (paper table)
+
+Quantities only (no Slurm names). These match the **locked** production defaults: `scripts/grpo_training_env_defaults.sh` and `docs/hyperparams/open_r1_llama31.yaml`. Dense uses `src/full_training/GRPO_train.py`; sparse uses `src/full_training/sparse_grpo_bsr.py` with the same LR, $\beta$, batch, generation, and sequence caps. Ablations require `GRPO_HPARAM_OVERRIDE=1` in the launcher. With 500 total steps and warmup ratio 0.1, sparse training uses 50 linear warmup steps (integer match to dense).
+
+```latex
+% Requires: \usepackage{booktabs}
+\begin{table}[t]
+  \centering
+  \small
+  \caption{GRPO (Open-R1 Math) training hyperparameters — Llama 3.1 8B Instruct, locked defaults.}
+  \label{tab:grpo-training-hparams}
+  \begin{tabular}{@{}ll@{}}
+    \toprule
+    Hyperparameter & Value \\
+    \midrule
+    Base model & \texttt{meta-llama/Llama-3.1-8B-Instruct} \\
+    Preference / prompt dataset & \texttt{math-220k} (\texttt{open-r1/OpenR1-Math-220k}) \\
+    Training steps & 500 \\
+    Learning rate & $5 \times 10^{-6}$ \\
+    LR schedule & Cosine decay; warmup ratio 0.1 (dense) / 50 warmup steps (sparse) \\
+    Weight decay & 0.0 \\
+    Max gradient norm & 0.1 \\
+    GRPO $\beta$ (KL-style coeff.) & 0.025 \\
+    Per-device train batch size & 2 \\
+    Gradient accumulation steps & 4 \\
+    Effective batch (1 GPU, per optimizer step) & 8 \\
+    \texttt{num\_generations} & 8 \\
+    \texttt{generation\_batch\_size} & 8 \\
+    Max prompt length (tokens) & 512 \\
+    Max completion length (tokens) & 2048 \\
+    Reward / parsing profile & \texttt{llama\_cot} \\
+    Precision & bf16 \\
+    Optimizer (dense) & AdamW 8-bit (\texttt{adamw\_8bit}) \\
+    Optimizer (sparse BSR) & SparseAdamW (\texttt{sparse\_adamw}) \\
+    Checkpoint saves (HF) & Every 50 steps; retain 3 \\
+    Activation gradient checkpointing & Enabled \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
 
 ### GRPO (Open-R1) — dense + sparse env knobs
 

@@ -441,7 +441,9 @@ def collect_cav_scores(
     )
 
     scorer = CAVProbeScorer()
-    neuron_scores = scorer.score(positive_acts, negative_acts, mag_weight=1.0)
+    neuron_scores, probe_report = scorer.score_with_probe_report(
+        positive_acts, negative_acts, mag_weight=1.0
+    )
 
     if normalize_per_layer:
         for k, v in list(neuron_scores.items()):
@@ -458,7 +460,7 @@ def collect_cav_scores(
         print("[collect_cav_scores] Warning: mapped weight_scores is empty.")
         print(f"  neuron score layers: {len(neuron_scores)}")
         print("  sample neuron keys:", list(neuron_scores.keys())[:5])
-    return weight_scores
+    return weight_scores, probe_report
 
 
 def collect_cav_scores_with_debug(
@@ -761,9 +763,10 @@ def main(args):
     score_variance_summary = None
     mask_sparsity_summary = None
     erank_summary = None
+    cav_probe_report = None
 
     def _compute_cav_scores_once():
-        nonlocal layer_data, module_to_weight
+        nonlocal layer_data, module_to_weight, cav_probe_report
         if args.debug_out_dir:
             s, layer_data_local, module_to_weight_local = collect_cav_scores_with_debug(
                 model=model,
@@ -779,9 +782,10 @@ def main(args):
             )
             layer_data = layer_data_local
             module_to_weight = module_to_weight_local
+            cav_probe_report = None
             return s
 
-        return collect_cav_scores(
+        ws, pr = collect_cav_scores(
             model=model,
             dataloader=dataloader,
             device=device,
@@ -793,6 +797,8 @@ def main(args):
             normalize_per_layer=not args.no_layer_norm,
             use_weight_abs=args.weight_abs,
         )
+        cav_probe_report = pr
+        return ws
 
     if args.method == "activation":
         score_dict = collect_activation_scores(
@@ -924,6 +930,12 @@ def main(args):
     else:
         output_file = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity_percent}pct.pt"
     save_masks(masks, output_file, metadata)
+
+    if args.method == "cav" and cav_probe_report is not None:
+        probe_path = output_file.replace(".pt", "_probe_report.json")
+        with open(probe_path, "w", encoding="utf-8") as f:
+            json.dump(cav_probe_report, f, indent=2)
+        print(f"CAV linear-probe report saved to: {probe_path}")
     
     if jaccard_results:
         jaccard_file = output_file.replace(".pt", "_jaccard.json")

@@ -631,6 +631,7 @@ def main(args):
 
     # ── Dispatch by method ────────────────────────────────────
     score_variance_summary = None
+    cav_probe_report = None
 
     if args.method == "fisher":
         calibration_data = _encode_for_fisher(tokenizer, chosen_texts, args.max_length, input_device)
@@ -674,7 +675,9 @@ def main(args):
 
         print("[CAV] Training linear probes...")
         scorer = CAVProbeScorer()
-        neuron_scores = scorer.score(pos_acts, neg_acts, mag_weight=args.mag_weight)
+        neuron_scores, cav_probe_report = scorer.score_with_probe_report(
+            pos_acts, neg_acts, mag_weight=args.mag_weight
+        )
         masks = scorer.scores_to_masks(
             neuron_scores, model,
             sparsity_percent=args.sparsity,
@@ -1055,6 +1058,12 @@ def main(args):
             output_path = f"masks/cold_{args.method}_{model_sanitized}_sparsity{args.sparsity}pct.pt"
 
     save_masks(masks, output_path, metadata)
+
+    if cav_probe_report is not None:
+        probe_path = output_path.replace(".pt", "_probe_report.json")
+        with open(probe_path, "w", encoding="utf-8") as f:
+            json.dump(cav_probe_report, f, indent=2)
+        print(f"CAV linear-probe report saved to: {probe_path}")
 
     # ── Optional additional mask emissions (GraSP) ─────────────
     if args.method == "grasp":

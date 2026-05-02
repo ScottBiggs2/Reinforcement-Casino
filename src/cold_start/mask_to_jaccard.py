@@ -72,6 +72,14 @@ def main():
         "--device", type=str, default="cpu", choices=["cpu", "cuda"],
         help="Computation device.",
     )
+    parser.add_argument(
+        "--extended-aggregates",
+        type=str,
+        default="none",
+        choices=("none", "param_bucket", "decoder_layer", "both"),
+        help="Add size-weighted Jaccard breakdowns: by attn/mlp/norm/other, by decoder "
+        "layer index, or both (global aggregate always in `jaccard`).",
+    )
     args = parser.parse_args()
 
     if args.device == "cuda" and not torch.cuda.is_available():
@@ -106,6 +114,21 @@ def main():
         },
         "per_layer_jaccard": jaccard["per_layer"],
     }
+    ext = args.extended_aggregates
+    if ext != "none":
+        from src.cold_start.mask_jaccard_aggregates import extended_jaccard_report
+
+        ex = extended_jaccard_report(
+            masks_a,
+            masks_b,
+            device=args.device,
+            include_param_buckets=ext in ("param_bucket", "both"),
+            include_decoder_layers=ext in ("decoder_layer", "both"),
+        )
+        if "by_param_bucket" in ex:
+            report["jaccard_by_param_bucket"] = ex["by_param_bucket"]
+        if "by_decoder_layer" in ex:
+            report["jaccard_by_decoder_layer"] = ex["by_decoder_layer"]
     if meta_a:
         report["metadata_a"] = meta_a
     if meta_b:

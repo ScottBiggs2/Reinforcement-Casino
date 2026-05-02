@@ -219,6 +219,7 @@ class BenchmarkThroughputCallback(TrainerCallback):
         sps = step / wall if wall > 0 else 0.0
         sms = (step * samples_per_step) / wall if wall > 0 else 0.0
 
+        ga = max(1, int(getattr(args, "gradient_accumulation_steps", 1) or 1))
         row: Dict[str, Any] = {
             "phase": self.phase,
             "sparsity_target_pct": (
@@ -229,14 +230,16 @@ class BenchmarkThroughputCallback(TrainerCallback):
             "wall_time_s": round(wall, 6),
             "cumulative_steps_per_s": round(sps, 8),
             "cumulative_samples_per_s": round(sms, 6),
+            "trainer_grad_accum_steps": ga,
+            "trainer_per_device_train_batch_size": int(args.per_device_train_batch_size),
         }
         row.update(self._extra_log_fields)
         row.update(logs)
 
-        # Derived FLOPs/s (proxy): use theory BSR backward FLOPs proxy divided by measured time.
-        # Units: proxy is "FLOPs" per optimizer step (see bsr_theory_metrics); timings are ms.
-        # Caveat: t_backward_ms is the **last** gradient-accum micro-batch when detailed timing is on;
-        # eff_bsr_backward_* is indicative only when gradient_accumulation_steps == 1 or for rough trends.
+        # Derived FLOPs/s (proxy): theory_bsr_backward_flops_proxy is per **optimizer step**
+        # (b_tokens includes grad accum; see bsr_theory_metrics). t_backward_ms from detailed
+        # timing is only the **last** micro-batch backward; scale by ga so divisor matches
+        # one full step's backward work (assumes similar cost per micro-batch).
         try:
             flops = float(row.get("theory_bsr_backward_flops_proxy"))  # may be "" on dense phase
         except Exception:
@@ -252,8 +255,9 @@ class BenchmarkThroughputCallback(TrainerCallback):
                 step_ms = None
 
             if bwd_ms is not None and bwd_ms > 0:
-                row["eff_bsr_backward_flops_per_s"] = round(flops / (bwd_ms / 1e3), 6)
-                row["eff_bsr_backward_tflops"] = round((flops / (bwd_ms / 1e3)) / 1e12, 6)
+                bwd_step_ms = bwd_ms * float(ga)
+                row["eff_bsr_backward_flops_per_s"] = round(flops / (bwd_step_ms / 1e3), 6)
+                row["eff_bsr_backward_tflops"] = round((flops / (bwd_step_ms / 1e3)) / 1e12, 6)
             if step_ms is not None and step_ms > 0:
                 row["eff_bsr_backward_flops_per_s_over_e2e_step"] = round(flops / (step_ms / 1e3), 6)
                 row["eff_bsr_backward_tflops_over_e2e_step"] = round((flops / (step_ms / 1e3)) / 1e12, 6)

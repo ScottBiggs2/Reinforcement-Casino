@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Slurm job: N-mask interpretation suite (pairwise Jaccard JSON, optional CKA, layer_metrics CSV, rollup).
+#
+# Prepare a list file with one mask path per line (absolute paths recommended on cluster).
+# Lines starting with # and blank lines are ignored. Example:
+#
+#   # masks/suite_dummy_test.txt
+#   /scratch/$USER/masks/run_a/mask1.pt
+#   /scratch/$USER/masks/run_b/mask2.pt
+#
+# Submit from repo root:
+#   export MASK_SUITE_LIST_FILE=/scratch/$USER/masks/suite_dummy_test.txt
+#   export MASK_SUITE_OUT_DIR=/scratch/$USER/mask_suite_out/run_${USER}_test1
+#   sbatch scripts/sbatch_mask_interpretation_suite.sh
+#
+# Optional (sbatch --export=ALL,... or shell before sbatch):
+#   MASK_SUITE_LABELS="dpo_a grpo_b fisher_c"   # same count as masks; default = file stems
+#   MASK_SUITE_DEVICE=cpu                       # Jaccard / export only
+#   MASK_SUITE_EXTENDED=both                    # none|param_bucket|decoder_layer|both
+#   MASK_SUITE_SKIP_EFFECTIVE_RANK=1            # default 1 (fast); 0 for full SVD
+#   MASK_SUITE_HEATMAP=1                        # jaccard_matrix.png (needs matplotlib)
+#   MASK_SUITE_RUN_CKA=1                        # needs GPU job; set partition/GRES below
+#   MASK_SUITE_CKA_MODEL=google/gemma-3-270m-it
+#   MASK_SUITE_CKA_DATASET=tulu3
+#   MASK_SUITE_CKA_DEVICE=cuda
+#   MASK_SUITE_CKA_N_SAMPLES=64
+#   MASK_SUITE_CKA_BATCH_SIZE=4
+#
+# Default resources are CPU-only (Jaccard + CSV). For MASK_SUITE_RUN_CKA=1, use a GPU partition,
+# e.g. sbatch --partition=gpu --gres=gpu:a100:1 --mem=128G --time=04:00:00 scripts/sbatch_mask_interpretation_suite.sh
+# or edit the #SBATCH lines below to match your site.
+#
+# Smoke / debug (two random masks, different seeds, full bells): scripts/sbatch_mask_interpretation_suite_smoke.sh
+#
+#SBATCH --partition=short
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=02:00:00
+#SBATCH --job-name=mask_interp_suite
+#SBATCH --output=logs/mask_interpretation_suite_%j.out
+#SBATCH --error=logs/mask_interpretation_suite_%j.err
+
+set -euo pipefail
+
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  _SCRIPT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${_SCRIPT_HOME}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
+
+# shellcheck source=/dev/null
+source "${REPO_ROOT}/scripts/pipeline_common.sh"
+pipeline_setup
+
+mkdir -p logs
+
+MASK_SUITE_LIST_FILE="${MASK_SUITE_LIST_FILE:-}"
+if [ -z "$MASK_SUITE_LIST_FILE" ] || [ ! -f "$MASK_SUITE_LIST_FILE" ]; then
+  echo "ERROR: set MASK_SUITE_LIST_FILE to a readable text file (one mask .pt path per line)." >&2
+  echo "  Example: export MASK_SUITE_LIST_FILE=/scratch/\${USER}/masks/my_suite.txt" >&2
+  exit 2
+fi
+
+MASK_SUITE_OUT_DIR="${MASK_SUITE_OUT_DIR:-/scratch/${USER}/mask_interpretation_suite/run_${SLURM_JOB_ID:-local}}"
+MASK_SUITE_DEVICE="${MASK_SUITE_DEVICE:-cpu}"
+MASK_SUITE_EXTENDED="${MASK_SUITE_EXTENDED:-both}"
+MASK_SUITE_SKIP_EFFECTIVE_RANK="${MASK_SUITE_SKIP_EFFECTIVE_RANK:-1}"
+MASK_SUITE_HEATMAP="${MASK_SUITE_HEATMAP:-0}"
+MASK_SUITE_RUN_CKA="${MASK_SUITE_RUN_CKA:-0}"
+MASK_SUITE_CKA_MODEL="${MASK_SUITE_CKA_MODEL:-google/gemma-3-270m-it}"
+MASK_SUITE_CKA_DATASET="${MASK_SUITE_CKA_DATASET:-tulu3}"
+MASK_SUITE_CKA_DEVICE="${MASK_SUITE_CKA_DEVICE:-cuda}"
+MASK_SUITE_CKA_N_SAMPLES="${MASK_SUITE_CKA_N_SAMPLES:-64}"
+MASK_SUITE_CKA_BATCH_SIZE="${MASK_SUITE_CKA_BATCH_SIZE:-4}"
+
+if [ "$MASK_SUITE_RUN_CKA" = "1" ]; then
+  export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+fi
+
+mapfile -t _raw_lines < "$MASK_SUITE_LIST_FILE"
+paths=()
+for line in "${_raw_lines[@]}"; do
+  line="${line%%#*}"
+  line="${line#"${line%%[![:space:]]*}"}"
+  line="${line%"${line##*[![:space:]]}"}"
+  [ -z "$line" ] && continue
+  paths+=("$line")
+done
+
+if [ "${#paths[@]}" -lt 2 ]; then
+  echo "ERROR: need at least two mask paths in $MASK_SUITE_LIST_FILE (got ${#paths[@]})." >&2
+  exit 2
+fi
+
+for p in "${paths[@]}"; do
+  if [ ! -f "$p" ]; then
+    echo "ERROR: mask file not found: $p" >&2
+    exit 2
+  fi
+done
+
+echo "REPO_ROOT=$REPO_ROOT"
+echo "LIST_FILE=$MASK_SUITE_LIST_FILE"
+echo "OUT_DIR=$MASK_SUITE_OUT_DIR"
+echo "N_MASKS=${#paths[@]}"
+echo "RUN_CKA=$MASK_SUITE_RUN_CKA DEVICE=$MASK_SUITE_DEVICE EXTENDED=$MASK_SUITE_EXTENDED"
+
+cmd=( "$TRAIN_PY" "${REPO_ROOT}/src/cold_start/mask_interpretation_suite.py" )
+cmd+=( "${paths[@]}" )
+cmd+=( --out-dir "$MASK_SUITE_OUT_DIR" )
+cmd+=( --device "$MASK_SUITE_DEVICE" )
+cmd+=( --extended-aggregates "$MASK_SUITE_EXTENDED" )
+cmd+=( --cka-model "$MASK_SUITE_CKA_MODEL" )
+cmd+=( --cka-dataset "$MASK_SUITE_CKA_DATASET" )
+cmd+=( --cka-device "$MASK_SUITE_CKA_DEVICE" )
+cmd+=( --cka-n-samples "$MASK_SUITE_CKA_N_SAMPLES" )
+cmd+=( --cka-batch-size "$MASK_SUITE_CKA_BATCH_SIZE" )
+
+if [ -n "${MASK_SUITE_LABELS:-}" ]; then
+  # shellcheck disable=2206
+  _labels=( $MASK_SUITE_LABELS )
+  if [ "${#_labels[@]}" -ne "${#paths[@]}" ]; then
+    echo "ERROR: MASK_SUITE_LABELS count (${#_labels[@]}) must equal mask count (${#paths[@]})." >&2
+    exit 2
+  fi
+  cmd+=( --labels "${_labels[@]}" )
+fi
+
+if [ "$MASK_SUITE_SKIP_EFFECTIVE_RANK" = "1" ]; then
+  cmd+=( --skip-effective-rank )
+fi
+
+if [ "$MASK_SUITE_HEATMAP" = "1" ]; then
+  cmd+=( --heatmap )
+fi
+
+if [ "$MASK_SUITE_RUN_CKA" = "1" ]; then
+  cmd+=( --run-cka )
+fi
+
+echo "RUN: ${cmd[*]}"
+exec "${cmd[@]}"

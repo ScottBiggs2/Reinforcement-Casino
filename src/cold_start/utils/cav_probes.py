@@ -1,51 +1,102 @@
 """Score MLP neurons with linear probes over chosen vs rejected activations."""
 
-import torch
+from typing import Any, Dict, Tuple
+
 import numpy as np
+import torch
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
 from sklearn.preprocessing import StandardScaler
 
 
 class CAVProbeScorer:
     """Train one logistic probe per layer and convert scores into masks."""
 
+    def _probe_one_layer(
+        self,
+        pos: np.ndarray,
+        neg: np.ndarray,
+        mag_weight: float,
+    ) -> Tuple[torch.Tensor, Dict[str, Any]]:
+        X = np.concatenate([pos, neg], axis=0)
+        y = np.array([1] * len(pos) + [0] * len(neg), dtype=np.int64)
+
+        scaler = StandardScaler()
+        X_sc = scaler.fit_transform(X)
+
+        clf = LogisticRegression(
+            penalty="l1",
+            solver="liblinear",
+            C=1.0,
+            max_iter=300,
+            random_state=42,
+        )
+        clf.fit(X_sc, y)
+
+        cav = np.abs(clf.coef_[0])
+        mag = np.mean(np.abs(pos), axis=0)
+
+        cav_norm = cav / (cav.max() + 1e-8)
+        mag_norm = mag / (mag.max() + 1e-8)
+
+        combined = cav_norm + mag_weight * mag_norm
+
+        metrics: Dict[str, Any] = {
+            "n_pos": int(len(pos)),
+            "n_neg": int(len(neg)),
+            "train_accuracy": float(clf.score(X_sc, y)),
+            "coef_l1_norm": float(np.abs(clf.coef_).sum()),
+            "cv_accuracy_mean": None,
+        }
+        if len(y) >= 12:
+            try:
+                n_splits = min(3, max(2, len(y) // 6))
+                cv = cross_val_score(
+                    LogisticRegression(
+                        penalty="l1",
+                        solver="liblinear",
+                        C=1.0,
+                        max_iter=300,
+                        random_state=42,
+                    ),
+                    X_sc,
+                    y,
+                    cv=n_splits,
+                )
+                metrics["cv_accuracy_mean"] = float(np.mean(cv))
+            except Exception:
+                pass
+
+        return torch.tensor(combined, dtype=torch.float32), metrics
+
     def score(self, positive_acts, negative_acts, mag_weight: float = 1.0):
         """Return per-neuron scores, optionally blended with activation magnitude."""
+        scores, _ = self.score_with_probe_report(positive_acts, negative_acts, mag_weight)
+        return scores
+
+    def score_with_probe_report(
+        self, positive_acts, negative_acts, mag_weight: float = 1.0
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
+        """Return (neuron_scores dict, probe_report) for interpretation / JSON export."""
         neuron_scores = {}
         layer_names = sorted(set(positive_acts) & set(negative_acts))
         print(f"[CAVProbeScorer] Scoring {len(layer_names)} layers (mag_weight={mag_weight})...")
 
+        layers_meta: Dict[str, Any] = {}
         for layer_name in layer_names:
-            pos = positive_acts[layer_name].numpy()   # [N_pos, D]
-            neg = negative_acts[layer_name].numpy()   # [N_neg, D]
-
-            X = np.concatenate([pos, neg], axis=0)
-            y = np.array([1] * len(pos) + [0] * len(neg))
-
-            scaler = StandardScaler()
-            X_sc = scaler.fit_transform(X)
-
-            clf = LogisticRegression(
-                penalty="l1",
-                solver="liblinear",
-                C=1.0,
-                max_iter=300,
-                random_state=42,
-            )
-            clf.fit(X_sc, y)
-
-            cav = np.abs(clf.coef_[0])  # [D]
-
-            mag = np.mean(np.abs(pos), axis=0)  # [D]
-
-            cav_norm = cav / (cav.max() + 1e-8)
-            mag_norm = mag / (mag.max() + 1e-8)
-
-            combined = cav_norm + mag_weight * mag_norm
-            neuron_scores[layer_name] = torch.tensor(combined, dtype=torch.float32)
+            pos = positive_acts[layer_name].numpy()
+            neg = negative_acts[layer_name].numpy()
+            combined, meta = self._probe_one_layer(pos, neg, mag_weight)
+            neuron_scores[layer_name] = combined
+            layers_meta[layer_name] = meta
 
         print("[CAVProbeScorer] Probe training done.")
-        return neuron_scores
+        report = {
+            "version": 1,
+            "mag_weight": float(mag_weight),
+            "layers": layers_meta,
+        }
+        return neuron_scores, report
 
     def scores_to_masks(self, neuron_scores, model, sparsity_percent=90.0, local_pool=False):
         """Broadcast neuron scores to `gate_proj`, `up_proj`, and `down_proj` masks.

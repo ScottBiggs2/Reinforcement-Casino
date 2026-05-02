@@ -12,6 +12,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def to_float(x):
@@ -98,6 +99,31 @@ def theoretical_jaccard_variance(rho: float, n_indices: int) -> float:
     if den <= 0:
         return float("nan")
     return 2.0 * (1.0 - rho) / (float(n_indices) * den)
+
+
+def mc_global_jaccard_quantiles(
+    density_a: float,
+    density_b: float,
+    n_indices: int,
+    trials: int,
+    seed: int,
+) -> Optional[tuple]:
+    """Empirical 5th/95th percentile of global Jaccard under iid Bernoulli(ρ) masks (single draw per trial)."""
+    if trials <= 0 or n_indices < 1:
+        return None
+    if math.isnan(density_a) or math.isnan(density_b):
+        return None
+    rng = np.random.default_rng(seed)
+    da = float(density_a)
+    db = float(density_b)
+    samples = np.empty(trials, dtype=np.float64)
+    for t in range(trials):
+        a = rng.random(n_indices) < da
+        b = rng.random(n_indices) < db
+        inter = np.logical_and(a, b).sum()
+        union = np.logical_or(a, b).sum()
+        samples[t] = inter / union if union > 0 else 0.0
+    return float(np.percentile(samples, 5)), float(np.percentile(samples, 95))
 
 
 def theoretical_cka_mean_and_std(total_indices: int) -> tuple:
@@ -208,8 +234,10 @@ def plot_one(
     cka_null_value: Optional[float] = None,
     log_y_floor: float = 1e-12,
     jaccard_log_floor: float = 1e-4,
+    jaccard_mc_trials: int = 0,
+    jaccard_mc_seed: int = 42,
 ):
-    """random_trials / random_seed are ignored (kept for CLI compatibility)."""
+    """random_trials is deprecated; use jaccard_mc_trials for Monte Carlo null band."""
     rows = read_rows(csv_path)
     if not rows:
         return False
@@ -292,6 +320,28 @@ def plot_one(
                 y_scale=y_scale,
                 display_floor=jac_floor,
             )
+        mc_trials = max(int(jaccard_mc_trials), int(random_trials))
+        if mc_trials > 0:
+            mc = mc_global_jaccard_quantiles(
+                da_g, db_g, n_tot, mc_trials, int(jaccard_mc_seed or random_seed)
+            )
+            if mc is not None:
+                q_lo, q_hi = mc
+                if y_scale == "log":
+                    lo_d = _clamp_positive_log(q_lo, jac_floor)
+                    hi_d = _clamp_positive_log(q_hi, jac_floor)
+                    if lo_d > hi_d:
+                        lo_d, hi_d = hi_d, lo_d
+                else:
+                    lo_d, hi_d = q_lo, q_hi
+                ax.axhspan(
+                    lo_d,
+                    hi_d,
+                    color="mediumpurple",
+                    alpha=0.14,
+                    zorder=0,
+                    label="MC global Jaccard 5–95% (iid; N_tot)",
+                )
         ax.plot(
             x,
             jac_plot,
@@ -314,8 +364,8 @@ def plot_one(
             )
         ax.legend(fontsize=7, loc="best")
         ax.set_title(
-            "Per-layer Jaccard vs Bernoulli null (theory)\n"
-            f"(E[J] from global ρ_a,ρ_b; Var = 2(1−ρ̄)/(N(2−ρ̄²)³), N≈{n_tot})"
+            "Per-layer Jaccard vs random baselines\n"
+            f"(orange band = theory E[J]±1σ; purple = MC 5–95%; N_tot≈{n_tot})"
         )
     else:
         ax.text(0.5, 0.5, "No Jaccard data", ha="center", va="center")
@@ -367,8 +417,8 @@ def plot_one(
         ax.set_ylim(0, 1)
     ax.legend(fontsize=6, loc="best")
     ax.set_title(
-        "Per-layer linear CKA vs theory null\n"
-        f"(E=1/(N−1), σ²=2/(N−1)²; N=total masked indices ≈ {n_tot})"
+        "Per-layer linear CKA vs theory null (green; unrelated reps)\n"
+        f"(E=1/(N−1), σ²=2/(N−1)²; N=total masked indices ≈ {n_tot} — not a Jaccard baseline)"
     )
     ax.grid(alpha=0.3)
 
@@ -445,6 +495,8 @@ def plot_compare(
     cka_null_scale: float = 1.0,
     log_y_floor: float = 1e-12,
     jaccard_log_floor: float = 1e-4,
+    jaccard_mc_trials: int = 0,
+    jaccard_mc_seed: int = 42,
 ):
     """4-panel comparison figure: two CSVs (e.g. SNIP vs CAV) overlaid on the same axes.
 
@@ -540,6 +592,27 @@ def plot_compare(
             y_scale=y_scale,
             display_floor=jac_floor,
         )
+    if jaccard_mc_trials > 0:
+        mc = mc_global_jaccard_quantiles(
+            da_g, db_g, n_tot_j, jaccard_mc_trials, jaccard_mc_seed
+        )
+        if mc is not None:
+            q_lo, q_hi = mc
+            if y_scale == "log":
+                lo_d = _clamp_positive_log(q_lo, jac_floor)
+                hi_d = _clamp_positive_log(q_hi, jac_floor)
+                if lo_d > hi_d:
+                    lo_d, hi_d = hi_d, lo_d
+            else:
+                lo_d, hi_d = q_lo, q_hi
+            ax.axhspan(
+                lo_d,
+                hi_d,
+                color="mediumpurple",
+                alpha=0.14,
+                zorder=0,
+                label="MC global Jaccard 5–95% (iid; N_tot)",
+            )
     if has_valid(jac_a):
         ax.plot(x, ja_p, color=CA_G, label=f"{label_a}", **kw, zorder=2)
     if has_valid(jac_b):
@@ -643,14 +716,26 @@ def main():
     parser.add_argument(
         "--random-trials",
         type=int,
-        default=1,
-        help="Ignored (kept for backward compatibility). Jaccard null uses closed-form E and Var only.",
+        default=0,
+        help="Deprecated alias: if >0 and --jaccard-mc-trials is 0, used as jaccard_mc_trials.",
     )
     parser.add_argument(
         "--random-seed",
         type=int,
         default=42,
-        help="Ignored (kept for backward compatibility).",
+        help="Deprecated: use --jaccard-mc-seed (fallback seed for MC band).",
+    )
+    parser.add_argument(
+        "--jaccard-mc-trials",
+        type=int,
+        default=0,
+        help="If >0, draw this many iid global-mask Jaccard samples (purple 5–95%% band).",
+    )
+    parser.add_argument(
+        "--jaccard-mc-seed",
+        type=int,
+        default=42,
+        help="RNG seed for --jaccard-mc-trials.",
     )
     parser.add_argument(
         "--y-scale",
@@ -712,6 +797,7 @@ def main():
         ca = Path(args.csv_a)
         cb = Path(args.csv_b)
         out = Path(args.output) if args.output else ca.parent / f"compare_{args.label_a}_vs_{args.label_b}.png"
+        mc_t = int(args.jaccard_mc_trials) or int(args.random_trials)
         plot_compare(
             ca,
             cb,
@@ -723,6 +809,8 @@ def main():
             cka_null_scale=float(args.cka_null_scale),
             log_y_floor=args.log_y_floor,
             jaccard_log_floor=float(args.jaccard_log_floor),
+            jaccard_mc_trials=mc_t,
+            jaccard_mc_seed=int(args.jaccard_mc_seed),
         )
         return
 
@@ -750,6 +838,8 @@ def main():
     if len(csv_files) > 12:
         print(f"  ... and {len(csv_files) - 12} more", flush=True)
 
+    mc_trials = int(args.jaccard_mc_trials) or int(args.random_trials)
+    mc_seed = int(args.jaccard_mc_seed)
     made = 0
     for p in csv_files:
         out = output_dir / f"{p.stem}_plots.png"
@@ -764,6 +854,8 @@ def main():
             cka_null_value=args.cka_null_value,
             log_y_floor=args.log_y_floor,
             jaccard_log_floor=float(args.jaccard_log_floor),
+            jaccard_mc_trials=mc_trials,
+            jaccard_mc_seed=mc_seed,
         ):
             made += 1
             print(f"✓ {out}")

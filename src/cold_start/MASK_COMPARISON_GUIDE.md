@@ -46,6 +46,7 @@ python src/cold_start/mask_to_jaccard.py MASK_A.pt MASK_B.pt [options]
 | `mask_b` | required | Second mask file (.pt) |
 | `--output / -o` | auto | Output JSON path (auto: `jaccard_<a>_vs_<b>.json`) |
 | `--device` | `cpu` | `cpu` or `cuda` |
+| `--extended-aggregates` | `none` | `param_bucket` (attn/mlp/norm/other), `decoder_layer` (per block index), or `both` — adds size-weighted Jaccard sections to the JSON |
 
 **Output JSON**
 
@@ -63,14 +64,39 @@ python src/cold_start/mask_to_jaccard.py MASK_A.pt MASK_B.pt [options]
     "total_union": 236000
   },
   "per_layer_jaccard": {"model.layers.0.mlp.gate_proj.weight": 0.0523, "...": "..."},
+  "jaccard_by_param_bucket": { "...": "optional; see --extended-aggregates" },
+  "jaccard_by_decoder_layer": { "...": "optional" },
   "metadata_a": {"...": "..."},
   "metadata_b": {"...": "..."}
 }
 ```
 
+**Random / iid baseline (interpretation).** The closed-form mean `E[J]` for two *independent* Bernoulli masks with fixed keep densities matches **global** random selection at the same density. If masks use **hybrid** rules (e.g. per-tensor keep floors, block structure, or non-iid pruning), the orange theory band in plots is an approximation; use `--jaccard-mc-trials` in `plot_layer_metrics_csv.py` to sanity-check against an iid global draw at the CSV’s size-weighted densities. See `src/analysis/mask_method_complexity_analysis.md` for discussion.
+
 ---
 
-### 2. `mask_to_cka.py` -- Functional comparison
+### 2. `mask_interpretation_suite.py` -- N masks, all pairs
+
+Runs pairwise interpretation for a list of checkpoints: writes Jaccard JSON (with optional extended aggregates), optionally runs `mask_to_cka.py`, calls `export_layer_metrics_csv.py`, and emits `suite_summary.json`, `suite_pairwise.csv`, and optional `jaccard_matrix.png`.
+
+```bash
+python src/cold_start/mask_interpretation_suite.py \
+  mask_a.pt mask_b.pt mask_c.pt \
+  --out-dir /path/to/suite_out \
+  --extended-aggregates both \
+  --skip-effective-rank \
+  --heatmap
+```
+
+Add `--run-cka` only on a GPU node with the correct `--cka-model` for the mask architecture.
+
+**Slurm (mask list file):** [`scripts/sbatch_mask_interpretation_suite.sh`](../../scripts/sbatch_mask_interpretation_suite.sh) — set `MASK_SUITE_LIST_FILE` (one `.pt` path per line), `MASK_SUITE_OUT_DIR`, and optionally `MASK_SUITE_RUN_CKA=1` with a GPU `sbatch` override (see script header).
+
+**Smoke / debug (two iid random masks):** `--smoke-debug --smoke-reference ANY_SAME_ARCH.pt` (seeds default `10001` / `20002`). Forces extended Jaccard, heatmap, effective rank, `plot_layer_metrics` with MC band, and CKA unless `--smoke-no-cka`. Slurm: [`scripts/sbatch_mask_interpretation_suite_smoke.sh`](../../scripts/sbatch_mask_interpretation_suite_smoke.sh).
+
+---
+
+### 3. `mask_to_cka.py` -- Functional comparison
 
 Measures how similar the *activations* of two masked subnetworks are on a
 calibration dataset using **linear CKA** (Centered Kernel Alignment). Unlike
@@ -132,7 +158,7 @@ python src/cold_start/mask_to_cka.py MASK_A.pt MASK_B.pt [options]
 
 ---
 
-### 3. `export_layer_metrics_csv.py` -- Per-layer CSV export
+### 4. `export_layer_metrics_csv.py` -- Per-layer CSV export
 
 Combines two mask files (and optional CKA/Jaccard JSON reports) into a single
 CSV with per-layer sparsity, effective rank, Jaccard, and CKA columns.
@@ -162,7 +188,7 @@ jaccard, cka
 
 ---
 
-### 4. `convert_json_reports_to_csv.py` -- Batch JSON-to-CSV conversion
+### 5. `convert_json_reports_to_csv.py` -- Batch JSON-to-CSV conversion
 
 Scans a directory for JSON reports (from `mask_to_jaccard.py` or
 `mask_to_cka.py`) and batch-converts them into per-layer CSVs plus summary
@@ -186,7 +212,7 @@ python src/cold_start/convert_json_reports_to_csv.py --input-dir masks/ [options
 
 ---
 
-### 5. `plot_layer_metrics_csv.py` -- Visualization
+### 6. `plot_layer_metrics_csv.py` -- Visualization
 
 Generates 2x2 panel plots from per-layer CSV files.
 
@@ -198,8 +224,8 @@ python src/cold_start/plot_layer_metrics_csv.py --input-dir masks/grpo_verify
 
 | Panel | Content |
 |-------|---------|
-| Top-left | Per-layer Jaccard + random baseline |
-| Top-right | Per-layer CKA + random baseline |
+| Top-left | Per-layer Jaccard + theory null (orange) + optional MC iid band (purple; `--jaccard-mc-trials`) |
+| Top-right | Per-layer CKA + **green** theory null (activation null; not comparable to Jaccard) |
 | Bottom-left | Per-layer sparsity (mask A and B) |
 | Bottom-right | Per-layer effective rank, normalized (mask A and B) |
 
@@ -229,12 +255,26 @@ python src/cold_start/plot_layer_metrics_csv.py \
 | `--input-dir` | `masks` | Directory for single-file mode |
 | `--recursive` | off | Scan subdirectories in single-file mode |
 | `--pattern` | `*.csv` | Glob pattern in single-file mode |
+| `--jaccard-mc-trials` | `0` | Monte Carlo iid global Jaccard draws (5–95% purple band) |
+| `--jaccard-mc-seed` | `42` | RNG seed for MC |
+| `--random-trials` | `0` | Deprecated; if `--jaccard-mc-trials` is 0, this value is used as MC trial count |
 
 Output: 220 DPI PNG files.
 
 ---
 
-### 6. `mask_utils.py:compute_jaccard_similarity` -- Programmatic Jaccard
+## CAV linear probes → mask comparison
+
+`--method cav` in `inference_mask_finder.py` and `cav_cold_mask_finder.py` trains **per-layer logistic probes** (chosen vs rejected activations on MLP hooks), then turns scores into binary masks. That is **not** the same object as pairwise Jaccard/CKA between two saved `.pt` files, but probe quality informs whether a CAV mask is trustworthy.
+
+**Artifacts**
+
+- Sidecar `*_probe_report.json` next to the mask (same basename as the `.pt`): per-hook-layer `train_accuracy`, optional `cv_accuracy_mean` (3-fold when enough samples), `coef_l1_norm`, `n_pos`, `n_neg`.
+- **Workflow:** (1) Inspect `probe_report` for weak layers (low accuracy / failed CV). (2) Run `mask_to_jaccard.py` / `mask_interpretation_suite.py` against a reference or second method. (3) Use `mask_to_cka.py` if functional similarity matters.
+
+---
+
+### 7. `mask_utils.py:compute_jaccard_similarity` -- Programmatic Jaccard
 
 Utility function for computing Jaccard from Python code (not a CLI tool).
 Used by `random_mask_baseline.py` and other scripts.
@@ -265,6 +305,7 @@ addition to Jaccard.
 | Need per-layer stats in a spreadsheet? | `export_layer_metrics_csv.py` |
 | Have many JSON reports to convert? | `convert_json_reports_to_csv.py` |
 | Need diagnostic plots? | `plot_layer_metrics_csv.py` |
+| Compare many masks at once? | `mask_interpretation_suite.py` |
 
 A high Jaccard implies high CKA, but not vice versa -- CKA can reveal
 functional agreement even between structurally different masks.
