@@ -141,7 +141,7 @@ masks:
 # -----------------------------------------------------------------------------
 slurm:
   parent:
-    partition: gpu
+    partition: multigpu
     gres: "gpu:h200:1"
     mem: 128G
     cpus_per_task: 8
@@ -149,7 +149,7 @@ slurm:
     rationale: "Parent needs a GPU to build GraSP and random masks; ~30–60 min typical."
 
   training_children_dense_and_sparse:
-    partition: gpu
+    partition: multigpu
     gres: "gpu:h200:1"          # uniform across all 5 training children for matched device numerics
     mem: 128G
     cpus_per_task: 8
@@ -176,7 +176,7 @@ entrypoints:
 invariants:
   - "Every training child sources scripts/grpo_training_env_defaults.sh exactly once."
   - "Every training child receives the same explicit --export list (built by build_train_export helper) so SLURM cannot drift hyperparams between submits."
-  - "All training children land on gpu:h200:1 (no a100 fallback for this sweep)."
+  - "All training children land on multigpu partition with gpu:h200:1 (no a100 fallback for this sweep)."
   - "All masks are 1D / element-wise / sparsity 97.5% / min_layer_keep_ratio 0.0025."
   - "GRPO_TARGET_STEPS is hard-set to 500 by the parent; children inherit verbatim."
   - "Sparse warmup_steps = floor(GRPO_WARMUP_RATIO * GRPO_TARGET_STEPS) = 50; computed inside grpo_openr1_llama31_slurm.sh so dense and sparse start with identical warmup duration."

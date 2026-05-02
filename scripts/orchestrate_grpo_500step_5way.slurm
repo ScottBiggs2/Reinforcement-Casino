@@ -9,7 +9,8 @@
 # Hyperparameter contract: docs/hyperparams/grpo_500step_5way_sweep.yaml
 # Single source of truth for runtime defaults: scripts/grpo_training_env_defaults.sh
 #
-# All 5 training children land on gpu:h200:1 with identical hyperparameters.
+# Training partition defaults to multigpu (shorter queue); still single gpu:h200:1 per job.
+# All 5 training children use identical hyperparameters.
 #
 # Submit from repo root:
 #   sbatch --export=ALL,HF_TOKEN="$HF_TOKEN" scripts/orchestrate_grpo_500step_5way.slurm
@@ -18,9 +19,10 @@
 #   GRPO_TARGET_STEPS, GRPO_DELTA_LOG_END_STEP, GRPO_MAGNITUDE_TARGET_STEP,
 #   SPARSITY_PERCENT, MIN_LAYER_KEEP_RATIO, GRPO_N_SAMPLES, RANDOM_SEED, MODEL,
 #   GRPO_DATASET, GRPO_DATASET_HF, GRPO_MASK_DIR, GRPO_DENSE_OUTPUT_BASE,
-#   GRPO_SPARSE_OUTPUT_BASE, ORCH_MASK_BATCH_SIZE.
+#   GRPO_SPARSE_OUTPUT_BASE, ORCH_MASK_BATCH_SIZE,
+#   ORCH_TRAIN_PARTITION (default multigpu), ORCH_TRAIN_GRES (default gpu:h200:1).
 #
-#SBATCH --partition=gpu
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
@@ -98,7 +100,7 @@ export GRPO_DELTA_LOG_END_STEP="${GRPO_DELTA_LOG_END_STEP:-200}"
 export GRPO_MAGNITUDE_TARGET_STEP="${GRPO_MAGNITUDE_TARGET_STEP:-200}"
 
 # Training children allocation (uniform: gpu:h200:1 for ALL 5 training jobs).
-ORCH_TRAIN_PARTITION="${ORCH_TRAIN_PARTITION:-gpu}"
+ORCH_TRAIN_PARTITION="${ORCH_TRAIN_PARTITION:-multigpu}"
 ORCH_TRAIN_GRES="${ORCH_TRAIN_GRES:-gpu:h200:1}"
 ORCH_TRAIN_TIME="${ORCH_TRAIN_TIME:-08:00:00}"
 ORCH_TRAIN_MEM="${ORCH_TRAIN_MEM:-128G}"
