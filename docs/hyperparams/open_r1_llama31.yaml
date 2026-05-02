@@ -20,6 +20,9 @@ dataset:
 # -----------------------------------------------------------------------------
 # GRPO (production path: src/full_training/GRPO_train.py dense, or sparse_grpo_bsr.py)
 # Launched by: scripts/grpo_openr1_llama31_slurm.sh
+#
+# Enforcement: scripts/grpo_training_env_defaults.sh freezes these values at runtime
+# (GRPO_HPARAM_MODE=locked) unless GRPO_HPARAM_OVERRIDE=1. See docs/GRPO_HPC_COPYPASTE.md.
 # -----------------------------------------------------------------------------
 grpo_open_r1:
   learning_rate: 5.0e-6
@@ -38,7 +41,7 @@ grpo_open_r1:
 
   sequence:
     max_prompt_length: 512
-    max_completion_length: 1024
+    max_completion_length: 2048
     notes: "Match GRPO_train.py argparse defaults unless overridden via GRPO_* env in Slurm."
 
   optimizer: adamw_8bit
@@ -55,7 +58,7 @@ grpo_open_r1:
     implementation: "src/utils/grpo_rewards.py"
 
   training:
-    target_steps_default: 1000
+    target_steps_default: 500
     save_steps: 50
     save_total_limit: 3
     gradient_checkpointing: true  # default in GRPO_train unless --no_gradient_checkpointing

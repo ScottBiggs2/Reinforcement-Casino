@@ -140,7 +140,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Subdirectory under output_base_dir for this run (default: model_dataset_grpo_dense).",
     )
-    p.add_argument("--num_steps", type=int, default=1000)
+    p.add_argument("--num_steps", type=int, default=500)
     p.add_argument("--subset_size", type=int, default=None)
     p.add_argument(
         "--output_base_dir",
@@ -166,7 +166,7 @@ def parse_args() -> argparse.Namespace:
         help="Trainer optimizer name (e.g. adamw_8bit, adamw_torch).",
     )
     p.add_argument("--max_prompt_length", type=int, default=512)
-    p.add_argument("--max_completion_length", type=int, default=1024)
+    p.add_argument("--max_completion_length", type=int, default=2048)
     p.add_argument("--save_steps", type=int, default=50)
     p.add_argument("--save_total_limit", type=int, default=3)
     p.add_argument(

@@ -80,7 +80,7 @@ Override: `export GRPO_REWARD_PROFILE=openr1_tags` before `sbatch`, or pass `--g
 ### Evaluation parity (benchmarks)
 
 - Use the **same** [`run_evals_slurm.sh`](../scripts/run_evals_slurm.sh) / lm-eval settings and **`apply_chat_template`** behavior as your **base** model for fair accuracy comparisons.
-- Training caps completions at **`GRPO_MAX_COMPLETION_LENGTH`** (default 1024). If lm-eval tasks use a **much lower** `max_gen_toks`, long-CoT checkpoints may look weaker than they are — align generation limits when comparing to GRPO-tuned checkpoints (or report two caps).
+- Training caps completions at **`GRPO_MAX_COMPLETION_LENGTH`** (default 2048). If lm-eval tasks use a **much lower** `max_gen_toks`, long-CoT checkpoints may look weaker than they are — align generation limits when comparing to GRPO-tuned checkpoints (or report two caps).
 - Standard math harnesses extract final answers from full model output; they do **not** require training-time reward tags.
 
 ## Environment: CUDA

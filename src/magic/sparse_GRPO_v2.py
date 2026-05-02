@@ -747,7 +747,7 @@ def train(
         run_name=run_name,
         gradient_accumulation_steps=1,
         beta=0.1,  # KL penalty coefficient
-        max_completion_length=1024,
+        max_completion_length=2048,
         max_prompt_length=512,
         num_generations=8,  # Number of generations per prompt
         generation_batch_size=8,  # Batch size for generation

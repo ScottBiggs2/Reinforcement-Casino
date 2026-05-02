@@ -447,7 +447,7 @@ if __name__ == "__main__":
         help="Checkpoint dir or 'auto' for latest under run_dir/checkpoints.",
     )
     parser.add_argument("--max_prompt_length", type=int, default=512)
-    parser.add_argument("--max_completion_length", type=int, default=1024)
+    parser.add_argument("--max_completion_length", type=int, default=2048)
     parser.add_argument("--no_gradient_checkpointing", action="store_true")
     parser.add_argument(
         "--delta_log_interval",

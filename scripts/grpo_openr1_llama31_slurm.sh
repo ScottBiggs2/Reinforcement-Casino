@@ -105,13 +105,14 @@ echo "GRPO_MASK_DIR=${GRPO_MASK_DIR}"
 echo "GRPO_DENSE_OUTPUT_BASE=${GRPO_DENSE_OUTPUT_BASE}"
 echo "GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE}"
 echo "GRPO_MODE=${GRPO_MODE} GRPO_NGPUS=${GRPO_NGPUS}"
+echo "GRPO_HPARAM_MODE=${GRPO_HPARAM_MODE:-unknown}  (override ablations: export GRPO_HPARAM_OVERRIDE=1 before sbatch)"
 echo "MODEL=${MODEL} DATASET=${GRPO_DATASET} STEPS=${GRPO_TARGET_STEPS} RESUME=${GRPO_RESUME:-<none>}"
 echo "LR=${GRPO_LR} beta=${GRPO_BETA} bs=${GRPO_PER_DEVICE_BS} accum=${GRPO_GRAD_ACCUM} gen=${GRPO_NUM_GEN}/${GRPO_GEN_BATCH}"
 echo "seq caps: prompt=${GRPO_MAX_PROMPT_LENGTH} completion=${GRPO_MAX_COMPLETION_LENGTH} reward=${GRPO_REWARD_PROFILE}"
 echo "warmup_ratio=${GRPO_WARMUP_RATIO} max_grad_norm=${GRPO_MAX_GRAD_NORM}"
 
-# Sparse only: integer warmup steps ≈ dense (ratio × total steps).
-GRPO_SPARSE_WARMUP_STEPS="$("${TRAIN_PY}" -c "import os; s=int(os.environ.get('GRPO_TARGET_STEPS','1000')); r=float(os.environ.get('GRPO_WARMUP_RATIO','0.1')); print(max(0, int(s*r)))")"
+# Sparse only: integer warmup steps ≈ dense (ratio × total steps). Uses frozen env only (no silent fallbacks).
+GRPO_SPARSE_WARMUP_STEPS="$("${TRAIN_PY}" -c "import os; s=int(os.environ['GRPO_TARGET_STEPS']); r=float(os.environ['GRPO_WARMUP_RATIO']); print(max(0, int(s*r)))")"
 export GRPO_SPARSE_WARMUP_STEPS
 echo "sparse_warmup_steps=${GRPO_SPARSE_WARMUP_STEPS} (matches dense warmup_ratio×steps)"
 

@@ -79,7 +79,7 @@ training:
 
   sequence:
     max_prompt_length: 512             # GRPO_MAX_PROMPT_LENGTH
-    max_completion_length: 1024        # GRPO_MAX_COMPLETION_LENGTH
+    max_completion_length: 2048        # GRPO_MAX_COMPLETION_LENGTH
 
   reward:
     profile: llama_cot                 # GRPO_REWARD_PROFILE

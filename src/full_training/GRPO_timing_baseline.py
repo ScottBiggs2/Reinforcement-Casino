@@ -94,7 +94,7 @@ def train_baseline(
         remove_unused_columns=False,
         num_generations=num_generations,
         generation_batch_size=generation_batch_size,
-        max_completion_length=1024,
+        max_completion_length=2048,
         max_prompt_length=512,
         beta=0.1,
     )

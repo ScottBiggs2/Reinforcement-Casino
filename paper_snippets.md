@@ -1,95 +1,140 @@
 # Paper snippets — H200 BSR DPO benchmark tables
 
-Placeholder convention: **any negative numeric cell** (e.g. `-9.876`) or the token `NEG` is **dummy data**. Replace after aggregating `benchmark_training_log.csv` (e.g., mean/median over last `k` steps per phase).
+Numeric tables in the **export block** below come from [`scripts/export_h200_bsr_paper_tables.py`](scripts/export_h200_bsr_paper_tables.py) (aggregating `benchmark_training_log.csv`). Elsewhere in this file, **NEG** / negative placeholders still mean “paste from env snapshot.” Driver: [`scripts/h200_sparse_dpo_bsr_benchmark.sh`](scripts/h200_sparse_dpo_bsr_benchmark.sh).
 
-Suggested aggregation: pool rows by `phase` (and optionally last `steps` steps only, after warmup), then report mean \(\pm\) std for `t_step_total_ms`, `t_backward_ms`, `t_optim_ms`, `t_forward_ms`, and derived `eff_bsr_backward_tflops`.
+### CSV columns and aggregation (read before filling tables)
 
----
+**Always present** (default sweep, `RL_CASINO_BSR_DETAILED_TIMING=0`): `phase`, `wall_time_s`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, trainer metrics (`loss`, etc.), and theory-sidecar fields (`theory_*`, duplicated per row). Use throughput columns for end-to-end comparisons without CUDA instrumentation overhead.
 
-## Main results — timing highlights (tabular)
+**CUDA segment timings** (`t_step_total_ms`, `t_forward_ms`, `t_backward_ms`, `t_optim_ms`, `t_nonoptim_ms`, `t_other_ms`) appear **only** when `RL_CASINO_BSR_DETAILED_TIMING=1`. That mode wraps each micro-batch forward/backward/optimizer step with `torch.cuda.synchronize()` and can **severely slow** training when `DPO_GRADIENT_ACCUMULATION_STEPS` is large—use it only for short diagnostic phases, not full grids.
 
-Compact comparison: dense baseline vs sparse settings at representative sparsities. Tune row count to your narrative.
+**Caveats when detailed timing is on:**
+
+- `t_forward_ms` / `t_backward_ms` reflect the **last gradient-accumulation micro-batch only**, not the full optimizer step; `t_other_ms` can look huge if interpreted as “unexplained” time.
+- `eff_bsr_backward_tflops` / `eff_bsr_backward_flops_per_s` divide theory proxies by `t_backward_ms`; treat as **indicative** when grad accum \(>1\).
+
+**Quick per-phase summary on-cluster or locally:**
+
+```bash
+python scripts/analyze_benchmark_training_log.py /path/to/benchmark_training_log.csv --grad-accum 64
+```
+
+Table numbers below are **generated** from `benchmark_training_log.csv` (mean over the last `--tail-rows` logged rows per `phase`). Re-export whenever the CSV changes; do not hand-edit the export block.
+
+**Fill / refresh (repo root):**
+
+```bash
+python scripts/export_h200_bsr_paper_tables.py \
+  --csv /path/to/benchmark_training_log.csv \
+  --inject paper_snippets.md \
+  --tail-rows 8
+```
+
+Example layout CSV (drafting only — **replace with your measured CSV** before submission): `scripts/fixtures/h200_bsr_table_export_example.csv`.
+
+**Grid reference:** default driver uses **1 dense** + **4 sparse phases per sparsity** (elem vs block \(\times\) block\_1d vs block\_2d, dense grad\_input). Full sweeps with four sparsities \(\{99.75,97.5,95,90\}\%\) yield **17** rows when the job completes; partial runs contribute fewer rows (export reflects whatever phases appear in the CSV).
+
+<!-- H200_BSR_PAPER_EXPORT_START -->
+
+## Auto-filled from benchmark CSV (edit upstream CSV + re-export; do not hand-tune numbers here)
+
+<!-- Generated from `h200_bsr_table_export_example.csv` — re-run export after updating the CSV. -->
+
+### Aggregated throughput (mean of last logged rows per phase)
+
+| Phase | Sparse % | Optimizer | Steps/s | Samples/s | Wall (tail mean, s) |
+|-------|----------|-----------|---------|-----------|---------------------|
+| `dense` |  | adamw_8bit | 0.024800 | 3.1700 | 322.80 |
+| `s99p75_elem_gidense_block_1d` | 99.75 | sparse_adamw | 0.001230 | 0.1580 | 6488.00 |
+| `s99p75_elem_gidense_block_2d` | 99.75 | sparse_adamw | 0.001230 | 0.1580 | 6487.00 |
+| `s99p75_blk_gidense_block_1d` | 99.75 | sparse_adamw | 0.001540 | 0.1970 | 5210.00 |
+| `s99p75_blk_gidense_block_2d` | 99.75 | sparse_adamw | 0.001540 | 0.1970 | 5205.00 |
+| `s97p5_elem_gidense_block_1d` | 97.5 | sparse_adamw | 0.001310 | 0.1680 | 6100.00 |
+| `s97p5_elem_gidense_block_2d` | 97.5 | sparse_adamw | 0.001310 | 0.1680 | 6095.00 |
+| `s97p5_blk_gidense_block_1d` | 97.5 | sparse_adamw | 0.001670 | 0.2140 | 4800.00 |
+| `s97p5_blk_gidense_block_2d` | 97.5 | sparse_adamw | 0.001670 | 0.2140 | 4795.00 |
 
 ```latex
 \begin{table}[t]
   \centering
   \small
-  \caption{H200 sparse BSR vs dense baseline — end-to-end step and component times (milliseconds). Negative entries are placeholders pending experiment aggregation.}
-  \label{tab:bsr-timing-highlights}
+  \caption{H200 BSR — mean step/component times (ms) per phase when \texttt{t\_*} columns exist in CSV; otherwise use throughput table only.}
+  \label{tab:bsr-timing-highlights-autogen}
   \begin{tabular}{@{}lcccccc@{}}
     \toprule
-    Setting & Sparse (\%) & Adam kernel & $t_{\mathrm{step}}$ (ms) & $t_{\mathrm{fwd}}$ (ms) & $t_{\mathrm{bwd}}$ (ms) & $t_{\mathrm{opt}}$ (ms) \\
+    Phase & Sparse (\%) & Optimizer & $t_{\mathrm{step}}$ & $t_{\mathrm{fwd}}$ & $t_{\mathrm{bwd}}$ & $t_{\mathrm{opt}}$ \\
     \midrule
-    Dense baseline & --- & adamw\textsubscript{(dense)} & -123.456 & -123.456 & -123.456 & -123.456 \\
-    Sparse (elem mask) & 99.75 & block\_1d & -123.456 & -123.456 & -123.456 & -123.456 \\
-    Sparse (elem mask) & 99.75 & block\_2d & -123.456 & -123.456 & -123.456 & -123.456 \\
-    Sparse (blk mask) & 97.5  & block\_1d & -123.456 & -123.456 & -123.456 & -123.456 \\
-    Sparse (blk mask) & 97.5  & block\_2d & -123.456 & -123.456 & -123.456 & -123.456 \\
+    \texttt{dense} & --- & adamw\_8bit & --- & --- & --- & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_1d} & 99.75 & sparse\_adamw & --- & --- & --- & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_2d} & 99.75 & sparse\_adamw & --- & --- & --- & --- \\
+    \texttt{s97p5\_blk\_gidense\_block\_1d} & 97.5 & sparse\_adamw & --- & --- & --- & --- \\
+    \texttt{s97p5\_blk\_gidense\_block\_2d} & 97.5 & sparse\_adamw & --- & --- & --- & --- \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
-
-Throughput / proxy-FLOPs companion (same runs; backward proxy from CSV `eff_bsr_backward_tflops` — omit or blank dense rows).
 
 ```latex
 \begin{table}[t]
   \centering
   \small
-  \caption{Throughput and backward proxy throughput (dense rows left blank — no BSR theory columns). Negative entries are placeholders.}
-  \label{tab:bsr-throughput-highlights}
+  \caption{H200 BSR — throughput (mean over tail rows per phase).}
+  \label{tab:bsr-throughput-autogen}
   \begin{tabular}{@{}lccc@{}}
     \toprule
-    Setting & Steps/s & Samples/s & BWD proxy TFLOP/s \\
+    Phase & Steps/s & Samples/s & BWD TFLOP/s (proxy) \\
     \midrule
-    Dense baseline & -9.876 & -987654 & --- \\
-    Sparse (example) & -9.876 & -987654 & -9.876 \\
+    \texttt{dense} & 0.024800 & 3.1700 & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_1d} & 0.001230 & 0.1580 & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_2d} & 0.001230 & 0.1580 & --- \\
+    \texttt{s99p75\_blk\_gidense\_block\_1d} & 0.001540 & 0.1970 & --- \\
+    \texttt{s99p75\_blk\_gidense\_block\_2d} & 0.001540 & 0.1970 & --- \\
+    \texttt{s97p5\_elem\_gidense\_block\_1d} & 0.001310 & 0.1680 & --- \\
+    \texttt{s97p5\_elem\_gidense\_block\_2d} & 0.001310 & 0.1680 & --- \\
+    \texttt{s97p5\_blk\_gidense\_block\_1d} & 0.001670 & 0.2140 & --- \\
+    \texttt{s97p5\_blk\_gidense\_block\_2d} & 0.001670 & 0.2140 & --- \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
-
----
-
-## Appendix — full benchmark grid + hyperparameters
-
-One wide table covering every phase in the scripted grid: **1 dense phase** plus, per sparsity \( \in \{90, 95, 97.5, 99.75\} \): **elem vs block mask** \(\times\) **block\_1d vs block\_2d** SparseAdamW, with **dense** `grad_input` (matching `benchmark_training_log.csv` `phase` names, e.g. \texttt{s99p75\_elem\_gidense\_block\_1d}).
 
 ```latex
 \begin{table*}[t]
   \centering
   \footnotesize
-  \caption{Complete H200 BSR DPO benchmark phases: timings and CSV-derived metrics (all negative numbers are placeholders).}
-  \label{tab:bsr-appendix-full-grid}
+  \caption{H200 BSR — all phases in CSV (partial runs omit unfinished sparsity levels).}
+  \label{tab:bsr-appendix-autogen}
   \begin{tabular}{@{}lccccccccc@{}}
     \toprule
-    Phase tag & Sparse (\%) & Mask & GI & Kernel &
-    $\bar{t}_{\mathrm{step}}$ (ms) & $\bar{t}_{\mathrm{fwd}}$ (ms) &
-    $\bar{t}_{\mathrm{bwd}}$ (ms) & $\bar{t}_{\mathrm{opt}}$ (ms) &
-    BWD TFLOP/s (proxy) \\
+    Phase tag & Sparse (\%) & Mask & GI & Kernel & $\bar{t}_{\mathrm{step}}$ & $\bar{t}_{\mathrm{fwd}}$ & $\bar{t}_{\mathrm{bwd}}$ & $\bar{t}_{\mathrm{opt}}$ & BWD TFLOP/s \\
     \midrule
-    \texttt{dense} & --- & --- & --- & adamw\textsubscript{dense}
-      & -1.111 & -1.111 & -1.111 & -1.111 & --- \\
-    \texttt{s99p75\_elem\_gidense\_block\_1d} & 99.75 & elem & dense & block\_1d
-      & -2.222 & -2.222 & -2.222 & -2.222 & -9.876 \\
-    \texttt{s99p75\_elem\_gidense\_block\_2d} & 99.75 & elem & dense & block\_2d
-      & -2.222 & -2.222 & -2.222 & -2.222 & -9.876 \\
-    \texttt{s99p75\_blk\_gidense\_block\_1d} & 99.75 & blk & dense & block\_1d
-      & -3.333 & -3.333 & -3.333 & -3.333 & -9.876 \\
-    \texttt{s99p75\_blk\_gidense\_block\_2d} & 99.75 & blk & dense & block\_2d
-      & -3.333 & -3.333 & -3.333 & -3.333 & -9.876 \\
-    \multicolumn{10}{c}{\(\vdots\) \quad replicate rows for 97.5, 95, 90~\% \quad \(\vdots\)} \\
+    \texttt{dense} & --- & --- & --- & adamw\textsubscript{dense} & --- & --- & --- & --- & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_1d} & 99.75 & elem & dense & block\_1d & --- & --- & --- & --- & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_2d} & 99.75 & elem & dense & block\_2d & --- & --- & --- & --- & --- \\
+    \texttt{s99p75\_blk\_gidense\_block\_1d} & 99.75 & blk & dense & block\_1d & --- & --- & --- & --- & --- \\
+    \texttt{s99p75\_blk\_gidense\_block\_2d} & 99.75 & blk & dense & block\_2d & --- & --- & --- & --- & --- \\
+    \texttt{s97p5\_elem\_gidense\_block\_1d} & 97.5 & elem & dense & block\_1d & --- & --- & --- & --- & --- \\
+    \texttt{s97p5\_elem\_gidense\_block\_2d} & 97.5 & elem & dense & block\_2d & --- & --- & --- & --- & --- \\
+    \texttt{s97p5\_blk\_gidense\_block\_1d} & 97.5 & blk & dense & block\_1d & --- & --- & --- & --- & --- \\
+    \texttt{s97p5\_blk\_gidense\_block\_2d} & 97.5 & blk & dense & block\_2d & --- & --- & --- & --- & --- \\
     \bottomrule
   \end{tabular}
 \end{table*}
 ```
 
+<!-- H200_BSR_PAPER_EXPORT_END -->
+
+---
+
+## Appendix — benchmark hyperparameters (static prose)
+
 Hyperparameters / experimental setup notes (verbatim for appendix text).
 
 ```latex
 \paragraph{Benchmark hyperparameters.}
-Random global masks target sparsities $\{99.75, 97.5, 95, 90\}\%$.
+Random global masks target sparsities $\{99.75, 97.5, 95, 90\}\%$ (\texttt{BENCHMARK\_SPARSITIES}).
 Tokenizer and DPO preference dataset loaded once (\texttt{tulu3} registry / Allen AI mixture); each phase reloads model weights so dense and sparse graphs are not fused across phases.
+Slurm driver prints \texttt{GIT\_SHA} and job id at job start for provenance.
 Per-device batch size, gradient accumulation, learning rate, LR warmup fraction, sequence caps, optimizer choice for the dense baseline, gradient checkpointing, BSR block size, and SparseAdamW block size match the deployed Slurm driver defaults (replace every \textit{TBD} with the value from your Slurm env / job log).
 
 \begin{itemize}\setlength\itemsep{0pt}
@@ -100,9 +145,9 @@ Per-device batch size, gradient accumulation, learning rate, LR warmup fraction,
   \item \textbf{LR / schedule:} base LR \textit{TBD}, warmup ratio \textit{TBD}, linear LR schedule (trainer); weight decay \textit{TBD}.
   \item \textbf{Sequence length:} max prompt \textit{TBD}, max length \textit{TBD} (DPO pairs).
   \item \textbf{Dense optimizer:} \texttt{DPO\_OPTIM} (\texttt{adamw\_8bit} vs full AdamW --- report which resolved at runtime).
-  \item \textbf{Sparse phases:} BSR MLP substitution with \texttt{SparseAdamW}; \texttt{RL\_CASINO\_ADAM\_KERNEL} \(\in\) \texttt{\{block\_1d, block\_2d\}}; \texttt{RL\_CASINO\_BSR\_GRAD\_INPUT\_MODE=dense} for this grid.
+  \item \textbf{Sparse phases:} BSR MLP substitution with \texttt{SparseAdamW}; \texttt{RL\_CASINO\_ADAM\_KERNEL} \(\in\) \texttt{\{block\_1d, block\_2d\}}; driver passes \texttt{--phase\_grad\_input\_modes dense} and defaults \texttt{RL\_CASINO\_BSR\_GRAD\_INPUT\_MODE=dense}.
   \item \textbf{BSR / Triton:} BSR block size \textit{TBD}, \texttt{BSR\_USE\_ATOMIC}, \texttt{BSR\_BATCH\_CHUNKS}; Triton cache on scratch (\texttt{TRITON\_CACHE\_DIR}).
-  \item \textbf{Logging:} \texttt{benchmark\_training\_log.csv}: \texttt{t\_step\_total\_ms}, \texttt{t\_forward\_ms}, \texttt{t\_backward\_ms}, \texttt{t\_optim\_ms}; throughput \texttt{cumulative\_steps\_per\_s}, \texttt{cumulative\_samples\_per\_s}; proxy FLOPs from \texttt{theory\_*} and \texttt{eff\_bsr\_backward\_tflops} (theory-bound for masked-linear backward, not full forward pass).
+  \item \textbf{Logging:} \texttt{benchmark\_training\_log.csv}: always \texttt{phase}, wall-clock throughput (\texttt{cumulative\_steps\_per\_s}, \texttt{cumulative\_samples\_per\_s}), \texttt{theory\_*}; CUDA segment columns only if \texttt{RL\_CASINO\_BSR\_DETAILED\_TIMING=1}. Proxy FLOPs: \texttt{eff\_bsr\_backward\_tflops} (masked-linear backward theory vs.\ measured backward slice—see caveats above).
 \end{itemize}
 ```
 
@@ -168,23 +213,24 @@ Defaults are primarily set/propagated by `scripts/pipeline_common.sh` (dense sta
 
 ### GRPO (Open-R1) — dense + sparse env knobs
 
-Defaults are set by `scripts/grpo_openr1_llama31_slurm.sh` (and optionally orchestrated via `scripts/orchestrate_masks_then_queue_dpo_grpo.slurm` for multi-job pipelines).
+Canonical defaults live in `scripts/grpo_training_env_defaults.sh` (sourced by `scripts/grpo_openr1_llama31_slurm.sh`); they match `docs/hyperparams/open_r1_llama31.yaml`. **Verify each Slurm run** with the launcher log line `seq caps: prompt=… completion=…` and `STEPS=…` — older checkpoints may have been trained under a 1024 completion cap if `GRPO_MAX_COMPLETION_LENGTH` was not exported. Longer dense runs can override `GRPO_TARGET_STEPS` (e.g. `5000` in copy-paste blocks).
 
 ```latex
 \begin{table}[t]
   \centering
   \small
-  \caption{GRPO (Open-R1 style) training hyperparameters and runtime knobs (environment variables). Negative numeric entries are placeholders.}
+  \caption{GRPO (Open-R1 style) training hyperparameters and runtime knobs (environment variables). Defaults match \texttt{grpo\_training\_env\_defaults.sh} / \texttt{open\_r1\_llama31.yaml}. Negative numeric entries are placeholders for an as-run snapshot.}
   \label{tab:appendix-grpo-env}
   \begin{tabular}{@{}lll@{}}
     \toprule
     Env var & Default (repo) & Value used (paste from snapshot) \\
     \midrule
     \texttt{MODEL} & \texttt{meta-llama/Llama-3.1-8B-Instruct} & \texttt{NEG} \\
-    \texttt{GRPO\_DATASET} & \texttt{math-220k} & \texttt{NEG} \\
-    \texttt{GRPO\_MODE} & \texttt{dense} & \texttt{NEG} \\
-    \texttt{GRPO\_TARGET\_STEPS} & 1000 (\texttt{grpo\_openr1\_*}) / 5000 (\texttt{orchestrate\_*}) & -1 \\
-    \texttt{GRPO\_RESUME} & \textit{empty} & \texttt{NEG} \\
+    \texttt{GRPO\_DATASET} & \texttt{math-220k} (HF: \texttt{open-r1/OpenR1-Math-220k}) & \texttt{NEG} \\
+    \texttt{GRPO\_MODE} & \texttt{dense} / \texttt{sparse} & \texttt{NEG} \\
+    \texttt{GRPO\_NGPUS} & 1 & -1 \\
+    \texttt{GRPO\_TARGET\_STEPS} & 500 & -1 \\
+    \texttt{GRPO\_RESUME} & \textit{empty} (\texttt{auto} if resuming) & \texttt{NEG} \\
     \texttt{GRPO\_LR} & \texttt{5e-6} & \texttt{NEG} \\
     \texttt{GRPO\_BETA} & \texttt{0.025} & \texttt{NEG} \\
     \texttt{GRPO\_PER\_DEVICE\_BS} & 2 & -1 \\
@@ -192,15 +238,21 @@ Defaults are set by `scripts/grpo_openr1_llama31_slurm.sh` (and optionally orche
     \texttt{GRPO\_NUM\_GEN} & 8 & -1 \\
     \texttt{GRPO\_GEN\_BATCH} & 8 & -1 \\
     \texttt{GRPO\_MAX\_PROMPT\_LENGTH} & 512 & -1 \\
-    \texttt{GRPO\_MAX\_COMPLETION\_LENGTH} & 1024 (\texttt{grpo\_openr1\_*}) / 2048 (\texttt{orchestrate\_*}) & -1 \\
+    \texttt{GRPO\_MAX\_COMPLETION\_LENGTH} & 2048 & -1 \\
     \texttt{GRPO\_REWARD\_PROFILE} & \texttt{llama\_cot} & \texttt{NEG} \\
     \texttt{GRPO\_OPTIM} & \texttt{adamw\_8bit} & \texttt{NEG} \\
     \texttt{GRPO\_PRECISION} & \texttt{bf16} & \texttt{NEG} \\
+    \texttt{GRPO\_WARMUP\_RATIO} & \texttt{0.1} (sparse: launcher maps to integer warmup steps) & \texttt{NEG} \\
+    \texttt{GRPO\_MAX\_GRAD\_NORM} & \texttt{0.1} & \texttt{NEG} \\
     \texttt{GRPO\_SAVE\_STEPS} & 50 & -1 \\
     \texttt{GRPO\_SAVE\_TOTAL\_LIMIT} & 3 & -1 \\
+    \texttt{GRPO\_RUN\_SLUG} (dense) & \textit{unset} & \texttt{NEG} \\
+    \texttt{GRPO\_RUN\_NAME} (sparse) & \textit{unset} & \texttt{NEG} \\
+    \texttt{GRPO\_DELTA\_LOG\_INTERVAL} / \texttt{GRPO\_DELTA\_LOG\_END\_STEP} & \textit{unset} (set for magnitude-mask source runs) & \texttt{NEG} \\
     \texttt{GRPO\_MASK} (sparse) & \textit{unset} & \texttt{NEG} \\
     \texttt{GRPO\_SPARSE\_ADAMW\_LAZY} & 0 & -1 \\
-    \texttt{HF\_DATASETS\_CACHE} & \textit{scratch path} & \texttt{NEG} \\
+    \texttt{HF\_DATASETS\_CACHE} & \texttt{\$\{RL\_CASINO\_SCRATCH\_ROOT\}/hf\_cache/datasets} & \texttt{NEG} \\
+    \texttt{RL\_CASINO\_SCRATCH\_ROOT} & \textit{cluster scratch} & \texttt{NEG} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -222,8 +274,9 @@ These apply when using BSR sparse backprop and/or SparseAdamW (DPO or GRPO), inc
     \toprule
     Knob & Default (repo) & Value used \\
     \midrule
-    \texttt{RL\_CASINO\_ADAM\_KERNEL} & \texttt{block\_1d} / \texttt{block\_2d} (phase grid) & \texttt{NEG} \\
-    \texttt{RL\_CASINO\_BSR\_GRAD\_INPUT\_MODE} & \texttt{dense} or \texttt{sparse} (phase grid) & \texttt{NEG} \\
+    \texttt{RL\_CASINO\_ADAM\_KERNEL} & \texttt{block\_1d} / \texttt{block\_2d} (H200 benchmark phase grid) & \texttt{NEG} \\
+    \texttt{RL\_CASINO\_BSR\_GRAD\_INPUT\_MODE} & \texttt{dense} (\texttt{h200\_sparse\_dpo\_bsr\_benchmark.sh} default; sparse grad\_i only if overridden elsewhere) & \texttt{NEG} \\
+    \texttt{RL\_CASINO\_BSR\_DETAILED\_TIMING} & \texttt{0} (off for sweeps; \texttt{1} enables \texttt{t\_*} CSV columns + per-micro-batch sync) & -1 \\
     \texttt{BSR\_USE\_ATOMIC} & 0 & -1 \\
     \texttt{BSR\_BATCH\_CHUNKS} & 8 & -1 \\
     \texttt{TRITON\_CACHE\_DIR} & \textit{scratch path} & \texttt{NEG} \\
@@ -274,9 +327,8 @@ PIPELINE_RUN_ID="dpo500_mag_tulu3_step200_manual" \
 scripts/pipeline_sparse_one_mask.sh
 Submitted batch job 6497793
 
-# Speed benchmark (Final?)
-(base) [biggs.s@explorer-02 rl_casino]$ export RL_CASINO_BSR_GRAD_INPUT_MODE=dense
-sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
+# H200 BSR throughput sweep (dense grad_input default in script; optional explicit export)
+# sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 Submitted batch job 6497854
 
 # GraSP (vanilla) GRPO
@@ -301,7 +353,7 @@ MODEL_SANITIZED="$(echo "$MODEL" | tr '/-' '__' | tr '[:upper:]' '[:lower:]' | t
 MASK_TULU3="${MASK_DIR}/grasp_${MODEL_SANITIZED}_tulu3_sp${SP}pct_objdpo_preference_elem_snroff_log1p.pt"
 MASK_LIGHTR1="${MASK_DIR}/grasp_${MODEL_SANITIZED}_light_r1_sp${SP}pct_objdpo_preference_elem_snroff_log1p.pt"
 
-# Sparse DPO submit (500 steps) for each dataset, using pipeline_sparse_o  scripts/pipeline_sparse_one_mask.shELINE_MASK_FILE="$MASK_LIGHTR1" \SET
+# Sparse DPO (500 steps) — chain mask paths into pipeline_sparse_one_mask.sh as needed.
 Mask job id: 6497892
 Submitted batch job 6497893
 Submitted batch job 6497894

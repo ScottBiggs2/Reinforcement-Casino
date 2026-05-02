@@ -4,6 +4,12 @@ Use these blocks on the cluster **from the repo root** (so `PYTHONPATH` and `scr
 
 **Replace** `YOUR_REPO_ROOT` if you `cd` elsewhere. **Set** `HF_TOKEN` for gated models (e.g. Llama).
 
+### Training hyperparameters are locked by default
+
+`scripts/grpo_training_env_defaults.sh` (sourced by `scripts/grpo_openr1_llama31_slurm.sh`) **overwrites** LR, steps, sequence caps, batch sizes, etc., so `sbatch --export=ALL` / login-shell junk cannot change them. Every run logs `GRPO_HPARAM_MODE=locked` (check `logs/grpo_openr1_<jobid>.out`).
+
+To intentionally change training knobs (long runs, ablations): **`export GRPO_HPARAM_OVERRIDE=1`** before `sbatch`, then set `GRPO_TARGET_STEPS`, `GRPO_LR`, … as needed. Logs show `GRPO_HPARAM_MODE=override`.
+
 ---
 
 ## One-command launcher (masks + queue DPO+GRPO)
@@ -24,7 +30,7 @@ Key overrides (optional; export before `sbatch`):
 
 - **GRPO run ids**: `GRPO_DENSE_RUN_SLUG`, `GRPO_SPARSE_RANDOM_RUN_NAME`, `GRPO_SPARSE_CAV_RUN_NAME`, `GRPO_SPARSE_SNIP_RUN_NAME`
 - **GRPO mask config**: `GRPO_DATASET_HF` (default `open-r1/OpenR1-Math-220k`), `GRPO_SNIP_OBJECTIVE` (default `lm`)
-- **GRPO training config**: `GRPO_DATASET` (default `math-220k`), `GRPO_TARGET_STEPS`, `GRPO_MAX_PROMPT_LENGTH`, `GRPO_MAX_COMPLETION_LENGTH`, `GRPO_REWARD_PROFILE`
+- **Training hyperparameters**: ignored unless **`GRPO_HPARAM_OVERRIDE=1`** — then you may set `GRPO_TARGET_STEPS`, `GRPO_*`, `MODEL`, etc. See “Training hyperparameters are locked” above.
 
 The manual blocks below remain useful if you want to run only GRPO, or if you want to generate just one mask type and launch a single sparse run.
 
@@ -56,8 +62,8 @@ export HF_TOKEN="${HF_TOKEN:?set HF_TOKEN for gated models}"
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
 
-# Sequence caps — align dense and sparse (canonical: 512 / 1024 per open_r1_llama31.yaml)
-export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
+# Sequence caps — align dense and sparse (canonical: 512 / 2048 per open_r1_llama31.yaml)
+export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 
 # Reward profile (Llama Instruct: default llama_cot)
