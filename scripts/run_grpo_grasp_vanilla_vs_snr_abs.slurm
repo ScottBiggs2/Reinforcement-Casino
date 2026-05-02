@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# GPU job: build TWO Open-R1 GRPO GraSP masks on one allocation (mask-only; no training submit):
-#   1) Vanilla GraSP-ABS  (--score-snr off, --grasp-rank-direction abs)
-#   2) SNR + GraSP-ABS    (--score-snr per_weight + log1p, --grasp-rank-direction abs)
+# GPU job — end-to-end (masks + sparse training submits):
+#   1) Vanilla GraSP-ABS  (--score-snr off, --grasp-rank-direction abs) → mask .pt
+#   2) SNR + GraSP-ABS    (--score-snr per_weight + log1p, --grasp-rank-direction abs) → mask .pt
+#   3) sbatch TWO sparse GRPO children (separate GPU allocations), one per mask — same pattern as
+#      scripts/run_grpo_grasp_mask_only.slurm
 #
 # Submit from repo root (non-interactive):
 #   sbatch --export=ALL,HF_TOKEN="$HF_TOKEN" scripts/run_grpo_grasp_vanilla_vs_snr_abs.slurm
 #
+# Mask-only (no training children):  SKIP_GRASP_SPARSE_LAUNCH=1
+#
 # Optional overrides (same env names as run_grpo_grasp_mask_only.slurm):
-#   MODEL, GRPO_DATASET_HF, SPARSITY_PERCENT, GRPO_N_SAMPLES, GRASP_EXTRA_FLAGS, GRPO_MASK_SUBDIR, etc.
+#   MODEL, GRPO_DATASET_HF, GRPO_DATASET, SPARSITY_PERCENT, GRPO_N_SAMPLES, GRASP_EXTRA_FLAGS,
+#   GRPO_TARGET_STEPS, GRPO_SPARSE_OUTPUT_BASE, SKIP_GRASP_SPARSE_LAUNCH, GRPO_MASK_SUBDIR, etc.
 #
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
@@ -43,7 +48,11 @@ export HF_TOKEN="${HF_TOKEN:-}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 
 export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/masks}"
+export GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/sparse}"
+mkdir -p "${GRPO_MASK_DIR}"
+
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
 export GRPO_DATASET_HF="${GRPO_DATASET_HF:-open-r1/OpenR1-Math-220k}"
 
 export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
@@ -60,6 +69,18 @@ export ORCH_SCORE_SNR_EPS="${ORCH_SCORE_SNR_EPS:-1e-8}"
 export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-96}"
 export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-1}"
 
+# Sparse GRPO training (children): mirrors run_grpo_grasp_mask_only.slurm
+export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
+export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
+export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
+export GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-50}"
+export GRPO_SAVE_TOTAL_LIMIT="${GRPO_SAVE_TOTAL_LIMIT:-3}"
+export ORCH_TRAIN_PARTITION_SPARSE="${ORCH_TRAIN_PARTITION_SPARSE:-gpu}"
+export ORCH_TRAIN_GRES_SPARSE="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
+export ORCH_TRAIN_TIME_GRPO="${ORCH_TRAIN_TIME_GRPO:-08:00:00}"
+
+SKIP_GRASP_SPARSE_LAUNCH="${SKIP_GRASP_SPARSE_LAUNCH:-0}"
+
 # Optional extra flags for inference_mask_finder (e.g. --also-emit-rank-variants)
 GRASP_EXTRA_FLAGS="${GRASP_EXTRA_FLAGS:-}"
 
@@ -72,6 +93,14 @@ if [ ! -x "$TRAIN_PY" ]; then
   echo "ERROR: TRAIN_PY not found: ${TRAIN_PY}" >&2
   exit 1
 fi
+
+orch_sanitize_job_name() {
+  local s="$1"
+  s="${s//\//_}"
+  s="${s// /_}"
+  s="$(echo "$s" | tr -cd '[:alnum:]_.-')"
+  printf '%.64s' "$s"
+}
 
 sanitize_model_name() {
   local s="$1"
@@ -151,3 +180,77 @@ fi
 echo ""
 echo "Done. Outputs:"
 ls -la "${OUT_VANILLA}" "${OUT_SNR_ABS}"
+
+if [ "${SKIP_GRASP_SPARSE_LAUNCH}" != "0" ]; then
+  echo ""
+  echo "SKIP_GRASP_SPARSE_LAUNCH=${SKIP_GRASP_SPARSE_LAUNCH} — not submitting sparse GRPO children."
+  exit 0
+fi
+
+RUN_SUFFIX="${SLURM_JOB_ID:-manual}"
+GRPO_RUN_NAME_VANILLA="${GRPO_RUN_NAME_VANILLA:-grpo_sparse_grasp_${GRPO_GRASP_OBJECTIVE}_vanilla_abs_steps${GRPO_TARGET_STEPS}_${RUN_SUFFIX}}"
+GRPO_RUN_NAME_SNR="${GRPO_RUN_NAME_SNR:-grpo_sparse_grasp_${GRPO_GRASP_OBJECTIVE}_snrperweight_${ORCH_SCORE_SNR_TRANSFORM}_abs_steps${GRPO_TARGET_STEPS}_${RUN_SUFFIX}}"
+
+echo ""
+echo "=== Submitting sparse GRPO (vanilla GraSP-ABS mask) → job 1 ==="
+SPARSE_V_EXPORT="ALL"
+SPARSE_V_EXPORT+=",GRPO_MODE=sparse"
+SPARSE_V_EXPORT+=",GRPO_MASK=${OUT_VANILLA}"
+SPARSE_V_EXPORT+=",GRPO_RUN_NAME=${GRPO_RUN_NAME_VANILLA}"
+SPARSE_V_EXPORT+=",GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS}"
+SPARSE_V_EXPORT+=",GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH}"
+SPARSE_V_EXPORT+=",GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH}"
+SPARSE_V_EXPORT+=",GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE}"
+SPARSE_V_EXPORT+=",WANDB_MODE=online"
+SPARSE_V_EXPORT+=",GRPO_SAVE_STEPS=${GRPO_SAVE_STEPS}"
+SPARSE_V_EXPORT+=",GRPO_SAVE_TOTAL_LIMIT=${GRPO_SAVE_TOTAL_LIMIT}"
+SPARSE_V_EXPORT+=",GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE}"
+SPARSE_V_EXPORT+=",MODEL=${MODEL}"
+SPARSE_V_EXPORT+=",GRPO_DATASET=${GRPO_DATASET}"
+
+jname_v="$(orch_sanitize_job_name "grpo_sp_grasp_vanilla_${GRPO_RUN_NAME_VANILLA}")"
+jid_v=$(sbatch --parsable \
+  --partition="${ORCH_TRAIN_PARTITION_SPARSE}" \
+  --nodes=1 \
+  --ntasks=1 \
+  --gres="${ORCH_TRAIN_GRES_SPARSE}" \
+  --mem=128G \
+  --time="${ORCH_TRAIN_TIME_GRPO}" \
+  --cpus-per-task=8 \
+  --job-name="${jname_v}" \
+  --export="${SPARSE_V_EXPORT}" \
+  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh")
+echo "Submitted sparse GRPO (vanilla ABS mask): ${jid_v}"
+echo "  tail -f ${REPO_ROOT}/logs/grpo_openr1_${jid_v}.out"
+
+echo ""
+echo "=== Submitting sparse GRPO (SNR+ABS mask) → job 2 ==="
+SPARSE_S_EXPORT="ALL"
+SPARSE_S_EXPORT+=",GRPO_MODE=sparse"
+SPARSE_S_EXPORT+=",GRPO_MASK=${OUT_SNR_ABS}"
+SPARSE_S_EXPORT+=",GRPO_RUN_NAME=${GRPO_RUN_NAME_SNR}"
+SPARSE_S_EXPORT+=",GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS}"
+SPARSE_S_EXPORT+=",GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH}"
+SPARSE_S_EXPORT+=",GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH}"
+SPARSE_S_EXPORT+=",GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE}"
+SPARSE_S_EXPORT+=",WANDB_MODE=online"
+SPARSE_S_EXPORT+=",GRPO_SAVE_STEPS=${GRPO_SAVE_STEPS}"
+SPARSE_S_EXPORT+=",GRPO_SAVE_TOTAL_LIMIT=${GRPO_SAVE_TOTAL_LIMIT}"
+SPARSE_S_EXPORT+=",GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE}"
+SPARSE_S_EXPORT+=",MODEL=${MODEL}"
+SPARSE_S_EXPORT+=",GRPO_DATASET=${GRPO_DATASET}"
+
+jname_s="$(orch_sanitize_job_name "grpo_sp_grasp_snrabs_${GRPO_RUN_NAME_SNR}")"
+jid_s=$(sbatch --parsable \
+  --partition="${ORCH_TRAIN_PARTITION_SPARSE}" \
+  --nodes=1 \
+  --ntasks=1 \
+  --gres="${ORCH_TRAIN_GRES_SPARSE}" \
+  --mem=128G \
+  --time="${ORCH_TRAIN_TIME_GRPO}" \
+  --cpus-per-task=8 \
+  --job-name="${jname_s}" \
+  --export="${SPARSE_S_EXPORT}" \
+  "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh")
+echo "Submitted sparse GRPO (SNR+ABS mask): ${jid_s}"
+echo "  tail -f ${REPO_ROOT}/logs/grpo_openr1_${jid_s}.out"
