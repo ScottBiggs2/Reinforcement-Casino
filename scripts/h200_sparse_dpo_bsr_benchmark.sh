@@ -1,5 +1,6 @@
 #!/bin/bash
-# Single H200 job: dense + random-mask sparse BSR-DPO phases (see src/full_training/h200_sparse_dpo_bsr_benchmark.py).
+# Single H200 job: optional dense baseline + random-mask sparse BSR-DPO phases
+# (see src/full_training/h200_sparse_dpo_bsr_benchmark.py). Default skips dense baseline for faster sweeps.
 # Submit from repo root:  sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 #
 # --- Why end-to-end [throughput] often differs only ~few % across phases ---
@@ -111,9 +112,16 @@ export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
 # The driver passes --phase_grad_input_modes dense; this export is the fallback if anything reads env early.
 export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-dense}"
 
-# Sparse grid sparsity targets (comma-separated).
-# Each level: element mask vs block mask × Adam block_1d vs block_2d = 4 sparse phases (+ 1 dense baseline overall).
-export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
+# Sparse grid sparsity targets (comma-separated; no default 99.75% unless you export it explicitly).
+# Each level: element mask vs block mask × Adam block_1d vs block_2d = 4 sparse phases.
+export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-97.5,95,90}"
+
+# 1 (default): pass --no_dense_baseline — dense AdamW phase omitted. Set to 0 to prepend one dense phase.
+export H200_BSR_SKIP_DENSE="${H200_BSR_SKIP_DENSE:-1}"
+SKIP_DENSE_ARGS=()
+if [ "${H200_BSR_SKIP_DENSE}" != "0" ]; then
+  SKIP_DENSE_ARGS+=(--no_dense_baseline)
+fi
 
 # Per-micro-batch CUDA timing + synchronize() for CSV columns t_* — default OFF (large gradient_accum
 # makes this path ruin throughput). Set RL_CASINO_BSR_DETAILED_TIMING=1 only for short debug phases.
@@ -138,6 +146,7 @@ echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per 
 echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)"
 echo "TRITON_CACHE_DIR=${TRITON_CACHE_DIR}  RL_CASINO_BSR_QUIET_INJECTION=${RL_CASINO_BSR_QUIET_INJECTION}"
 echo "RL_CASINO_BSR_DETAILED_TIMING=${RL_CASINO_BSR_DETAILED_TIMING}  RL_CASINO_BSR_GRAD_INPUT_MODE=${RL_CASINO_BSR_GRAD_INPUT_MODE}  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS}"
+echo "H200_BSR_SKIP_DENSE=${H200_BSR_SKIP_DENSE}  (≠0 ⇒ --no_dense_baseline)"
 echo "BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}  (each level → +4 sparse phases: elem|block × block_1d|block_2d; grad_input=dense only)"
 
 GC_ARGS=()
@@ -162,4 +171,5 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --benchmark_sparsities "$BENCHMARK_SPARSITIES" \
   --phase_grad_input_modes "dense" \
   --phase_adam_kernels "block_1d,block_2d" \
+  "${SKIP_DENSE_ARGS[@]}" \
   "${GC_ARGS[@]}"

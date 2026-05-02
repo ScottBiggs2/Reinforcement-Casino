@@ -5,9 +5,11 @@ Uses stdlib only (no pandas).
 
   python scripts/export_h200_bsr_paper_tables.py \\
     --csv /path/to/benchmark_training_log.csv \\
-    --inject paper_snippets.md
+    --inject paper_snippets.md [--compact]
 
-Markers in paper_snippets.md:
+`--compact` emits Markdown throughput summary plus **one** LaTeX table (omit duplicate timing + appendix blocks).
+
+Markers in paper_snippets.md (or ``hpc_paper_snippets.md``):
 
   <!-- H200_BSR_PAPER_EXPORT_START -->
   <!-- H200_BSR_PAPER_EXPORT_END -->
@@ -316,6 +318,11 @@ def main() -> None:
         help="Mean metrics over the last N logged rows per phase",
     )
     ap.add_argument("--stdout-only", action="store_true", help="Print export body; do not inject")
+    ap.add_argument(
+        "--compact",
+        action="store_true",
+        help="Markdown + throughput LaTeX only (omit timing highlight + appendix LaTeX blocks)",
+    )
     args = ap.parse_args()
 
     csv_path = args.csv.resolve()
@@ -335,23 +342,45 @@ def main() -> None:
     ts_vals = [float(r["t_step_total_ms"]) for r in agg]
     has_timing = any(not math.isnan(v) and v > 0 for v in ts_vals)
 
+    md_summary = build_markdown_summary(agg, csv_path.name)
+    throughput_tex = build_latex_throughput(agg).strip()
+    timing_tex = build_latex_highlight_timing(agg, has_timing).strip()
+    appendix_tex = build_latex_appendix_grid(agg, has_timing).strip()
+
     body_parts = [
         "## Auto-filled from benchmark CSV (edit upstream CSV + re-export; do not hand-tune numbers here)",
         "",
-        build_markdown_summary(agg, csv_path.name),
-        "```latex",
-        build_latex_highlight_timing(agg, has_timing).strip(),
-        "```",
-        "",
-        "```latex",
-        build_latex_throughput(agg).strip(),
-        "```",
-        "",
-        "```latex",
-        build_latex_appendix_grid(agg, has_timing).strip(),
-        "```",
-        "",
     ]
+    if args.compact:
+        body_parts.extend(
+            [
+                "_Compact mode_ (`--compact`): Markdown summary and one throughput LaTeX block only. Omit `--compact` for timing-highlight + appendix LaTeX.",
+                "",
+                md_summary,
+                "```latex",
+                throughput_tex,
+                "```",
+                "",
+            ]
+        )
+    else:
+        body_parts.extend(
+            [
+                md_summary,
+                "```latex",
+                timing_tex,
+                "```",
+                "",
+                "```latex",
+                throughput_tex,
+                "```",
+                "",
+                "```latex",
+                appendix_tex,
+                "```",
+                "",
+            ]
+        )
     body = "\n".join(body_parts)
 
     if args.stdout_only:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-H200-oriented multi-phase BSR DPO benchmark: one dense baseline plus a **full sparse grid**
+H200-oriented multi-phase BSR DPO benchmark: optional dense baseline (omit with ``--no_dense_baseline``)
+plus a **full sparse grid**
 (mask element vs block, grad_input dense vs Triton sparse, SparseAdamW block_1d vs block_2d)
 per ``--benchmark_sparsities``.
 
@@ -190,6 +191,7 @@ def generate_block_random_masks_cpu(
 def _build_benchmark_phases(
     sparsity_levels: List[float],
     *,
+    include_dense_baseline: bool = True,
     mask_types: Tuple[str, ...] = ("element", "block"),
     grad_input_modes: Tuple[str, ...] = ("dense", "sparse"),
     adam_kernels: Tuple[str, ...] = ("block_1d", "block_2d"),
@@ -205,7 +207,9 @@ def _build_benchmark_phases(
     Tuple: (phase_name, sparsity_pct, optimizer_type, mask_type, adam_kernel, grad_input_mode)
     ``grad_input_mode`` is None for the dense baseline; otherwise ``dense`` or ``sparse``.
     """
-    phases: List[Tuple] = [("dense", None, "adamw", "none", None, None)]
+    phases: List[Tuple] = []
+    if include_dense_baseline:
+        phases.append(("dense", None, "adamw", "none", None, None))
     for sp in sparsity_levels:
         sp_tag = str(sp).replace(".", "p")
         for mask_type in mask_types:
@@ -278,8 +282,13 @@ def main():
         "--benchmark_sparsities",
         type=str,
         default="99.75",
-        help="Comma-separated target sparsity %% for sparse phases (e.g. 99.75,95). "
-        "Each level expands to element/block mask × grad_input dense/sparse × Adam 1d/2d.",
+        help="Comma-separated target sparsity %% for sparse phases (e.g. 97.5,95,90). "
+        "Each level expands to element/block mask × grad_input modes × Adam 1d/2d.",
+    )
+    p.add_argument(
+        "--no_dense_baseline",
+        action="store_true",
+        help="Skip the dense AdamW baseline phase (only sparse BSR phases run).",
     )
     p.add_argument(
         "--phase_mask_types",
@@ -327,16 +336,24 @@ def main():
 
     phases = _build_benchmark_phases(
         sparsity_levels,
+        include_dense_baseline=not args.no_dense_baseline,
         mask_types=mask_types,
         grad_input_modes=grad_input_modes,
         adam_kernels=adam_kernels,
     )
 
+    dense_ct = (
+        sum(1 for ph in phases if ph[1] is None)
+        if phases
+        else 0
+    )
+    sparse_ct = len(phases) - dense_ct
+
     slurm_safe_print(
         f"Benchmark config: n_steps per phase={args.n_steps}, batch={args.batch_size}, grad_accum={args.grad_accum}"
     )
     slurm_safe_print(
-        f"Phase grid: {len(phases)} phases (1 dense + {len(phases) - 1} sparse), "
+        f"Phase grid: {len(phases)} phases ({dense_ct} dense + {sparse_ct} sparse), "
         f"sparsity levels={sparsity_levels}  mask_types={list(mask_types)}  "
         f"grad_input_modes={list(grad_input_modes)}  adam_kernels={list(adam_kernels)}"
     )
