@@ -24,7 +24,7 @@ for base in "${GAPS[@]}"; do
 
     echo "Submitting Sparse DPO for: $(basename "${m_path}")"
     jid=$(sbatch --parsable \
-      --partition=gpu --gres=gpu:h200:1 --time=07:45:00 --mem=128G \
+      --partition="${SPARSE_SLURM_PARTITION}" --gres="${SPARSE_SLURM_GRES}" --time=07:45:00 --mem=128G \
       --export=ALL,PIPELINE_RUN_ID="${RUN_ID}",RUN_ID="${RUN_ID}",PIPELINE_MASK_FILE="${m_path}",NUM_STEPS_DPO=500,DPO_LEARNING_RATE=5e-7,DPO_GRADIENT_CHECKPOINTING=1 \
       scripts/pipeline_sparse_one_mask.sh)
     SPARSE_JIDS+=("${jid}")

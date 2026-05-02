@@ -52,6 +52,8 @@ mkdir -p logs
 
 ########################################
 # Config (override before sbatch)
+# Optional: source scripts/export_pipeline_step_targets.sh to pin NUM_STEPS_DPO=500 and
+# GRPO_TARGET_STEPS=ORCH_GRPO_TRAIN_STEPS=1000 in your shell before sbatch.
 ########################################
 
 # Scratch / env
@@ -175,6 +177,12 @@ export DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1="${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1:-d
 export DPO_SPARSE_CAV_RUN_ID_LIGHT_R1="${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1:-dpo5k_sparse_cav_${DPO_DS_KEY_LIGHT_R1}}"
 export DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1="${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1:-dpo5k_sparse_snip_${DPO_DS_KEY_LIGHT_R1}}"
 
+# Sparse DPO with checkpoint-diff “oracle” masks (requires dense runs at ORACLE_FINAL_CKPT_DIR*).
+export DPO_SPARSE_ORACLE_RUN_ID="${DPO_SPARSE_ORACLE_RUN_ID:-dpo_sparse_oracle_${DPO_DS_KEY}}"
+export DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1="${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1:-dpo_sparse_oracle_${DPO_DS_KEY_LIGHT_R1}}"
+# 0 = skip checkpoint_diff_mask_finder + sparse-oracle sbatch (e.g. dense ckpts not ready yet).
+export ORCH_QUEUE_ORACLE_MASK_TRAINING="${ORCH_QUEUE_ORACLE_MASK_TRAINING:-1}"
+
 export GRPO_DENSE_RUN_SLUG="${GRPO_DENSE_RUN_SLUG:-llama31_${GRPO_DATASET_HF##*/}_grpo_dense_v1}"
 export GRPO_SPARSE_RANDOM_RUN_NAME="${GRPO_SPARSE_RANDOM_RUN_NAME:-grpo_sparse_random_sp975_v1}"
 export GRPO_SPARSE_CAV_RUN_NAME="${GRPO_SPARSE_CAV_RUN_NAME:-grpo_sparse_cav_sp975_v1}"
@@ -182,7 +190,7 @@ export GRPO_SPARSE_SNIP_RUN_NAME="${GRPO_SPARSE_SNIP_RUN_NAME:-grpo_sparse_snip_
 export GRPO_SPARSE_GRASP_RUN_NAME="${GRPO_SPARSE_GRASP_RUN_NAME:-grpo_sparse_grasp_${GRPO_GRASP_OBJECTIVE}_sp975_v1}"
 
 # Downstream training knobs (DPO doc defaults)
-export NUM_STEPS_DPO="${NUM_STEPS_DPO:-5000}"
+export NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
@@ -194,7 +202,7 @@ export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-3}"
 
 # Downstream training knobs (GRPO doc defaults)
 export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
-export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-5000}"
+export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
 export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
@@ -206,6 +214,9 @@ export ORCH_USE_TRAIN_AUTO_RESUME="${ORCH_USE_TRAIN_AUTO_RESUME:-0}"
 export MAX_AUTO_RESUME="${MAX_AUTO_RESUME:-8}"
 export ORCH_TRAIN_PARTITION="${ORCH_TRAIN_PARTITION:-gpu}"
 export ORCH_TRAIN_GRES="${ORCH_TRAIN_GRES:-gpu:h200:1}"
+# Sparse training (DPO + GRPO): default A100 — override with ORCH_TRAIN_PARTITION_SPARSE / ORCH_TRAIN_GRES_SPARSE
+export ORCH_TRAIN_PARTITION_SPARSE="${ORCH_TRAIN_PARTITION_SPARSE:-${ORCH_TRAIN_PARTITION:-gpu}}"
+export ORCH_TRAIN_GRES_SPARSE="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
 export ORCH_TRAIN_MEM="${ORCH_TRAIN_MEM:-128G}"
 export ORCH_TRAIN_CPUS="${ORCH_TRAIN_CPUS:-8}"
 export ORCH_TRAIN_TIME_DPO="${ORCH_TRAIN_TIME_DPO:-07:45:00}"
@@ -214,7 +225,7 @@ if [ "${ORCH_USE_TRAIN_AUTO_RESUME}" = "1" ] && [ -n "${ORCH_TRAIN_SOFT_SECONDS:
   export AUTO_RESUME_SOFT_SECONDS="${ORCH_TRAIN_SOFT_SECONDS}"
 fi
 # When ORCH_USE_TRAIN_AUTO_RESUME=1, downstream sbatch uses orchestrate_training_child_entry.sh with
-# ORCH_TRAIN_PARTITION (default gpu), ORCH_TRAIN_GRES (default gpu:h200:1), ORCH_TRAIN_MEM (128G),
+# ORCH_TRAIN_PARTITION (default gpu), ORCH_TRAIN_GRES (dense: gpu:h200:1), ORCH_TRAIN_GRES_SPARSE (default gpu:a100:1),
 # ORCH_TRAIN_TIME_DPO (07:45:00), ORCH_TRAIN_TIME_GRPO (08:00:00), ORCH_TRAIN_CPUS (8 for GRPO jobs).
 
 # DPO/GRPO training always logs to W&B (Python entrypoints + launch scripts force online).
@@ -232,9 +243,10 @@ export WANDB_MODE="online"
 #     1) dense GRPO
 #     2) random sparse GRPO
 #     3) GRaSP sparse GRPO
-# - Train for 800 steps (GRPO_TARGET_STEPS), then exit early (skips DPO/Wanda/SNIP/etc.)
+# - Train for 1000 steps (GRPO_TARGET_STEPS / ORCH_GRPO_TRAIN_STEPS), then exit early (skips DPO dense/oracle/Wanda/SNIP/etc.)
+# Full DPO sweep (dense Tulu3 + Light-R1, oracle sparse, Wanda, …): export ORCH_GRPO_THREEWAY_FOCUS=0 before sbatch.
 export ORCH_GRPO_THREEWAY_FOCUS="${ORCH_GRPO_THREEWAY_FOCUS:-1}"
-export ORCH_GRPO_TRAIN_STEPS="${ORCH_GRPO_TRAIN_STEPS:-800}"
+export ORCH_GRPO_TRAIN_STEPS="${ORCH_GRPO_TRAIN_STEPS:-1000}"
 # Higher calibration by default for this focus mode
 export ORCH_GRPO_CALIB_SAMPLES="${ORCH_GRPO_CALIB_SAMPLES:-256}"
 export ORCH_GRPO_CALIB_BATCH_SIZE="${ORCH_GRPO_CALIB_BATCH_SIZE:-4}"
@@ -324,7 +336,34 @@ submit_training_job() {
   # NOTE: We no longer use --dependency="afterok:${SLURM_JOB_ID}" because we want to launch
   # immediately after the mask is confirmed on disk.
   if [ "${ORCH_USE_TRAIN_AUTO_RESUME:-0}" != "1" ]; then
+    local part_na gres_na mem_na time_wall_na
+    local -a cpus_na=()
+    part_na="${ORCH_TRAIN_PARTITION:-gpu}"
+    gres_na="${ORCH_TRAIN_GRES:-gpu:h200:1}"
+    mem_na="${ORCH_TRAIN_MEM:-128G}"
+    case "${auto_mode}" in
+      sparse_dpo|sparse_grpo)
+        part_na="${ORCH_TRAIN_PARTITION_SPARSE:-${ORCH_TRAIN_PARTITION:-gpu}}"
+        gres_na="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
+        ;;
+    esac
+    case "${auto_mode}" in
+      dense_dpo|sparse_dpo)
+        time_wall_na="${ORCH_TRAIN_TIME_DPO:-07:45:00}"
+        ;;
+      dense_grpo|sparse_grpo)
+        time_wall_na="${ORCH_TRAIN_TIME_GRPO:-08:00:00}"
+        cpus_na=( --cpus-per-task="${ORCH_TRAIN_CPUS:-8}" )
+        ;;
+      *)
+        echo "ERROR: unknown auto-resume mode tag: ${auto_mode}" >&2
+        exit 1
+        ;;
+    esac
     jid=$(sbatch --parsable \
+      --partition="${part_na}" --nodes=1 --ntasks=1 \
+      --gres="${gres_na}" --mem="${mem_na}" --time="${time_wall_na}" \
+      "${cpus_na[@]}" \
       --export=ALL,"${export_extra},${bases_steps}" \
       "${inner_script}")
     echo "${label}: ${jid}"
@@ -335,6 +374,12 @@ submit_training_job() {
   local -a cpus_args=()
   part="${ORCH_TRAIN_PARTITION:-gpu}"
   gres="${ORCH_TRAIN_GRES:-gpu:h200:1}"
+  case "${auto_mode}" in
+    sparse_dpo|sparse_grpo)
+      part="${ORCH_TRAIN_PARTITION_SPARSE:-${ORCH_TRAIN_PARTITION:-gpu}}"
+      gres="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
+      ;;
+  esac
   mem="${ORCH_TRAIN_MEM:-128G}"
 
   case "${auto_mode}" in
@@ -463,7 +508,7 @@ fi
 ########################################
 if [ "${ORCH_GRPO_THREEWAY_FOCUS}" = "1" ]; then
   echo ""
-  echo "=== ORCH_GRPO_THREEWAY_FOCUS=1: Open-R1 GRPO 3-way (800 steps) ==="
+  echo "=== ORCH_GRPO_THREEWAY_FOCUS=1: Open-R1 GRPO 3-way (1000 steps) ==="
 
   export GRPO_TARGET_STEPS="${ORCH_GRPO_TRAIN_STEPS}"
   export GRPO_N_SAMPLES="${ORCH_GRPO_CALIB_SAMPLES}"
@@ -606,19 +651,19 @@ PY
 
   echo ""
   echo "--- Submitting GRPO jobs (dense, random sparse, GRaSP sparse) ---"
-  submit_training_job "GRPO dense (800 steps)" \
+  submit_training_job "GRPO dense (1000 steps)" \
     "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
     dense_grpo \
     "GRPO_MODE=dense,GRPO_RUN_SLUG=${GRPO_RUN_SLUG},GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE}" \
     "grpo_dense_${GRPO_RUN_SLUG}"
 
-  submit_training_job "GRPO sparse random (800 steps)" \
+  submit_training_job "GRPO sparse random (1000 steps)" \
     "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
     sparse_grpo \
     "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_RANDOM_TRAIN},GRPO_RUN_NAME=${GRPO_SPARSE_RANDOM_RUN_NAME},GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE}" \
     "grpo_sp_rand_${GRPO_SPARSE_RANDOM_RUN_NAME}"
 
-  submit_training_job "GRPO sparse GRaSP (800 steps)" \
+  submit_training_job "GRPO sparse GRaSP (1000 steps)" \
     "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh" \
     sparse_grpo \
     "GRPO_MODE=sparse,GRPO_MASK=${MASK_GRPO_GRASP_TRAIN},GRPO_RUN_NAME=${GRPO_SPARSE_GRASP_RUN_NAME},GRPO_TARGET_STEPS=${GRPO_TARGET_STEPS},GRPO_MAX_PROMPT_LENGTH=${GRPO_MAX_PROMPT_LENGTH},GRPO_MAX_COMPLETION_LENGTH=${GRPO_MAX_COMPLETION_LENGTH},GRPO_REWARD_PROFILE=${GRPO_REWARD_PROFILE}" \
@@ -633,11 +678,74 @@ fi
 
 echo ""
 echo "--- Submitting Dense jobs (no mask needed) ---"
-submit_training_job "DPO dense Light-R1" \
+submit_training_job "DPO dense ${DPO_DS_KEY}" \
+  "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
+  dense_dpo \
+  "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID},RUN_ID=${DPO_DENSE_RUN_ID},DPO_DATASET_KEY=${DPO_DS_KEY}" \
+  "dpo_dense_${DPO_DENSE_RUN_ID}"
+
+submit_training_job "DPO dense ${DPO_DS_KEY_LIGHT_R1}" \
   "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
   dense_dpo \
   "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
   "dpo_dense_lr1_${DPO_DENSE_RUN_ID_LIGHT_R1}"
+
+if [ "${ORCH_QUEUE_ORACLE_MASK_TRAINING:-1}" = "1" ]; then
+  echo ""
+  echo "=== Oracle masks (|θ_final−θ_init|) via checkpoint_diff_mask_finder → sparse DPO ==="
+  echo "Tulu3 final dir:  ${ORACLE_FINAL_CKPT_DIR_TULU3}"
+  echo "Light-R1 final dir: ${ORACLE_FINAL_CKPT_DIR}"
+
+  mkdir -p "${MASK_DIR}"
+
+  if [ -d "${ORACLE_FINAL_CKPT_DIR_TULU3}" ]; then
+    echo "--- Building oracle mask (Tulu3) → ${MASK_ORACLE_TULU3}"
+    set +e
+    "$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+      --initial_model "${MODEL}" \
+      --final_model "${ORACLE_FINAL_CKPT_DIR_TULU3}" \
+      --sparsity_percent "${SPARSITY_PERCENT}" \
+      --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+      --output_file "${MASK_ORACLE_TULU3}"
+    _oracle_t_rc=$?
+    set -e
+    if [ "${_oracle_t_rc}" -ne 0 ] || [ ! -f "${MASK_ORACLE_TULU3}" ]; then
+      echo "WARNING: Tulu3 oracle mask failed or missing (rc=${_oracle_t_rc}); skip sparse oracle Tulu3."
+    else
+      submit_training_job "DPO sparse oracle ${DPO_DS_KEY}" \
+        "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+        sparse_dpo \
+        "PIPELINE_RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID},RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID},PIPELINE_MASK_FILE=${MASK_ORACLE_TULU3},DPO_DATASET_KEY=${DPO_DS_KEY}" \
+        "dpo_sp_oracle_${DPO_SPARSE_ORACLE_RUN_ID}"
+    fi
+  else
+    echo "WARNING: ORACLE_FINAL_CKPT_DIR_TULU3 not a directory — skip Tulu3 oracle mask/sparse (${ORACLE_FINAL_CKPT_DIR_TULU3})."
+  fi
+
+  if [ -d "${ORACLE_FINAL_CKPT_DIR}" ]; then
+    echo "--- Building oracle mask (Light-R1) → ${MASK_ORACLE_LIGHT_R1}"
+    set +e
+    "$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+      --initial_model "${MODEL}" \
+      --final_model "${ORACLE_FINAL_CKPT_DIR}" \
+      --sparsity_percent "${SPARSITY_PERCENT}" \
+      --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+      --output_file "${MASK_ORACLE_LIGHT_R1}"
+    _oracle_lr_rc=$?
+    set -e
+    if [ "${_oracle_lr_rc}" -ne 0 ] || [ ! -f "${MASK_ORACLE_LIGHT_R1}" ]; then
+      echo "WARNING: Light-R1 oracle mask failed or missing (rc=${_oracle_lr_rc}); skip sparse oracle Light-R1."
+    else
+      submit_training_job "DPO sparse oracle ${DPO_DS_KEY_LIGHT_R1}" \
+        "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+        sparse_dpo \
+        "PIPELINE_RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_ORACLE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+        "dpo_sp_oracle_lr1_${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1}"
+    fi
+  else
+    echo "WARNING: ORACLE_FINAL_CKPT_DIR not a directory — skip Light-R1 oracle mask/sparse (${ORACLE_FINAL_CKPT_DIR})."
+  fi
+fi
 
 # Light-R1 Wanda+OWL
 echo ""

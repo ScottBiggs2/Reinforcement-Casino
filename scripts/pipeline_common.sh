@@ -125,9 +125,17 @@ PIPELINE_MASK_PHASE="${PIPELINE_MASK_PHASE:-all}"
 # soft timeouts (7h30m below) terminate work before Slurm kills the allocation.
 # Stages that only fan out sbatch (sparse launcher, eval launcher) use the cpu partition + small mem.
 
+# Slurm partitions: Northeastern Explorer uses `short` for CPU batch jobs (there is no `cpu` partition).
+# GPU interactive/batch is typically `gpu`. Override on other clusters, e.g. export CPU_PARTITION=cpu
+CPU_PARTITION="${CPU_PARTITION:-short}"
+GPU_PARTITION="${GPU_PARTITION:-gpu}"
+
 # Parallel sparse jobs: per-GPU child job resources (see launch_parallel_sparse_jobs_and_eval)
 SPARSE_SLURM_TIME="${SPARSE_SLURM_TIME:-07:45:00}"
 SPARSE_SLURM_MEM="${SPARSE_SLURM_MEM:-128G}"
+# Sparse DPO/GRPO is often less memory-bound; A100 nodes may have shorter queue waits than H200.
+SPARSE_SLURM_PARTITION="${SPARSE_SLURM_PARTITION:-${GPU_PARTITION}}"
+SPARSE_SLURM_GRES="${SPARSE_SLURM_GRES:-gpu:a100:1}"
 # afterok = run evals only if every sparse job succeeded; afterany = run evals when all have finished (any exit code)
 PIPELINE_SPARSE_EVAL_DEPENDENCY="${PIPELINE_SPARSE_EVAL_DEPENDENCY:-afterok}"
 
@@ -138,11 +146,6 @@ PIPELINE_CPU_COMPARISON_MEM="${PIPELINE_CPU_COMPARISON_MEM:-128G}"
 PIPELINE_CPU_COMPARISON_CPUS="${PIPELINE_CPU_COMPARISON_CPUS:-16}"
 # Resume / safety: set to 1 to skip sbatch of stage 4 from stage 3 when sparse was already launched for this RUN_ID
 PIPELINE_SKIP_SPARSE_LAUNCH="${PIPELINE_SKIP_SPARSE_LAUNCH:-0}"
-
-# Slurm partitions: Northeastern Explorer uses `short` for CPU batch jobs (there is no `cpu` partition).
-# GPU interactive/batch is typically `gpu`. Override on other clusters, e.g. export CPU_PARTITION=cpu
-CPU_PARTITION="${CPU_PARTITION:-short}"
-GPU_PARTITION="${GPU_PARTITION:-gpu}"
 
 # Timeouts (seconds) — stay below Slurm wall; default 7h30m so `timeout` sends SIGTERM before job limit.
 # Override when running a single long-horizon sbatch (e.g. TRAIN_TIMEOUT_PER_DATASET=$((16*60*60))).
@@ -878,9 +881,9 @@ launch_parallel_sparse_jobs_and_eval() {
     echo "Submitting parallel sparse job for: ${mn}"
     local jid
     jid=$(sbatch --parsable \
-      --partition=gpu \
+      --partition="${SPARSE_SLURM_PARTITION}" \
       --nodes=1 \
-      --gres=gpu:h200:1 \
+      --gres="${SPARSE_SLURM_GRES}" \
       --time="${wall}" \
       --mem="${SPARSE_SLURM_MEM:-128G}" \
       --job-name="sp_${safe}" \

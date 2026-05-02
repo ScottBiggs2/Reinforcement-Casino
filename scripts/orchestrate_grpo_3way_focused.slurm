@@ -65,6 +65,11 @@ export GRPO_DATASET_HF="${GRPO_DATASET_HF:-open-r1/OpenR1-Math-220k}"
 export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 
+# Sparse GRPO training children (dense GRPO stays on default #SBATCH / H200 in grpo_openr1_llama31_slurm.sh).
+export ORCH_TRAIN_PARTITION_SPARSE="${ORCH_TRAIN_PARTITION_SPARSE:-gpu}"
+export ORCH_TRAIN_GRES_SPARSE="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
+export ORCH_TRAIN_TIME_GRPO="${ORCH_TRAIN_TIME_GRPO:-08:00:00}"
+
 # Mask calibration knobs.
 export GRPO_GRASP_OBJECTIVE="${GRPO_GRASP_OBJECTIVE:-lm}"
 export GRPO_GRASP_PREFERENCE_BETA="${GRPO_GRASP_PREFERENCE_BETA:-1.0}"
@@ -79,7 +84,7 @@ export ORCH_SCORE_SNR_RAM_BUDGET_GB="${ORCH_SCORE_SNR_RAM_BUDGET_GB:-96}"
 export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-1}"
 
 # Training knobs (forwarded to sbatched grpo_openr1_llama31_slurm.sh children).
-export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-800}"
+export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
 export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
@@ -256,6 +261,13 @@ if [ -f "${MASK_GRPO_GRASP_ELEM_SNR}" ]; then
 
   grasp_jname="$(orch_sanitize_job_name "grpo_sp_grasp_${GRPO_SPARSE_GRASP_RUN_NAME}")"
   grasp_jid=$(sbatch --parsable \
+    --partition="${ORCH_TRAIN_PARTITION_SPARSE}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --gres="${ORCH_TRAIN_GRES_SPARSE}" \
+    --mem=128G \
+    --time="${ORCH_TRAIN_TIME_GRPO}" \
+    --cpus-per-task=8 \
     --job-name="${grasp_jname}" \
     --export="${SPARSE_GRASP_EXPORT}" \
     "${REPO_ROOT}/scripts/grpo_openr1_llama31_slurm.sh")

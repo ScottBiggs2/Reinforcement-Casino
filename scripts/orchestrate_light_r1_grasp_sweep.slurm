@@ -54,6 +54,8 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${SCRATCH_USER_ROOT}/hf_cache/dat
 # Output bases (dense runs live elsewhere; this sweep only touches masks + sparse outputs)
 export MASK_OUT_BASE="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}"
 export SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train}"
+export SPARSE_SLURM_PARTITION="${SPARSE_SLURM_PARTITION:-gpu}"
+export SPARSE_SLURM_GRES="${SPARSE_SLURM_GRES:-gpu:a100:1}"
 
 # Model + dataset
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
@@ -180,6 +182,11 @@ submit_sparse_dpo_one_mask() {
   # Force 4h wall for this sweep (overrides the #SBATCH time in pipeline_sparse_one_mask.sh).
   local jid
   jid=$(sbatch --parsable \
+    --partition="${SPARSE_SLURM_PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --gres="${SPARSE_SLURM_GRES}" \
+    --mem=128G \
     --time="04:00:00" \
     --job-name="${jname}" \
     --export=ALL,"PIPELINE_RUN_ID=${PIPELINE_RUN_ID},RUN_ID=${RUN_ID},PIPELINE_MASK_FILE=${mask_path},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1},NUM_STEPS_DPO=${NUM_STEPS_DPO},DPO_SAVE_STEPS=${DPO_SAVE_STEPS},DPO_SAVE_TOTAL_LIMIT=${DPO_SAVE_TOTAL_LIMIT}" \

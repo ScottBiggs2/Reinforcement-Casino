@@ -9,6 +9,12 @@
 #   # match whatever you used for the full orchestrator (paths, steps, ORCH_TRAIN_* , etc.)
 #   bash scripts/orchestrate_queue_training_only.sh
 #
+# Dense DPO (Tulu3 + Light-R1) + checkpoint-diff oracle masks + sparse oracle only (no GRPO / no other masks):
+#   export ORCH_QUEUE_DPO_DENSE_AND_ORACLE_ONLY=1
+#   export ORACLE_FINAL_CKPT_DIR=/scratch/$USER/.../checkpoint-500   # Light-R1 dense output
+#   export ORACLE_FINAL_CKPT_DIR_TULU3=/scratch/$USER/.../checkpoint-500
+#   bash scripts/orchestrate_queue_training_only.sh
+#
 # Optional: ORCH_SBATCH_DEPENDENCY=afterok:12345   # only if you want an explicit dependency
 # If the scheduler rejects bursts of sbatch: ORCH_SLEEP_BETWEEN_SUBMIT_SEC=3
 # Paths must match the mask job: MASK_OUT_BASE, SCRATCH_USER_ROOT, MODEL, SPARSITY_PERCENT, GRPO_DATASET_HF.
@@ -48,6 +54,10 @@ export SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse
 export GRPO_DENSE_OUTPUT_BASE="${GRPO_DENSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense}"
 export GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/sparse}"
 
+# Checkpoint-diff oracle masks (same defaults as orchestrate_masks_then_queue_dpo_grpo.slurm; override after new dense runs).
+export ORACLE_FINAL_CKPT_DIR="${ORACLE_FINAL_CKPT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
+export ORACLE_FINAL_CKPT_DIR_TULU3="${ORACLE_FINAL_CKPT_DIR_TULU3:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500}"
+
 export HF_TOKEN="${HF_TOKEN:-}"
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 
@@ -75,13 +85,16 @@ export DPO_DENSE_RUN_ID_LIGHT_R1="${DPO_DENSE_RUN_ID_LIGHT_R1:-dpo5k_dense_${DPO
 export DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1="${DPO_SPARSE_RANDOM_RUN_ID_LIGHT_R1:-dpo5k_sparse_random_${DPO_DS_KEY_LIGHT_R1}}"
 export DPO_SPARSE_CAV_RUN_ID_LIGHT_R1="${DPO_SPARSE_CAV_RUN_ID_LIGHT_R1:-dpo5k_sparse_cav_${DPO_DS_KEY_LIGHT_R1}}"
 export DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1="${DPO_SPARSE_SNIP_RUN_ID_LIGHT_R1:-dpo5k_sparse_snip_${DPO_DS_KEY_LIGHT_R1}}"
+export DPO_SPARSE_ORACLE_RUN_ID="${DPO_SPARSE_ORACLE_RUN_ID:-dpo_sparse_oracle_${DPO_DS_KEY}}"
+export DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1="${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1:-dpo_sparse_oracle_${DPO_DS_KEY_LIGHT_R1}}"
+export ORCH_QUEUE_ORACLE_MASK_TRAINING="${ORCH_QUEUE_ORACLE_MASK_TRAINING:-1}"
 
 export GRPO_DENSE_RUN_SLUG="${GRPO_DENSE_RUN_SLUG:-llama31_${GRPO_DATASET_HF##*/}_grpo_dense_v1}"
 export GRPO_SPARSE_RANDOM_RUN_NAME="${GRPO_SPARSE_RANDOM_RUN_NAME:-grpo_sparse_random_sp975_v1}"
 export GRPO_SPARSE_CAV_RUN_NAME="${GRPO_SPARSE_CAV_RUN_NAME:-grpo_sparse_cav_sp975_v1}"
 export GRPO_SPARSE_SNIP_RUN_NAME="${GRPO_SPARSE_SNIP_RUN_NAME:-grpo_sparse_snip_${GRPO_SNIP_OBJECTIVE}_sp975_v1}"
 
-export NUM_STEPS_DPO="${NUM_STEPS_DPO:-5000}"
+export NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
@@ -92,7 +105,7 @@ export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-50}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-3}"
 
 export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
-export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-5000}"
+export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
 export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
@@ -103,6 +116,8 @@ export ORCH_USE_TRAIN_AUTO_RESUME="${ORCH_USE_TRAIN_AUTO_RESUME:-0}"
 export MAX_AUTO_RESUME="${MAX_AUTO_RESUME:-8}"
 export ORCH_TRAIN_PARTITION="${ORCH_TRAIN_PARTITION:-gpu}"
 export ORCH_TRAIN_GRES="${ORCH_TRAIN_GRES:-gpu:h200:1}"
+export ORCH_TRAIN_PARTITION_SPARSE="${ORCH_TRAIN_PARTITION_SPARSE:-${ORCH_TRAIN_PARTITION:-gpu}}"
+export ORCH_TRAIN_GRES_SPARSE="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
 export ORCH_TRAIN_MEM="${ORCH_TRAIN_MEM:-128G}"
 export ORCH_TRAIN_CPUS="${ORCH_TRAIN_CPUS:-8}"
 export ORCH_TRAIN_TIME_DPO="${ORCH_TRAIN_TIME_DPO:-07:45:00}"
@@ -180,15 +195,17 @@ orch_mask_precheck_fail() {
   exit 1
 }
 
-if [ ! -d "${MASK_DIR}" ]; then
-  orch_mask_precheck_fail "${MASK_DIR}/"
-fi
-
-for f in "$MASK_RANDOM" "$MASK_CAV" "$MASK_SNIP" "$MASK_CAV_LIGHT_R1" "$MASK_SNIP_LIGHT_R1" "$MASK_GRPO_CAV" "$MASK_GRPO_SNIP"; do
-  if [ ! -f "$f" ]; then
-    orch_mask_precheck_fail "$f"
+if [ "${ORCH_QUEUE_DPO_DENSE_AND_ORACLE_ONLY:-0}" != "1" ]; then
+  if [ ! -d "${MASK_DIR}" ]; then
+    orch_mask_precheck_fail "${MASK_DIR}/"
   fi
-done
+
+  for f in "$MASK_RANDOM" "$MASK_CAV" "$MASK_SNIP" "$MASK_CAV_LIGHT_R1" "$MASK_SNIP_LIGHT_R1" "$MASK_GRPO_CAV" "$MASK_GRPO_SNIP"; do
+    if [ ! -f "$f" ]; then
+      orch_mask_precheck_fail "$f"
+    fi
+  done
+fi
 
 echo "=== Queue training only (masks OK under MASK_DIR=${MASK_DIR}) ==="
 echo "ORCH_SBATCH_DEPENDENCY=${ORCH_SBATCH_DEPENDENCY:-<none>}"
@@ -222,7 +239,34 @@ submit_training_job() {
   fi
 
   if [ "${ORCH_USE_TRAIN_AUTO_RESUME:-0}" != "1" ]; then
+    local part_na gres_na mem_na time_wall_na
+    local -a cpus_na=()
+    part_na="${ORCH_TRAIN_PARTITION:-gpu}"
+    gres_na="${ORCH_TRAIN_GRES:-gpu:h200:1}"
+    mem_na="${ORCH_TRAIN_MEM:-128G}"
+    case "${auto_mode}" in
+      sparse_dpo|sparse_grpo)
+        part_na="${ORCH_TRAIN_PARTITION_SPARSE:-${ORCH_TRAIN_PARTITION:-gpu}}"
+        gres_na="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
+        ;;
+    esac
+    case "${auto_mode}" in
+      dense_dpo|sparse_dpo)
+        time_wall_na="${ORCH_TRAIN_TIME_DPO:-07:45:00}"
+        ;;
+      dense_grpo|sparse_grpo)
+        time_wall_na="${ORCH_TRAIN_TIME_GRPO:-08:00:00}"
+        cpus_na=( --cpus-per-task="${ORCH_TRAIN_CPUS:-8}" )
+        ;;
+      *)
+        echo "ERROR: unknown auto-resume mode tag: ${auto_mode}" >&2
+        exit 1
+        ;;
+    esac
     jid=$(sbatch --parsable "${dep_args[@]}" \
+      --partition="${part_na}" --nodes=1 --ntasks=1 \
+      --gres="${gres_na}" --mem="${mem_na}" --time="${time_wall_na}" \
+      "${cpus_na[@]}" \
       --export=ALL,"${export_extra},${bases_steps}" \
       "${inner_script}")
     echo "${label}: ${jid}"
@@ -234,6 +278,12 @@ submit_training_job() {
   local -a cpus_args=()
   part="${ORCH_TRAIN_PARTITION:-gpu}"
   gres="${ORCH_TRAIN_GRES:-gpu:h200:1}"
+  case "${auto_mode}" in
+    sparse_dpo|sparse_grpo)
+      part="${ORCH_TRAIN_PARTITION_SPARSE:-${ORCH_TRAIN_PARTITION:-gpu}}"
+      gres="${ORCH_TRAIN_GRES_SPARSE:-gpu:a100:1}"
+      ;;
+  esac
   mem="${ORCH_TRAIN_MEM:-128G}"
 
   case "${auto_mode}" in
@@ -284,6 +334,76 @@ submit_training_job() {
   echo "${label}: ${jid}"
   if [ -n "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC:-}" ]; then sleep "${ORCH_SLEEP_BETWEEN_SUBMIT_SEC}"; fi
 }
+
+if [ "${ORCH_QUEUE_DPO_DENSE_AND_ORACLE_ONLY:-0}" = "1" ]; then
+  export MASK_ORACLE_TULU3="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
+  export MASK_ORACLE_LIGHT_R1="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PERCENT}pct.pt"
+  mkdir -p "${MASK_DIR}"
+  echo ""
+  echo "=== ORCH_QUEUE_DPO_DENSE_AND_ORACLE_ONLY: two dense DPO + optional oracle sparse (skips GRPO block below) ==="
+  submit_training_job "DPO dense ${DPO_DS_KEY}" \
+    "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
+    dense_dpo \
+    "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID},RUN_ID=${DPO_DENSE_RUN_ID},DPO_DATASET_KEY=${DPO_DS_KEY}" \
+    "dpo_dense_${DPO_DENSE_RUN_ID}"
+  submit_training_job "DPO dense ${DPO_DS_KEY_LIGHT_R1}" \
+    "${REPO_ROOT}/scripts/pipeline_stage_01_dense.sh" \
+    dense_dpo \
+    "PIPELINE_CHAIN_NEXT_STAGE=0,PIPELINE_RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_DENSE_RUN_ID_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+    "dpo_dense_lr1_${DPO_DENSE_RUN_ID_LIGHT_R1}"
+
+  if [ "${ORCH_QUEUE_ORACLE_MASK_TRAINING:-1}" = "1" ]; then
+    echo ""
+    echo "=== Oracle masks + sparse DPO (expects dense checkpoints under ORACLE_FINAL_CKPT_DIR*) ==="
+    if [ -d "${ORACLE_FINAL_CKPT_DIR_TULU3}" ]; then
+      set +e
+      "$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+        --initial_model "${MODEL}" \
+        --final_model "${ORACLE_FINAL_CKPT_DIR_TULU3}" \
+        --sparsity_percent "${SPARSITY_PERCENT}" \
+        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+        --output_file "${MASK_ORACLE_TULU3}"
+      _rc=$?
+      set -e
+      if [ "${_rc}" -eq 0 ] && [ -f "${MASK_ORACLE_TULU3}" ]; then
+        submit_training_job "DPO sparse oracle ${DPO_DS_KEY}" \
+          "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+          sparse_dpo \
+          "PIPELINE_RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID},RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID},PIPELINE_MASK_FILE=${MASK_ORACLE_TULU3},DPO_DATASET_KEY=${DPO_DS_KEY}" \
+          "dpo_sp_oracle_${DPO_SPARSE_ORACLE_RUN_ID}"
+      else
+        echo "WARNING: Tulu3 oracle mask generation failed (rc=${_rc}); skip sparse oracle." >&2
+      fi
+    else
+      echo "WARNING: ORACLE_FINAL_CKPT_DIR_TULU3 missing; skip Tulu3 oracle." >&2
+    fi
+    if [ -d "${ORACLE_FINAL_CKPT_DIR}" ]; then
+      set +e
+      "$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
+        --initial_model "${MODEL}" \
+        --final_model "${ORACLE_FINAL_CKPT_DIR}" \
+        --sparsity_percent "${SPARSITY_PERCENT}" \
+        --min_layer_keep_ratio "${MIN_LAYER_KEEP_RATIO}" \
+        --output_file "${MASK_ORACLE_LIGHT_R1}"
+      _rc2=$?
+      set -e
+      if [ "${_rc2}" -eq 0 ] && [ -f "${MASK_ORACLE_LIGHT_R1}" ]; then
+        submit_training_job "DPO sparse oracle ${DPO_DS_KEY_LIGHT_R1}" \
+          "${REPO_ROOT}/scripts/pipeline_sparse_one_mask.sh" \
+          sparse_dpo \
+          "PIPELINE_RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1},RUN_ID=${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1},PIPELINE_MASK_FILE=${MASK_ORACLE_LIGHT_R1},DPO_DATASET_KEY=${DPO_DS_KEY_LIGHT_R1}" \
+          "dpo_sp_oracle_lr1_${DPO_SPARSE_ORACLE_RUN_ID_LIGHT_R1}"
+      else
+        echo "WARNING: Light-R1 oracle mask generation failed (rc=${_rc2}); skip sparse oracle." >&2
+      fi
+    else
+      echo "WARNING: ORACLE_FINAL_CKPT_DIR missing; skip Light-R1 oracle." >&2
+    fi
+  fi
+  echo ""
+  echo "=== Done (dense + oracle path). Monitor: squeue -u \$USER ==="
+  exit 0
+fi
 
 # echo ""
 # echo "--- DPO dense (Tulu3) ---"

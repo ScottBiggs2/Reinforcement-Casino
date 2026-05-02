@@ -105,6 +105,9 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
 export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-50}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-3}"
 export DPO_CHILD_WALL="${DPO_CHILD_WALL:-07:45:00}"
+# Sparse DPO children: match pipeline_common.sh / orchestrator (default A100).
+export SPARSE_SLURM_PARTITION="${SPARSE_SLURM_PARTITION:-gpu}"
+export SPARSE_SLURM_GRES="${SPARSE_SLURM_GRES:-gpu:a100:1}"
 # Mask run id (single dir for this sweep so all 4 masks are colocated).
 export MASK_RUN_ID="${MASK_RUN_ID:-orch_dpo_gm_${SLURM_JOB_ID:-manual}}"
 export MASK_DIR="${MASK_OUT_BASE}/${MASK_RUN_ID}"
@@ -285,6 +288,11 @@ submit_sparse_dpo_child() {
 
   local jid
   jid=$(sbatch --parsable \
+    --partition="${SPARSE_SLURM_PARTITION}" \
+    --nodes=1 \
+    --ntasks=1 \
+    --gres="${SPARSE_SLURM_GRES}" \
+    --mem=128G \
     --time="${DPO_CHILD_WALL}" \
     --job-name="${jname}" \
     --export="${export_str}" \

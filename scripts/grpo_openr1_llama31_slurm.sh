@@ -15,7 +15,7 @@
 #   sbatch scripts/grpo_openr1_llama31_slurm.sh
 # See docs/GRPO_HPC_COPYPASTE.md for --snip-objective lm vs dpo_preference and full paths.
 # Scratch layout (override any): GRPO_MASK_DIR, GRPO_DENSE_OUTPUT_BASE, GRPO_SPARSE_OUTPUT_BASE — see docs/GRPO_HPC_COPYPASTE.md
-#   GRPO_RESUME=auto GRPO_TARGET_STEPS=5000 sbatch ...   # same run_slug / run_name as prior job
+#   GRPO_RESUME=auto GRPO_TARGET_STEPS=1000 sbatch ...   # same run_slug / run_name as prior job
 #
 # Explorer / many sites: the gpu partition requires an explicit --gres; omitting it can yield
 # "sbatch: error: Batch job submission failed: Access/permission denied". Match other H200 jobs:
@@ -30,7 +30,8 @@
 #SBATCH --job-name=grpo_openr1
 #SBATCH --output=logs/grpo_openr1_%j.out
 #SBATCH --error=logs/grpo_openr1_%j.err
-# If the scheduler rejects gpu:h200:1 (or you need a different GPU type), replace the --gres line above, e.g.:
+# Orchestrators submit sparse GRPO with sbatch --gres=gpu:a100:1 (overrides this header). If the scheduler
+# rejects gpu:h200:1 (or you need a different GPU type), replace the --gres line above, e.g.:
 # #SBATCH --gres=gpu:1
 
 set -euo pipefail

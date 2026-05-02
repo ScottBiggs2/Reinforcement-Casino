@@ -252,3 +252,57 @@ GRPO_TARGET_STEPS=500,\
 GRPO_MASK="/scratch/$USER/rl_casino_grpo/masks/checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt",\
 GRPO_RUN_NAME="grpo_oracle_500", \
 scripts/grpo_openr1_llama31_slurm.sh
+
+
+# Magnitude 200 training on Light r1
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch --export=ALL,HF_TOKEN="$HF_TOKEN",WANDB_API_KEY="$WANDB_API_KEY",\
+PIPELINE_MASK_FILE="/scratch/$USER/rl_casino_masks/manual_mag_lr1_step200_sp97.5.pt",\
+DPO_DATASET_KEY="light-r1",\
+NUM_STEPS_DPO=500,\
+RUN_ID="dpo500_mag_lr1_step200_manual",\
+PIPELINE_RUN_ID="dpo500_mag_lr1_step200_manual" \
+scripts/pipeline_sparse_one_mask.sh
+Submitted batch job 6497790
+
+#magnitde 200 training on tulu3
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch --export=ALL,HF_TOKEN="$HF_TOKEN",WANDB_API_KEY="$WANDB_API_KEY",\
+PIPELINE_MASK_FILE="/scratch/$USER/rl_casino_masks/manual_mag_tulu3_step200_sp97.5.pt",\
+DPO_DATASET_KEY="tulu3",\
+NUM_STEPS_DPO=500,\
+RUN_ID="dpo500_mag_tulu3_step200_manual",\
+PIPELINE_RUN_ID="dpo500_mag_tulu3_step200_manual" \
+scripts/pipeline_sparse_one_mask.sh
+Submitted batch job 6497793
+
+# Speed benchmark (Final?)
+(base) [biggs.s@explorer-02 rl_casino]$ export RL_CASINO_BSR_GRAD_INPUT_MODE=dense
+sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
+Submitted batch job 6497854
+
+# GraSP (vanilla) GRPO
+(base) [biggs.s@explorer-02 rl_casino]$ sbatch --export=ALL,HF_TOKEN="$HF_TOKEN",MODEL="meta-llama/Llama-3.1-8B-Instruct",GRPO_DATASET_HF="open-r1/OpenR1-Math-220k",SPARSITY_PERCENT=97.5,MIN_LAYER_KEEP_RATIO=0.0025,GRPO_N_SAMPLES=256,ORCH_MASK_BATCH_SIZE=1,ORCH_SCORE_SNR_MODE=off,GRPO_TARGET_STEPS=800,EXTRA_GRASP_FLAGS="--also-emit-rank-variants" \
+  scripts/run_grpo_grasp_mask_only.slurm
+Submitted batch job 6497890
+
+# GraSP DPO Job(s)
+(base) [biggs.s@explorer-02 rl_casino]$ MASK_RUN_ID="dpo_grasp_abs_$(date +%Y%m%d_%H%M%S)"
+MASK_OUT_BASE="/scratch/$USER/rl_casino_masks"
+MODEL="meta-llama/Llama-3.1-8B-Instruct"
+SP=97.5
+
+jid=$(sbatch --parsable --export=ALL,HF_TOKEN="$HF_TOKEN",MASK_RUN_ID="$MASK_RUN_ID",MASK_OUT_BASE="$MASK_OUT_BASE",MODEL="$MODEL",SPARSITY_PERCENT="$SP",MIN_LAYER_KEEP_RATIO=0.0025,COLD_CAV_SUBSET=256,ORCH_MASK_BATCH_SIZE=1,ORCH_SCORE_SNR_MODE=off,EXTRA_GRASP_FLAGS="--also-emit-rank-variants" \
+  scripts/run_dpo_grasp_masks_only.slurm)
+
+echo "Mask job id: $jid"
+MASK_DIR="${MASK_OUT_BASE}/${MASK_RUN_ID}"
+
+# Expected primary (GraSP-ABS) mask paths produced by run_dpo_grasp_masks_only.slurm
+MODEL_SANITIZED="$(echo "$MODEL" | tr '/-' '__' | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]_' '_' | sed -e 's/__/_/g' -e 's/^_//' -e 's/_$//')"
+MASK_TULU3="${MASK_DIR}/grasp_${MODEL_SANITIZED}_tulu3_sp${SP}pct_objdpo_preference_elem_snroff_log1p.pt"
+MASK_LIGHTR1="${MASK_DIR}/grasp_${MODEL_SANITIZED}_light_r1_sp${SP}pct_objdpo_preference_elem_snroff_log1p.pt"
+
+# Sparse DPO submit (500 steps) for each dataset, using pipeline_sparse_o  scripts/pipeline_sparse_one_mask.shELINE_MASK_FILE="$MASK_LIGHTR1" \SET
+Mask job id: 6497892
+Submitted batch job 6497893
+Submitted batch job 6497894
+
