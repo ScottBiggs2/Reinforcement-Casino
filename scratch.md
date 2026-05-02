@@ -35,51 +35,10 @@ export WANDB_CONSOLE=off
 (base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 Submitted batch job XXXXXX
 
-
-# CAV Rescue Info and more: 
-
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path meta-llama/Llama-3.1-8B-Instruct \
-  --trust_remote_code
-Submitted batch job 6284288
-
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
-  --trust_remote_code
-Submitted batch job 6315118
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500 \
-  --trust_remote_code
-Submitted batch job 6315119
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_grpo/dense/llama31_OpenR1-Math-220k_grpo_dense_v1/checkpoints/checkpoint-750 \
-  --trust_remote_code
-Submitted batch job 6353405
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
-  --trust_remote_code
-Submitted batch job 6364819
-
-(base) [biggs.s@explorer-02 rl_casino]$ export ORCH_CAV_IMPL=cold_v2_all_params
-export ORCH_CAV_WEIGHT_ABS=1
-export MASK_RUN_ID=orch_lr1_cavv2_oracle_$(date +%Y%m%d_%H%M%S)
-sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
-Submitted batch job 6284301
-
-(base) [biggs.s@explorer-02 rl_casino]$ export ORCH_CAV_IMPL="cold_v2_all_params"
-export ORCH_CAV_WEIGHT_ABS=1
-export MASK_RUN_ID="orch_tulu3_lr1_grpo_cavv2_oracle_$(date +%Y%m%d_%H%M%S)"
-(base) [biggs.s@explorer-02 rl_casino]$ sbatch scripts/orchestrate_masks_then_queue_dpo_grpo.slurm
-Submitted batch job 6316353
-
-(base) [biggs.s@explorer-02 rl_casino]$ squeue -u $USER
-             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
-           6344001       gpu sparse_o  biggs.s PD       0:00      1 (QOSMaxJobsPerUserLimit)
-           6344000       gpu sparse_o  biggs.s PD       0:00      1 (QOSMaxJobsPerUserLimit)
-           6344985       gpu h200_bsr  biggs.s PD       0:00      1 (QOSMaxJobsPerUserLimit)
-           6343675       gpu grpo_ope  biggs.s  R    3:35:11      1 d4052
-           6343999       gpu sparse_o  biggs.s  R       0:34      1 d4053
-           6344002       gpu grpo_ope  biggs.s  R    1:27:36      1 d4055
+# Speed Benchmark Again: 
+(base) [biggs.s@explorer-02 rl_casino]$ export RL_CASINO_BSR_GRAD_INPUT_MODE=dense
+sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
+Submitted batch job 6498127
 
 
 ---
