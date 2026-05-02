@@ -56,8 +56,8 @@ export HF_TOKEN="${HF_TOKEN:?set HF_TOKEN for gated models}"
 export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
 
-# Sequence caps — align dense and sparse (override 2048 if you use a different cap)
-export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
+# Sequence caps — align dense and sparse (canonical: 512 / 1024 per open_r1_llama31.yaml)
+export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
 
 # Reward profile (Llama Instruct: default llama_cot)

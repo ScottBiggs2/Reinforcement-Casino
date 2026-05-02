@@ -1,0 +1,186 @@
+# Hyperparameter record: GRPO 5-way 500-step sweep
+# -----------------------------------------------------------------------------
+# Locks the hyperparameters for the one-shot pipeline implemented by
+#   scripts/orchestrate_grpo_500step_5way.slurm
+# Every job in the sweep (1 dense + 4 sparse) MUST run with these exact values.
+#
+# Single source of truth for runtime defaults:
+#   scripts/grpo_training_env_defaults.sh
+# Which is sourced by:
+#   - scripts/grpo_openr1_llama31_slurm.sh        (training launcher; both dense + sparse)
+#   - scripts/orchestrate_grpo_500step_5way.slurm (this sweep's parent)
+#   - scripts/grpo_magnitude_after_step200.slurm  (magnitude poller; submitted by parent)
+#
+# This file documents the contract and exists for the experimental record.
+
+schema_version: 1
+updated: "2026-05-01"
+parent_yaml: docs/hyperparams/open_r1_llama31.yaml
+launcher: scripts/orchestrate_grpo_500step_5way.slurm
+
+sweep:
+  name: grpo_500step_5way
+  num_jobs: 5
+  jobs:
+    - id: dense
+      mode: dense
+      mask: null
+      run_slug_default: "grpo_dense_openr1_steps500_with_deltas_v1"
+      role: "Baseline + magnitude source via delta logging through step 200."
+    - id: sparse_random
+      mode: sparse
+      mask: random_element_seed42
+      role: "Random elementwise mask control."
+    - id: sparse_grasp_abs
+      mode: sparse
+      mask: grasp_abs_no_snr
+      role: "Canonical GraSP-ABS (Frankle et al. 2021 ranking direction)."
+    - id: sparse_grasp_abs_snr
+      mode: sparse
+      mask: grasp_abs_snr_per_weight_log1p
+      role: "GraSP-ABS with multiplicative per-weight SNR reweighting (research toggle)."
+    - id: sparse_magnitude_step200
+      mode: sparse
+      mask: magnitude_target_step_200
+      role: "Warm-start magnitude mask from accumulated |Δθ| through step 200 of the dense run."
+
+# -----------------------------------------------------------------------------
+# Locked training hyperparameters (identical for ALL 5 jobs)
+# -----------------------------------------------------------------------------
+training:
+  model:
+    hf_id: meta-llama/Llama-3.1-8B-Instruct
+  dataset:
+    registry_key: math-220k
+    hf_id: open-r1/OpenR1-Math-220k
+
+  target_steps: 500              # GRPO_TARGET_STEPS
+
+  optimization:
+    learning_rate: 5.0e-6        # GRPO_LR
+    beta: 0.025                  # GRPO_BETA  (TRL GRPO KL-style coefficient)
+    optim: adamw_8bit            # dense; sparse jobs use sparse_adamw by construction
+    precision: bf16              # GRPO_PRECISION
+    warmup_ratio: 0.1            # dense uses ratio; sparse uses warmup_steps = floor(0.1 * 500) = 50
+    sparse_warmup_steps: 50      # derived from warmup_ratio * target_steps in launcher
+    max_grad_norm: 0.1           # GRPO_MAX_GRAD_NORM
+    lr_scheduler: cosine         # set inside GRPO_train.py / sparse_grpo_bsr.py
+    weight_decay: 0.0
+
+  batch:
+    per_device_train_batch_size: 2     # GRPO_PER_DEVICE_BS
+    gradient_accumulation_steps: 4     # GRPO_GRAD_ACCUM
+    effective_batch_per_step: 8
+
+  generation:
+    num_generations: 8                 # GRPO_NUM_GEN
+    generation_batch_size: 8           # GRPO_GEN_BATCH
+    constraint: "generation_batch_size % num_generations == 0 (TRL requirement)."
+
+  sequence:
+    max_prompt_length: 512             # GRPO_MAX_PROMPT_LENGTH
+    max_completion_length: 1024        # GRPO_MAX_COMPLETION_LENGTH
+
+  reward:
+    profile: llama_cot                 # GRPO_REWARD_PROFILE
+    cli_flag: "--grpo_reward_profile"
+
+  checkpointing:
+    save_steps: 50                     # GRPO_SAVE_STEPS
+    save_total_limit: 3                # GRPO_SAVE_TOTAL_LIMIT
+    gradient_checkpointing: true       # default inside trainers
+
+  delta_logging_dense_only:
+    enabled_for: dense
+    interval: 50                       # GRPO_DELTA_LOG_INTERVAL
+    end_step: 200                      # GRPO_DELTA_LOG_END_STEP — magnitude built at this step
+    output_subdir: "deltas/"
+
+# -----------------------------------------------------------------------------
+# Sparsity / mask construction (locked across all 4 sparse jobs)
+# -----------------------------------------------------------------------------
+masks:
+  sparsity_percent: 97.5               # SPARSITY_PERCENT
+  min_layer_keep_ratio: 0.0025         # MIN_LAYER_KEEP_RATIO (per-tensor floor for global pooling)
+  granularity: element                 # 1D elementwise; never block in this sweep
+
+  random:
+    flag_style: underscore             # generate_random_mask.py uses --min_layer_keep_ratio (NOT dashes)
+    seed: 42
+
+  grasp_common:
+    method: grasp
+    mode: grpo
+    objective: lm                      # GRPO_GRASP_OBJECTIVE (lm head CE, not dpo_preference)
+    n_samples: 256                     # GRPO_N_SAMPLES (calibration set size)
+    batch_size: 1                      # mask-finder batch
+    max_length: 512                    # matches max_prompt_length
+    seed: 42
+    rank_direction: abs                # GraSP-ABS (Frankle 2021 et al.)
+    grasp_preference_beta: 1.0         # only used if objective=dpo_preference
+
+  grasp_abs_no_snr:
+    score_snr: off                     # multiplicative SNR disabled
+
+  grasp_abs_snr_per_weight_log1p:
+    score_snr: per_weight              # ORCH_SCORE_SNR_MODE
+    score_snr_transform: log1p
+    score_snr_eps: 1.0e-8
+    score_snr_ram_budget_gb: 96
+    allow_large_ram: true
+    note: "Research toggle: existing literature does not use multiplicative SNR; this is exploratory."
+
+  magnitude:
+    builder: src/warm_start/even_better_mask_finder.py
+    method: magnitude
+    target_step: 200                   # GRPO_MAGNITUDE_TARGET_STEP — must match delta_logging.end_step
+    source: "Accumulated |Δθ| from dense GRPO run's deltas/ directory."
+
+# -----------------------------------------------------------------------------
+# Slurm allocation (chosen for compute uniformity)
+# -----------------------------------------------------------------------------
+slurm:
+  parent:
+    partition: gpu
+    gres: "gpu:h200:1"
+    mem: 128G
+    cpus_per_task: 8
+    time: "04:00:00"
+    rationale: "Parent needs a GPU to build GraSP and random masks; ~30–60 min typical."
+
+  training_children_dense_and_sparse:
+    partition: gpu
+    gres: "gpu:h200:1"          # uniform across all 5 training children for matched device numerics
+    mem: 128G
+    cpus_per_task: 8
+    time: "08:00:00"
+
+  magnitude_poller:
+    partition: short
+    gres: null                  # CPU only; rebuilds the mask, then sbatches a sparse h200 child
+    mem: 64G
+    cpus_per_task: 4
+    time: "08:00:00"            # poll up to ~7h45m for dense to reach step 200
+
+# -----------------------------------------------------------------------------
+# Entrypoint contract
+# -----------------------------------------------------------------------------
+entrypoints:
+  dense_python: src/full_training/GRPO_train.py
+  sparse_python: src/full_training/sparse_grpo_bsr.py
+  random_mask_python: src/utils/generate_random_mask.py
+  grasp_mask_python: src/cold_start/inference_mask_finder.py
+  magnitude_mask_python: src/warm_start/even_better_mask_finder.py
+  training_launcher_shell: scripts/grpo_openr1_llama31_slurm.sh
+
+invariants:
+  - "Every training child sources scripts/grpo_training_env_defaults.sh exactly once."
+  - "Every training child receives the same explicit --export list (built by build_train_export helper) so SLURM cannot drift hyperparams between submits."
+  - "All training children land on gpu:h200:1 (no a100 fallback for this sweep)."
+  - "All masks are 1D / element-wise / sparsity 97.5% / min_layer_keep_ratio 0.0025."
+  - "GRPO_TARGET_STEPS is hard-set to 500 by the parent; children inherit verbatim."
+  - "Sparse warmup_steps = floor(GRPO_WARMUP_RATIO * GRPO_TARGET_STEPS) = 50; computed inside grpo_openr1_llama31_slurm.sh so dense and sparse start with identical warmup duration."
+
+drop_in_command: |
+  cd <repo>
+  sbatch --export=ALL,HF_TOKEN="$HF_TOKEN" scripts/orchestrate_grpo_500step_5way.slurm

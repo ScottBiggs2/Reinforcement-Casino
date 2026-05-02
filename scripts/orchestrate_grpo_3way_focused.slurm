@@ -86,7 +86,8 @@ export ORCH_SCORE_SNR_ALLOW_LARGE_RAM="${ORCH_SCORE_SNR_ALLOW_LARGE_RAM:-1}"
 # Training knobs (forwarded to sbatched grpo_openr1_llama31_slurm.sh children).
 export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
 export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
-export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-2048}"
+# Align with docs/hyperparams/open_r1_llama31.yaml + grpo_openr1_llama31_slurm.sh (1024, not 2048).
+export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
 export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
 export GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-50}"
 export GRPO_SAVE_TOTAL_LIMIT="${GRPO_SAVE_TOTAL_LIMIT:-3}"

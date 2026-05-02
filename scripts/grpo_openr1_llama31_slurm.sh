@@ -63,6 +63,8 @@ export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/
 export GRPO_DENSE_OUTPUT_BASE="${GRPO_DENSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense}"
 export GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/sparse}"
 mkdir -p "${GRPO_MASK_DIR}"
+# shellcheck source=/dev/null
+source "${REPO_ROOT}/scripts/grpo_training_env_defaults.sh"
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
 if [ ! -x "$TRAIN_PY" ]; then
@@ -74,9 +76,7 @@ export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 export WANDB_CONSOLE="${WANDB_CONSOLE:-off}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-# Avoid importing a broken vLLM wheel (see src/utils/trl_vllm_import_guard.py). Set to 0 if you use trl[vllm].
 export TRL_SKIP_VLLM_IMPORT="${TRL_SKIP_VLLM_IMPORT:-1}"
-
 # Fail fast on login/CPU nodes (torch loads fp32 → huge RAM → OOM kill with no Python traceback).
 cuda_preflight() {
   "${TRAIN_PY}" - <<'PY'
@@ -94,54 +94,10 @@ print(f"CUDA preflight OK: device_count={torch.cuda.device_count()} device0={nam
 PY
 }
 
-# --- Model / data (override before sbatch) ---
-export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
-export GRPO_DATASET="${GRPO_DATASET:-math-220k}"
-export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${RL_CASINO_SCRATCH_ROOT}/hf_cache/datasets}"
-export GRPO_MODE="${GRPO_MODE:-dense}"
-export GRPO_NGPUS="${GRPO_NGPUS:-1}"
-
-# Training length / resume
-export GRPO_TARGET_STEPS="${GRPO_TARGET_STEPS:-1000}"
-export GRPO_RESUME="${GRPO_RESUME:-}"  # empty | auto | path to checkpoint-*
-
-# Hyperparams (see docs/hyperparams/open_r1_llama31.yaml)
-export GRPO_LR="${GRPO_LR:-5e-6}"
-export GRPO_BETA="${GRPO_BETA:-0.025}"
-export GRPO_PER_DEVICE_BS="${GRPO_PER_DEVICE_BS:-2}"
-export GRPO_GRAD_ACCUM="${GRPO_GRAD_ACCUM:-4}"
-export GRPO_NUM_GEN="${GRPO_NUM_GEN:-8}"
-export GRPO_GEN_BATCH="${GRPO_GEN_BATCH:-8}"
-# Passed through to HF Trainer as save_steps / save_total_limit (save_strategy=steps).
-# save_steps: write checkpoint-* every N global steps. save_total_limit: keep only the newest K checkpoints on disk (rotation).
-# This script does NOT auto-requeue; if wall time stops training early, resubmit with GRPO_RESUME=auto and the same run_slug/run_name.
-export GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-50}"
-export GRPO_SAVE_TOTAL_LIMIT="${GRPO_SAVE_TOTAL_LIMIT:-3}"
-export GRPO_OPTIM="${GRPO_OPTIM:-adamw_8bit}"
-export GRPO_PRECISION="${GRPO_PRECISION:-bf16}"
-export GRPO_MAX_PROMPT_LENGTH="${GRPO_MAX_PROMPT_LENGTH:-512}"
-export GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-1024}"
-# openr1_tags | llama_cot — see src/utils/grpo_rewards.py (default: delimiter-aware for Instruct models)
-export GRPO_REWARD_PROFILE="${GRPO_REWARD_PROFILE:-llama_cot}"
 # GRPO_train.py / sparse_grpo_bsr.py always log to W&B; scrub login-shell disables that survive sbatch --export=ALL.
 unset WANDB_DISABLED 2>/dev/null || true
 unset WANDB_SILENT 2>/dev/null || true
 export WANDB_MODE="online"
-
-# Sparse only: set 1 to pass --sparse_adamw_lazy_state (lower peak VRAM during SparseAdamW init)
-export GRPO_SPARSE_ADAMW_LAZY="${GRPO_SPARSE_ADAMW_LAZY:-0}"
-
-# Optional: fixed run folder for resume requeues (must match first job)
-export GRPO_RUN_SLUG="${GRPO_RUN_SLUG:-}"
-export GRPO_RUN_NAME="${GRPO_RUN_NAME:-}"
-
-# Optional weight-delta logging (dense only). Required to build later magnitude/momentum/fisher masks
-# from a GRPO dense trajectory. Both unset = no delta logging (default; matches prior behavior).
-#   GRPO_DELTA_LOG_INTERVAL=50  → checkpoint deltas every 50 steps (vs init weights)
-#   GRPO_DELTA_LOG_END_STEP=200 → last step at which deltas are written
-# Files land under <run_dir>/deltas/{base_state.pt, deltas_step_<N>.pt}.
-export GRPO_DELTA_LOG_INTERVAL="${GRPO_DELTA_LOG_INTERVAL:-}"
-export GRPO_DELTA_LOG_END_STEP="${GRPO_DELTA_LOG_END_STEP:-}"
 
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "RL_CASINO_SCRATCH_ROOT=${RL_CASINO_SCRATCH_ROOT}"
@@ -150,6 +106,14 @@ echo "GRPO_DENSE_OUTPUT_BASE=${GRPO_DENSE_OUTPUT_BASE}"
 echo "GRPO_SPARSE_OUTPUT_BASE=${GRPO_SPARSE_OUTPUT_BASE}"
 echo "GRPO_MODE=${GRPO_MODE} GRPO_NGPUS=${GRPO_NGPUS}"
 echo "MODEL=${MODEL} DATASET=${GRPO_DATASET} STEPS=${GRPO_TARGET_STEPS} RESUME=${GRPO_RESUME:-<none>}"
+echo "LR=${GRPO_LR} beta=${GRPO_BETA} bs=${GRPO_PER_DEVICE_BS} accum=${GRPO_GRAD_ACCUM} gen=${GRPO_NUM_GEN}/${GRPO_GEN_BATCH}"
+echo "seq caps: prompt=${GRPO_MAX_PROMPT_LENGTH} completion=${GRPO_MAX_COMPLETION_LENGTH} reward=${GRPO_REWARD_PROFILE}"
+echo "warmup_ratio=${GRPO_WARMUP_RATIO} max_grad_norm=${GRPO_MAX_GRAD_NORM}"
+
+# Sparse only: integer warmup steps ≈ dense (ratio × total steps).
+GRPO_SPARSE_WARMUP_STEPS="$("${TRAIN_PY}" -c "import os; s=int(os.environ.get('GRPO_TARGET_STEPS','1000')); r=float(os.environ.get('GRPO_WARMUP_RATIO','0.1')); print(max(0, int(s*r)))")"
+export GRPO_SPARSE_WARMUP_STEPS
+echo "sparse_warmup_steps=${GRPO_SPARSE_WARMUP_STEPS} (matches dense warmup_ratio×steps)"
 
 cuda_preflight || exit 1
 
@@ -205,6 +169,8 @@ if [ "${GRPO_MODE}" = "dense" ]; then
     --precision "${GRPO_PRECISION}" \
     --optim "${GRPO_OPTIM}" \
     --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
+    --warmup_ratio "${GRPO_WARMUP_RATIO}" \
+    --max_grad_norm "${GRPO_MAX_GRAD_NORM}" \
     --output_base_dir "${GRPO_DENSE_OUTPUT_BASE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
     "${RUN_SLUG_ARGS[@]}" \
@@ -234,6 +200,8 @@ elif [ "${GRPO_MODE}" = "sparse" ]; then
     --max_completion_length "${GRPO_MAX_COMPLETION_LENGTH}" \
     --precision "${GRPO_PRECISION}" \
     --grpo_reward_profile "${GRPO_REWARD_PROFILE}" \
+    --warmup_steps "${GRPO_SPARSE_WARMUP_STEPS}" \
+    --max_grad_norm "${GRPO_MAX_GRAD_NORM}" \
     --output_base_dir "${GRPO_SPARSE_OUTPUT_BASE}" \
     --dataset_cache_dir "${HF_DATASETS_CACHE}" \
     "${RUN_NAME_ARGS[@]}" \

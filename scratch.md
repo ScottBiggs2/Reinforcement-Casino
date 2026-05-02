@@ -41,6 +41,10 @@ sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 Submitted batch job 6498127
 
 
+export GRPO_TARGET_STEPS=800
+
+
+
 ---
 
 ### Mask-GT CSV sanity (finite CKA + effective rank before trusting PNGs)
