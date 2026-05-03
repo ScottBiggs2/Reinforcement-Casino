@@ -1,4 +1,4 @@
-
+import math
 import os
 import torch
 
@@ -62,41 +62,44 @@ class SparseMaskManager:
             
             # CRITICAL FIX: Pre-compute flattened indices of non-zero elements ON GPU
             # The mask is already on device, so nonzero() will return GPU indices
+            self.active_block_indices = getattr(self, 'active_block_indices', {})
             if nonzero_count > 0:
                 # 1. Unstructured indices (for fallback or unstructured kernels)
                 flat_mask = mask.flatten()
                 indices = torch.nonzero(flat_mask, as_tuple=False).squeeze(-1).contiguous()
                 self.nonzero_indices[name] = indices.to(device, non_blocking=True)
-                
-                # 2. Block-structured indices (for BSR kernels)
-                # Assume 16x16 blocks (standard for this project)
-                block_size = 16
-                M, N = mask.shape
-                num_blocks_m = (M + block_size - 1) // block_size
-                num_blocks_n = (N + block_size - 1) // block_size
-                pad_m = num_blocks_m * block_size - M
-                pad_n = num_blocks_n * block_size - N
-                
-                if pad_m > 0 or pad_n > 0:
-                    padded_mask = torch.nn.functional.pad(mask.float(), (0, pad_n, 0, pad_m), value=0)
-                else:
-                    padded_mask = mask.float()
-                
-                blocks = padded_mask.view(num_blocks_m, block_size, num_blocks_n, block_size)
-                block_active = blocks.any(dim=(1, 3)) # any() over both block dims
-                self.active_block_indices = getattr(self, 'active_block_indices', {})
-                # Keep this in a launch-ready format: int32 + contiguous on device.
-                self.active_block_indices[name] = (
-                    torch.nonzero(block_active.flatten(), as_tuple=False)
-                    .squeeze(-1)
-                    .to(dtype=torch.int32)
-                    .contiguous()
-                    .to(device, non_blocking=True)
-                    .contiguous()
-                )
+
+                # 2. Block-structured indices (for BSR kernels) — 2D weight matrices only.
+                # Checkpoint-diff / full-state masks may include 1D norms/biases; those are
+                # not BSR-tiled here (empty active blocks). Sparse Adam only applies BSR to
+                # len(param.shape)==2 anyway; older mask files with only 2D keys unchanged.
+                if mask.dim() == 2:
+                    block_size = 16
+                    M, N = int(mask.shape[0]), int(mask.shape[1])
+                    num_blocks_m = (M + block_size - 1) // block_size
+                    num_blocks_n = (N + block_size - 1) // block_size
+                    pad_m = num_blocks_m * block_size - M
+                    pad_n = num_blocks_n * block_size - N
+
+                    if pad_m > 0 or pad_n > 0:
+                        padded_mask = torch.nn.functional.pad(mask.float(), (0, pad_n, 0, pad_m), value=0)
+                    else:
+                        padded_mask = mask.float()
+
+                    blocks = padded_mask.view(num_blocks_m, block_size, num_blocks_n, block_size)
+                    block_active = blocks.any(dim=(1, 3))  # any() over both block dims
+                    self.active_block_indices[name] = (
+                        torch.nonzero(block_active.flatten(), as_tuple=False)
+                        .squeeze(-1)
+                        .to(dtype=torch.int32)
+                        .contiguous()
+                        .to(device, non_blocking=True)
+                        .contiguous()
+                    )
+                # Non-2D (e.g. LayerNorm .weight): no BSR grid; omit active_block_indices so
+                # callers fall back to unstructured indices (grad clip / Adam paths).
             else:
                 self.nonzero_indices[name] = torch.empty(0, dtype=torch.long, device=device)
-                self.active_block_indices = getattr(self, 'active_block_indices', {})
                 self.active_block_indices[name] = torch.empty(0, dtype=torch.int32, device=device)
         
         slurm_safe_print(f"✓ Loaded {len(self.masks)} masks with pre-computed indices")
@@ -104,9 +107,7 @@ class SparseMaskManager:
     
     def _print_mask_summary(self):
         """Print summary statistics of loaded masks."""
-        total_params = sum(stats['shape'][0] * stats['shape'][1] 
-                          for stats in self.mask_stats.values() 
-                          if len(stats['shape']) == 2)
+        total_params = sum(math.prod(stats['shape']) for stats in self.mask_stats.values())
         total_active = sum(stats['nonzero'] 
                           for stats in self.mask_stats.values())
         

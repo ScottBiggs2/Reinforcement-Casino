@@ -152,14 +152,16 @@ class SparseAdamW(torch.optim.Optimizer):
                 
                 # Check for mask
                 if param_name and self.mask_manager.has_mask(param_name):
-                    # Try BSR norm first
+                    # BSR norm only when we have active 16×16 blocks (2D weights). Empty tensor
+                    # must fall through to unstructured so 1D masked params (e.g. full-state oracle
+                    # masks) still contribute to the clip norm.
                     active_blocks = self.mask_manager.get_active_block_indices(param_name)
-                    if active_blocks is not None:
+                    if active_blocks is not None and active_blocks.numel() > 0:
                         total_norm_sq += compute_bsr_grad_norm_sq(p.grad, active_blocks)
                     else:
-                        # Fallback to unstructured
                         indices = self.mask_manager.get_nonzero_indices(param_name)
-                        total_norm_sq += compute_unstructured_grad_norm_sq(p.grad, indices)
+                        if indices is not None:
+                            total_norm_sq += compute_unstructured_grad_norm_sq(p.grad, indices)
                 else:
                     # Dense parameter
                     total_norm_sq += torch.sum(p.grad * p.grad)

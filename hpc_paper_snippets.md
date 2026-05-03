@@ -37,7 +37,43 @@ Example layout CSV (drafting only — **replace with your measured CSV** before 
 
 <!-- H200_BSR_PAPER_EXPORT_START -->
 
-_Refresh this section from `benchmark_training_log.csv` — numbers below are placeholders until you inject._
+## Auto-filled from benchmark CSV (edit upstream CSV + re-export; do not hand-tune numbers here)
+
+_Compact mode_ (`--compact`): Markdown summary and one throughput LaTeX block only. Omit `--compact` for timing-highlight + appendix LaTeX.
+
+<!-- Generated from `benchmark_training_log.csv` — re-run export after updating the CSV. -->
+
+### Aggregated throughput (mean of last logged rows per phase)
+
+| Phase | Sparse % | Optimizer | Last step | microBS / accum | Steps/s | Samples/s | Wall (s) | Theory BWD FLOP/step | TFLOP/s (bwd) | TFLOP/s (step) |
+|-------|----------|-----------|-----------|-----------------|---------|-----------|----------|----------------------|---------------|----------------|
+| `dense` |  | adamw | 8 | --- | 0.024736 | 3.1663 | 217.00 | --- | --- | --- |
+| `s99p75_elem_gidense_block_1d` | 99.75 | sparse_adamw | 8 | --- | 0.001233 | 0.1579 | 4356.14 | 5.2625e+12 | --- | --- |
+| `s99p75_elem_gidense_block_2d` | 99.75 | sparse_adamw | 8 | --- | 0.001234 | 0.1579 | 4354.97 | 5.2625e+12 | --- | --- |
+| `s99p75_blk_gidense_block_1d` | 99.75 | sparse_adamw | 8 | --- | 0.025233 | 3.2299 | 212.87 | 5.2625e+12 | --- | --- |
+| `s99p75_blk_gidense_block_2d` | 99.75 | sparse_adamw | 8 | --- | 0.025275 | 3.2352 | 212.57 | 5.2625e+12 | --- | --- |
+| `s97p5_elem_gidense_block_1d` | 97.5 | sparse_adamw | 8 | --- | 0.000598 | 0.0766 | 8980.26 | 5.2625e+13 | --- | --- |
+
+```latex
+\begin{table}[t]
+  \centering
+  \small
+  \caption{H200 BSR --- throughput (tail-mean). \emph{Theory} $\tilde F_{\mathrm{BSR\,bwd}}$: masked-linear backward FLOPs per optimizer step (mask sidecar; sparse phases only). \emph{Timed} rates use CUDA segment timings when enabled: \textsubscript{bwd} scales the last micro-batch backward by grad accumulation; \textsubscript{step} divides the same theory proxy by the measured full-step wall slice. Otherwise \texttt{---}.}
+  \label{tab:bsr-throughput-autogen}
+  \begin{tabular}{@{}lcccccc@{}}
+    \toprule
+    Phase & Steps/s & Samples/s & Last step & $\tilde F_{\mathrm{BSR\,bwd}}$ / step & TFLOP/s\textsubscript{bwd} & TFLOP/s\textsubscript{step} \\
+    \midrule
+    \texttt{dense} & 0.024736 & 3.1663 & 8 & --- & --- & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_1d} & 0.001233 & 0.1579 & 8 & 5.2625e+12 & --- & --- \\
+    \texttt{s99p75\_elem\_gidense\_block\_2d} & 0.001234 & 0.1579 & 8 & 5.2625e+12 & --- & --- \\
+    \texttt{s99p75\_blk\_gidense\_block\_1d} & 0.025233 & 3.2299 & 8 & 5.2625e+12 & --- & --- \\
+    \texttt{s99p75\_blk\_gidense\_block\_2d} & 0.025275 & 3.2352 & 8 & 5.2625e+12 & --- & --- \\
+    \texttt{s97p5\_elem\_gidense\_block\_1d} & 0.000598 & 0.0766 & 8 & 5.2625e+13 & --- & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
 
 <!-- H200_BSR_PAPER_EXPORT_END -->
 
