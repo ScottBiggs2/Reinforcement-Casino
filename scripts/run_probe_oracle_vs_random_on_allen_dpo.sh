@@ -81,7 +81,8 @@ python src/analysis/probe_pair_masks.py \
     --pairs_per_pos 2 \
     --n_jobs 8 \
     --holdout_frac 0.2 \
-    --use_holdout_as_test
+    --use_holdout_as_test \
+    --probe_C 0.01
 
 echo ""
 echo "Done: $(date)"
