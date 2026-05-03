@@ -348,10 +348,17 @@ def apply_mask(model, mask_dict: dict):
     Original weights are restored on exit regardless of exceptions.
     """
     originals = {}
+    skipped_shape = []
     try:
         for name, param in model.named_parameters():
             if name in mask_dict:
                 m = mask_dict[name]
+                # Skip shape mismatches (e.g. vocab differences between
+                # mask-source model and the model being probed). Recording
+                # these lets the caller surface them without crashing the run.
+                if m.shape != param.shape:
+                    skipped_shape.append((name, tuple(m.shape), tuple(param.shape)))
+                    continue
                 # Strict {0,1} check: non-binary masks would silently scale
                 # weights, corrupting the baseline restore below.
                 if not torch.all((m == 0) | (m == 1)):
@@ -361,6 +368,12 @@ def apply_mask(model, mask_dict: dict):
                     )
                 originals[name] = param.data.clone()
                 param.data.mul_(m.to(param.device, dtype=param.dtype))
+        if skipped_shape:
+            print(f"[apply_mask] skipped {len(skipped_shape)} param(s) due to shape mismatch:")
+            for n, ms, ps in skipped_shape[:5]:
+                print(f"  {n}: mask {ms} vs param {ps}")
+            if len(skipped_shape) > 5:
+                print(f"  ... and {len(skipped_shape) - 5} more")
         yield
     finally:
         for name, param in model.named_parameters():
