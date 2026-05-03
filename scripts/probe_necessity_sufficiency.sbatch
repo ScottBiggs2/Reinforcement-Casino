@@ -84,21 +84,43 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: build random masks for missing seeds
+# Step 2: build random masks for missing seeds (PARALLEL — each gen is
+# ~25 min serial on 8B params via chunked global top-k; per-process RSS
+# ~32 GB. Running them concurrently drops wall time from ~125 min to
+# ~25 min. We allocated 320 GB / 16 CPUs so 5×32 GB and 5×1 CPU fit.)
 # ---------------------------------------------------------------------------
+RAND_PIDS=()
 for seed in "${RANDOM_SEEDS[@]}"; do
     rmask="$MASK_DIR/random_baseline_tulu3_sp97.5_seed${seed}.pt"
-    if [ ! -f "$rmask" ]; then
-        echo "[mask] generating random seed=${seed} -> $rmask"
-        python src/warm_start/random_mask_baseline.py \
-            --reference_mask  "$ORACLE_MASK" \
-            --sparsity_percent 97.5 \
-            --output_file     "$rmask" \
-            --seed            "$seed"
-    else
+    if [ -f "$rmask" ]; then
         echo "[mask] random seed=${seed} exists"
+        continue
     fi
+    echo "[mask] launching random seed=${seed} -> $rmask (background)"
+    python src/warm_start/random_mask_baseline.py \
+        --reference_mask  "$ORACLE_MASK" \
+        --sparsity_percent 97.5 \
+        --output_file     "$rmask" \
+        --seed            "$seed" \
+        > "logs/random_mask_seed${seed}_${SLURM_JOB_ID:-local}.log" 2>&1 &
+    RAND_PIDS+=($!)
 done
+
+if [ ${#RAND_PIDS[@]} -gt 0 ]; then
+    echo "[mask] waiting on ${#RAND_PIDS[@]} parallel mask gen(s): ${RAND_PIDS[*]}"
+    fail=0
+    for pid in "${RAND_PIDS[@]}"; do
+        if ! wait "$pid"; then
+            echo "[mask] FAILED pid $pid"
+            fail=1
+        fi
+    done
+    if [ "$fail" -eq 1 ]; then
+        echo "[mask] one or more random mask gens failed; see logs/random_mask_seed*_${SLURM_JOB_ID:-local}.log"
+        exit 1
+    fi
+    echo "[mask] all parallel mask gens completed"
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: write the masks JSON (1 oracle + 1 anti + 6 random)
