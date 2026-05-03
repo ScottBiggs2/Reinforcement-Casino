@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One GPU job: build element-wise checkpoint-diff oracle mask (|θ_final − θ_init|),
 # then submit sparse GRPO with the same locked training env as other GRPO children.
+# Parent walltime 30m (mask ~10m + slack). Uses H200 for VRAM/RAM headroom vs A100.
 #
 # Defaults match the May 2026 Open-R1 500-step dense run under rl_casino_grpo; override via env.
 #
@@ -19,7 +20,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
-#SBATCH --time=04:00:00
+#SBATCH --time=00:30:00
 #SBATCH --job-name=grpo_oracle_tr
 #SBATCH --output=logs/run_grpo_oracle_mask_sparse_%j.out
 #SBATCH --error=logs/run_grpo_oracle_mask_sparse_%j.err
