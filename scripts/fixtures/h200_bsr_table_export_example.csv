@@ -1,11 +1,11 @@
-# Synthetic layout-only CSV for drafting tables (replace with real benchmark_training_log.csv before submission).
-phase,sparsity_target_pct,optimizer,step,wall_time_s,cumulative_steps_per_s,cumulative_samples_per_s,loss
-dense,,adamw_8bit,8,322.8,0.0248,3.17,0.692
-s99p75_elem_gidense_block_1d,99.75,sparse_adamw,8,6488.0,0.00123,0.158,0.693
-s99p75_elem_gidense_block_2d,99.75,sparse_adamw,8,6487.0,0.00123,0.158,0.693
-s99p75_blk_gidense_block_1d,99.75,sparse_adamw,8,5210.0,0.00154,0.197,0.692
-s99p75_blk_gidense_block_2d,99.75,sparse_adamw,8,5205.0,0.00154,0.197,0.692
-s97p5_elem_gidense_block_1d,97.5,sparse_adamw,8,6100.0,0.00131,0.168,0.691
-s97p5_elem_gidense_block_2d,97.5,sparse_adamw,8,6095.0,0.00131,0.168,0.691
-s97p5_blk_gidense_block_1d,97.5,sparse_adamw,8,4800.0,0.00167,0.214,0.690
-s97p5_blk_gidense_block_2d,97.5,sparse_adamw,8,4795.0,0.00167,0.214,0.690
+# Synthetic layout for export smoke test (replace with real benchmark_training_log.csv).
+phase,sparsity_target_pct,optimizer,step,wall_time_s,cumulative_steps_per_s,cumulative_samples_per_s,loss,trainer_per_device_train_batch_size,trainer_grad_accum_steps,theory_bsr_backward_flops_proxy,theory_active_fraction_global,theory_b_tokens_proxy
+dense,,adamw_8bit,8,322.8,0.0248,3.17,0.692,2,64,,,
+s99p75_elem_gidense_block_1d,99.75,sparse_adamw,8,6488.0,0.00123,0.158,0.693,2,64,8.1e14,0.0025,131072
+s99p75_elem_gidense_block_2d,99.75,sparse_adamw,8,6487.0,0.00123,0.158,0.693,2,64,8.1e14,0.0025,131072
+s99p75_blk_gidense_block_1d,99.75,sparse_adamw,8,5210.0,0.00154,0.197,0.692,2,64,7.9e14,0.0031,131072
+s99p75_blk_gidense_block_2d,99.75,sparse_adamw,8,5205.0,0.00154,0.197,0.692,2,64,7.9e14,0.0031,131072
+s97p5_elem_gidense_block_1d,97.5,sparse_adamw,8,6100.0,0.00131,0.168,0.691,2,64,2.4e14,0.025,131072
+s97p5_elem_gidense_block_2d,97.5,sparse_adamw,8,6095.0,0.00131,0.168,0.691,2,64,2.4e14,0.025,131072
+s97p5_blk_gidense_block_1d,97.5,sparse_adamw,8,4800.0,0.00167,0.214,0.690,2,64,2.2e14,0.028,131072
+s97p5_blk_gidense_block_2d,97.5,sparse_adamw,8,4795.0,0.00167,0.214,0.690,2,64,2.2e14,0.028,131072

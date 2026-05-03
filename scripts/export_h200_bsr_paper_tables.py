@@ -103,9 +103,28 @@ def aggregate_phases(rows: List[Dict[str, str]], tail_rows: int) -> List[Dict[st
             "t_backward_ms",
             "t_optim_ms",
             "eff_bsr_backward_tflops",
+            "eff_bsr_backward_tflops_over_e2e_step",
+            "theory_bsr_backward_flops_proxy",
+            "theory_active_fraction_global",
+            "theory_b_tokens_proxy",
         ):
             nums[col] = [_to_float(x.get(col)) for x in tail]
             row[col] = _mean(nums[col])
+
+        try:
+            row["last_logged_step"] = int(float(tail[-1].get("step") or 0))
+        except (TypeError, ValueError):
+            row["last_logged_step"] = 0
+        try:
+            row["trainer_grad_accum_steps"] = int(float(tail[-1].get("trainer_grad_accum_steps") or 0))
+        except (TypeError, ValueError):
+            row["trainer_grad_accum_steps"] = 0
+        try:
+            row["trainer_per_device_train_batch_size"] = int(
+                float(tail[-1].get("trainer_per_device_train_batch_size") or 0)
+            )
+        except (TypeError, ValueError):
+            row["trainer_per_device_train_batch_size"] = 0
 
         out.append(row)
     return out
@@ -115,6 +134,13 @@ def _fmt_num(x: float, nd: int = 4) -> str:
     if x is None or math.isnan(x) or math.isinf(x):
         return "---"
     return f"{float(x):.{nd}f}"
+
+
+def _fmt_theory_flops_per_step(x: float) -> str:
+    """Accounting-scale FLOP counts per optimizer step (scientific notation)."""
+    if x is None or math.isnan(x) or math.isinf(x) or x <= 0:
+        return "---"
+    return f"{float(x):.4e}"
 
 
 def _latex_tt(s: str) -> str:
@@ -127,8 +153,8 @@ def build_markdown_summary(agg: List[Dict[str, Any]], csv_basename: str) -> str:
         "",
         "### Aggregated throughput (mean of last logged rows per phase)",
         "",
-        "| Phase | Sparse % | Optimizer | Steps/s | Samples/s | Wall (tail mean, s) |",
-        "|-------|----------|-----------|---------|-----------|---------------------|",
+        "| Phase | Sparse % | Optimizer | Last step | microBS / accum | Steps/s | Samples/s | Wall (s) | Theory BWD FLOP/step | TFLOP/s (bwd) | TFLOP/s (step) |",
+        "|-------|----------|-----------|-----------|-----------------|---------|-----------|----------|----------------------|---------------|----------------|",
     ]
     for r in agg:
         ph = str(r["phase"])
@@ -139,6 +165,18 @@ def build_markdown_summary(agg: List[Dict[str, Any]], csv_basename: str) -> str:
             sp_s = ""
         else:
             sp_s = str(sp)
+        mbs = int(r.get("trainer_per_device_train_batch_size") or 0)
+        ga = int(r.get("trainer_grad_accum_steps") or 0)
+        if mbs > 0 and ga > 0:
+            bs_accum = f"{mbs}/{ga}"
+        else:
+            bs_accum = "---"
+        tfl_b = float(r.get("eff_bsr_backward_tflops", float("nan")))
+        tfl_b_s = "---" if ph == "dense" or math.isnan(tfl_b) else _fmt_num(tfl_b, 4)
+        tfl_st = float(r.get("eff_bsr_backward_tflops_over_e2e_step", float("nan")))
+        tfl_st_s = "---" if ph == "dense" or math.isnan(tfl_st) else _fmt_num(tfl_st, 4)
+        th = float(r.get("theory_bsr_backward_flops_proxy", float("nan")))
+        th_s = "---" if ph == "dense" or math.isnan(th) or th <= 0 else _fmt_theory_flops_per_step(th)
         lines.append(
             "| "
             + " | ".join(
@@ -146,9 +184,14 @@ def build_markdown_summary(agg: List[Dict[str, Any]], csv_basename: str) -> str:
                     f"`{ph}`",
                     sp_s,
                     str(r.get("optimizer", "")),
+                    str(int(r.get("last_logged_step") or 0)),
+                    bs_accum,
                     _fmt_num(float(r["cumulative_steps_per_s"]), 6),
                     _fmt_num(float(r["cumulative_samples_per_s"]), 4),
                     _fmt_num(float(r["wall_time_s"]), 2),
+                    th_s,
+                    tfl_b_s,
+                    tfl_st_s,
                 ]
             )
             + " |"
@@ -212,21 +255,37 @@ def build_latex_throughput(agg: List[Dict[str, Any]]) -> str:
         r"\begin{table}[t]",
         r"  \centering",
         r"  \small",
-        r"  \caption{H200 BSR — throughput (mean over tail rows per phase).}",
+        (
+            r"  \caption{H200 BSR --- throughput (tail-mean). "
+            r"\emph{Theory} $\tilde F_{\mathrm{BSR\,bwd}}$: masked-linear backward FLOPs per optimizer step (mask sidecar; sparse phases only). "
+            r"\emph{Timed} rates use CUDA segment timings when enabled: \textsubscript{bwd} scales the last micro-batch backward by grad accumulation; "
+            r"\textsubscript{step} divides the same theory proxy by the measured full-step wall slice. Otherwise \texttt{---}.}"
+        ),
         r"  \label{tab:bsr-throughput-autogen}",
-        r"  \begin{tabular}{@{}lccc@{}}",
+        r"  \begin{tabular}{@{}lcccccc@{}}",
         r"    \toprule",
-        r"    Phase & Steps/s & Samples/s & BWD TFLOP/s (proxy) \\",
+        r"    Phase & Steps/s & Samples/s & Last step & $\tilde F_{\mathrm{BSR\,bwd}}$ / step & "
+        r"TFLOP/s\textsubscript{bwd} & TFLOP/s\textsubscript{step} \\",
         r"    \midrule",
     ]
     for r in agg:
         ph = _latex_tt(str(r["phase"]))
-        tflo = _fmt_num(float(r["eff_bsr_backward_tflops"]), 4)
-        if str(r["phase"]) == "dense":
-            tflo = "---"
+        th = float(r.get("theory_bsr_backward_flops_proxy", float("nan")))
+        if str(r["phase"]) == "dense" or math.isnan(th) or th <= 0:
+            th_s = "---"
+        else:
+            th_s = _fmt_theory_flops_per_step(th)
+        tflo_b = float(r.get("eff_bsr_backward_tflops", float("nan")))
+        tflo_b_s = "---" if str(r["phase"]) == "dense" or math.isnan(tflo_b) else _fmt_num(tflo_b, 4)
+        tflo_st = float(r.get("eff_bsr_backward_tflops_over_e2e_step", float("nan")))
+        tflo_st_s = "---" if str(r["phase"]) == "dense" or math.isnan(tflo_st) else _fmt_num(tflo_st, 4)
+        try:
+            last_s = str(int(r.get("last_logged_step") or 0))
+        except (TypeError, ValueError):
+            last_s = "---"
         lines.append(
             f"    {ph} & {_fmt_num(float(r['cumulative_steps_per_s']), 6)} & "
-            f"{_fmt_num(float(r['cumulative_samples_per_s']), 4)} & {tflo} \\\\"
+            f"{_fmt_num(float(r['cumulative_samples_per_s']), 4)} & {last_s} & {th_s} & {tflo_b_s} & {tflo_st_s} \\\\"
         )
     lines += [
         r"    \bottomrule",
@@ -244,10 +303,11 @@ def build_latex_appendix_grid(agg: List[Dict[str, Any]], has_timing: bool) -> st
         r"  \footnotesize",
         r"  \caption{H200 BSR — all phases in CSV (partial runs omit unfinished sparsity levels).}",
         r"  \label{tab:bsr-appendix-autogen}",
-        r"  \begin{tabular}{@{}lccccccccc@{}}",
+        r"  \begin{tabular}{@{}lccccccccccc@{}}",
         r"    \toprule",
         r"    Phase tag & Sparse (\%) & Mask & GI & Kernel & $\bar{t}_{\mathrm{step}}$ & $\bar{t}_{\mathrm{fwd}}$ & "
-        r"$\bar{t}_{\mathrm{bwd}}$ & $\bar{t}_{\mathrm{opt}}$ & BWD TFLOP/s \\",
+        r"$\bar{t}_{\mathrm{bwd}}$ & $\bar{t}_{\mathrm{opt}}$ & $\tilde F_{\mathrm{bwd}}$/step & "
+        r"TFLOP/s\textsubscript{bwd} & TFLOP/s\textsubscript{step} \\",
         r"    \midrule",
     ]
     for r in agg:
@@ -272,11 +332,18 @@ def build_latex_appendix_grid(agg: List[Dict[str, Any]], has_timing: bool) -> st
             to = _fmt_num(float(r["t_optim_ms"]), 2)
         else:
             ts, tf, tb, to = "---", "---", "---", "---"
-        tflo = _fmt_num(float(r["eff_bsr_backward_tflops"]), 4)
-        if ph == "dense":
-            tflo = "---"
+        th = float(r.get("theory_bsr_backward_flops_proxy", float("nan")))
+        if ph == "dense" or math.isnan(th) or th <= 0:
+            th_s = "---"
+        else:
+            th_s = _fmt_theory_flops_per_step(th)
+        tflo_b = float(r.get("eff_bsr_backward_tflops", float("nan")))
+        tflo_b_s = "---" if ph == "dense" or math.isnan(tflo_b) else _fmt_num(tflo_b, 4)
+        tflo_s = float(r.get("eff_bsr_backward_tflops_over_e2e_step", float("nan")))
+        tflo_s_s = "---" if ph == "dense" or math.isnan(tflo_s) else _fmt_num(tflo_s, 4)
         lines.append(
-            f"    {_latex_tt(ph)} & {sp_l} & {mask} & {gi} & {kern} & {ts} & {tf} & {tb} & {to} & {tflo} \\\\"
+            f"    {_latex_tt(ph)} & {sp_l} & {mask} & {gi} & {kern} & {ts} & {tf} & {tb} & {to} & {th_s} & "
+            f"{tflo_b_s} & {tflo_s_s} \\\\"
         )
     lines += [
         r"    \bottomrule",

@@ -4,14 +4,14 @@ Numeric tables in the **export block** below come from [`scripts/export_h200_bsr
 
 ### CSV columns and aggregation (read before filling tables)
 
-**Always present** (default sweep, `RL_CASINO_BSR_DETAILED_TIMING=0`): `phase`, `wall_time_s`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, trainer metrics (`loss`, etc.), and theory-sidecar fields (`theory_*`, duplicated per row). Use throughput columns for end-to-end comparisons without CUDA instrumentation overhead.
+**Always present** (including default fast sweep with `RL_CASINO_BSR_DETAILED_TIMING=0`): `phase`, `step`, `wall_time_s`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, trainer metrics (`loss`, etc.), `trainer_per_device_train_batch_size`, `trainer_grad_accum_steps`, and **theory** fields from the mask sidecar—especially **`theory_bsr_backward_flops_proxy`** (masked-linear backward FLOPs **per optimizer step**; includes gradient accumulation in the token proxy). The exporter fills the **“Theory BWD FLOP/step”** column from this—no detailed CUDA timing required.
 
-**CUDA segment timings** (`t_step_total_ms`, `t_forward_ms`, `t_backward_ms`, `t_optim_ms`, `t_nonoptim_ms`, `t_other_ms`) appear **only** when `RL_CASINO_BSR_DETAILED_TIMING=1`. That mode wraps each micro-batch forward/backward/optimizer step with `torch.cuda.synchronize()` and can **severely slow** training when `DPO_GRADIENT_ACCUMULATION_STEPS` is large—use it only for short diagnostic phases, not full grids.
+**Timed TFLOP/s columns** (`TFLOP/s (bwd)`, `TFLOP/s (step)` in Markdown; `\textsubscript{bwd}` / `\textsubscript{step}` in LaTeX) come from **`eff_bsr_backward_tflops`** and **`eff_bsr_backward_tflops_over_e2e_step`**, which the logger computes **only when** CUDA segment timings exist (`t_backward_ms`, `t_step_total_ms`, etc.). Those appear **only** with `RL_CASINO_BSR_DETAILED_TIMING=1`. That mode wraps each micro-batch with `torch.cuda.synchronize()` and can **severely slow** training when gradient accumulation is large—use it only for short diagnostic runs, not full 12-phase grids, unless you accept the slowdown.
 
 **Caveats when detailed timing is on:**
 
 - `t_forward_ms` / `t_backward_ms` reflect the **last gradient-accumulation micro-batch only**, not the full optimizer step; `t_other_ms` can look huge if interpreted as “unexplained” time.
-- `eff_bsr_backward_tflops` / `eff_bsr_backward_flops_per_s` divide theory (per optimizer step) by backward time; `t_backward_ms` is **one** micro-batch, so downstream code scales by ``trainer_grad_accum_steps``. **Older CSVs** before that fix may be inflated by ~`grad_accum` on those columns — run [`scripts/recalc_benchmark_training_log_eff.py`](scripts/recalc_benchmark_training_log_eff.py) to rewrite them without retraining.
+- **Bwd** effective TFLOP/s divides the theory proxy by backward time scaled by grad accumulation (see [`logging_utils.py`](../src/utils/logging_utils.py)). **Step** TFLOP/s divides the same proxy by the measured **full-step** wall slice. **Older CSVs** before the grad-accum fix may be wrong on `eff_*` — run [`scripts/recalc_benchmark_training_log_eff.py`](scripts/recalc_benchmark_training_log_eff.py) to rewrite without retraining.
 
 **Quick per-phase summary on-cluster or locally:**
 
