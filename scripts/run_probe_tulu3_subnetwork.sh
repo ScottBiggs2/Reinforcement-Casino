@@ -12,9 +12,11 @@
 
 # Probe the tulu3 oracle "subnetwork" against dense vs sparse-trained
 # tulu3 DPO models, all on the user's own tulu3 trajectory (matched).
-#   Run 1: dense tulu3 DPO + tulu3 oracle mask (post-hoc subnetwork)
-#   Run 2: sparse-trained tulu3 DPO + tulu3 oracle mask (post-hoc subnetwork)
-# Each run also produces a baseline-no-mask config for reference.
+# Each model gets 3 configs:
+#   - Baseline (no mask)
+#   - Oracle-DPO-tulu3-step500     (post-hoc tulu3 oracle mask)
+#   - Random-sp97.5-seed42         (post-hoc random mask, matched per-layer sparsity)
+# Two runs total: dense tulu3 DPO ckpt-500 and sparse-trained tulu3 final_model.
 
 set -euo pipefail
 
@@ -44,18 +46,34 @@ export OMP_NUM_THREADS=2
 export HF_HOME="/scratch/xie.yiyi/hf_cache"
 
 OUT_BASE="/scratch/xie.yiyi/probe_tulu3_subnetwork"
-MASK="/scratch/xie.yiyi/transfer_v1/oracle_masks_llama8b/oracle_dpo_tulu3_step500_sp97.5.pt"
+MASK_DIR="/scratch/xie.yiyi/transfer_v1/oracle_masks_llama8b"
+ORACLE_MASK="$MASK_DIR/oracle_dpo_tulu3_step500_sp97.5.pt"
+RANDOM_MASK="$MASK_DIR/random_baseline_tulu3_sp97.5_seed42.pt"
 DENSE_MODEL="/scratch/xie.yiyi/transfer_v1/dense_dpo_tulu3_llama8b/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500"
 SPARSE_MODEL="/scratch/xie.yiyi/transfer_v1/sparse_dpo_tulu3_oracle_dpo_tulu3/sparse_dpo_tulu3_oracle_dpo_tulu3_500steps/final_model"
 
-if [ ! -f "$MASK" ]; then echo "[error] mask missing"; exit 1; fi
+if [ ! -f "$ORACLE_MASK" ]; then echo "[error] oracle mask missing"; exit 1; fi
 if [ ! -d "$DENSE_MODEL" ]; then echo "[error] dense model missing"; exit 1; fi
 if [ ! -d "$SPARSE_MODEL" ]; then echo "[error] sparse model missing"; exit 1; fi
+
+# Generate matched random baseline if missing (uses oracle's per-layer sparsity)
+if [ ! -f "$RANDOM_MASK" ]; then
+    echo "[mask] generating $RANDOM_MASK from oracle reference..."
+    python src/warm_start/random_mask_baseline.py \
+        --reference_mask "$ORACLE_MASK" \
+        --sparsity_percent 97.5 \
+        --output_file "$RANDOM_MASK" \
+        --seed 42 \
+        --compare_to_reference
+fi
 
 mkdir -p "$OUT_BASE/dense" "$OUT_BASE/sparse"
 
 cat > "$OUT_BASE/dense/masks.json" <<JSON
-[{"label": "Oracle-DPO-tulu3-step500", "path": "${MASK}"}]
+[
+  {"label": "Oracle-DPO-tulu3-step500", "path": "${ORACLE_MASK}"},
+  {"label": "Random-sp97.5-seed42",     "path": "${RANDOM_MASK}"}
+]
 JSON
 cp "$OUT_BASE/dense/masks.json" "$OUT_BASE/sparse/masks.json"
 
