@@ -63,8 +63,13 @@ ANTI_MASK="$MASK_DIR/anti_oracle_dpo_tulu3_step500_sp97.5.pt"
 DENSE_MODEL="/scratch/xie.yiyi/transfer_v1/dense_dpo_tulu3_llama8b/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500"
 BASE_MODEL="meta-llama/Llama-3.1-8B-Instruct"
 
-# Existing seed42 + 5 new seeds for the random control band
-RANDOM_SEEDS=(42 43 44 45 46 47)
+# Existing seed42 + 2 new seeds for the random control band.
+# Why only 3: random_mask_baseline.py uses ~80 GB RSS per process at 8B
+# params (global score tensor + sort buffers). 5 parallel × 80 GB blew
+# past --mem=320G into swap. Keeping only 2 to gen (43, 44) fits in
+# 2×80=160 GB with comfortable headroom. random×3 still gives a valid
+# (if wider-CI) variance estimate.
+RANDOM_SEEDS=(42 43 44)
 
 if [ ! -f "$ORACLE_MASK" ]; then echo "[error] oracle mask missing: $ORACLE_MASK"; exit 1; fi
 if [ ! -d "$DENSE_MODEL"  ]; then echo "[error] dense model missing: $DENSE_MODEL"; exit 1; fi
