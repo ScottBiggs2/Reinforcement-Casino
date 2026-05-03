@@ -92,7 +92,11 @@ Add `--run-cka` only on a GPU node with the correct `--cka-model` for the mask a
 
 **Slurm (mask list file):** [`scripts/sbatch_mask_interpretation_suite.sh`](../../scripts/sbatch_mask_interpretation_suite.sh) — set `MASK_SUITE_LIST_FILE` (one `.pt` path per line), `MASK_SUITE_OUT_DIR`, and optionally `MASK_SUITE_RUN_CKA=1` with a GPU `sbatch` override (see script header).
 
-**Smoke / debug (two iid random masks):** `--smoke-debug --smoke-reference ANY_SAME_ARCH.pt` (seeds default `10001` / `20002`). Forces extended Jaccard, heatmap, effective rank, `plot_layer_metrics` with MC band, and CKA unless `--smoke-no-cka`. Slurm: [`scripts/sbatch_mask_interpretation_suite_smoke.sh`](../../scripts/sbatch_mask_interpretation_suite_smoke.sh).
+**Smoke / debug (two iid random masks):** `--smoke-debug --smoke-reference ANY_SAME_ARCH.pt` (seeds default `10001` / `20002`; sparsity default **97.5**). Forces extended Jaccard, heatmap, effective rank, `plot_layer_metrics` with MC band, and CKA unless `--smoke-no-cka`. Slurm: [`scripts/sbatch_mask_interpretation_suite_smoke.sh`](../../scripts/sbatch_mask_interpretation_suite_smoke.sh).
+
+**Per-mask linear probes:** [`src/cold_start/mask_probe_report.py`](../../src/cold_start/mask_probe_report.py) (GRPO/DPO calibration, MLP hooks). The interpretation suite adds `--probe-reports` to run one JSON per mask and merge summaries into `suite_summary.json`.
+
+**GRPO Llama 3.1 8B (mag / oracle / random) Slurm:** [`scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh`](../../scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh).
 
 ---
 
@@ -113,7 +117,7 @@ python src/cold_start/mask_to_cka.py MASK_A.pt MASK_B.pt [options]
 |----------|---------|-------------|
 | `mask_a` | required | First mask file (.pt) |
 | `mask_b` | required | Second mask file (.pt) |
-| `--model_name` | `google/gemma-3-270m-it` | HuggingFace model |
+| `--model_name` | `meta-llama/Llama-3.1-8B-Instruct` | HuggingFace model (must match mask arch) |
 | `--compare` | `mask_vs_mask` | Comparison mode (see below) |
 | `--n_samples` | `64` | Calibration samples |
 | `--max_length` | `512` | Max token length |

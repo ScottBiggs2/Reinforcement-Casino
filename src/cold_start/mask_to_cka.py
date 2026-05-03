@@ -250,7 +250,7 @@ def main():
     parser.add_argument(
         "--model_name",
         type=str,
-        default="google/gemma-3-270m-it",
+        default="meta-llama/Llama-3.1-8B-Instruct",
         help=(
             "HF model id used for activations. Must match the architecture the masks were "
             "built for (same layer/param names as in the .pt files)."

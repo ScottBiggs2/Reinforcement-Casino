@@ -20,8 +20,11 @@
 #   MASK_SUITE_SKIP_EFFECTIVE_RANK=1            # default 1 (fast); 0 for full SVD
 #   MASK_SUITE_HEATMAP=1                        # jaccard_matrix.png (needs matplotlib)
 #   MASK_SUITE_RUN_CKA=1                        # needs GPU job; set partition/GRES below
-#   MASK_SUITE_CKA_MODEL=google/gemma-3-270m-it
+#   MASK_SUITE_CKA_MODEL=meta-llama/Llama-3.1-8B-Instruct
 #   MASK_SUITE_CKA_DATASET=tulu3
+#   MASK_SUITE_PROBE_REPORTS=1           # per-mask linear probes (GPU; uses same model as CKA)
+#   MASK_SUITE_PROBE_MODE=grpo          # grpo|dpo for probe calibration
+#   MASK_SUITE_RUN_PLOTS=1               # after suite: plot_layer_metrics_csv on pairwise/*.csv
 #   MASK_SUITE_CKA_DEVICE=cuda
 #   MASK_SUITE_CKA_N_SAMPLES=64
 #   MASK_SUITE_CKA_BATCH_SIZE=4
@@ -107,7 +110,12 @@ echo "REPO_ROOT=$REPO_ROOT"
 echo "LIST_FILE=$MASK_SUITE_LIST_FILE"
 echo "OUT_DIR=$MASK_SUITE_OUT_DIR"
 echo "N_MASKS=${#paths[@]}"
+MASK_SUITE_CKA_MODEL="${MASK_SUITE_CKA_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+MASK_SUITE_PROBE_REPORTS="${MASK_SUITE_PROBE_REPORTS:-0}"
+MASK_SUITE_PROBE_MODE="${MASK_SUITE_PROBE_MODE:-grpo}"
+
 echo "RUN_CKA=$MASK_SUITE_RUN_CKA DEVICE=$MASK_SUITE_DEVICE EXTENDED=$MASK_SUITE_EXTENDED"
+echo "CKA_MODEL=$MASK_SUITE_CKA_MODEL PROBE_REPORTS=$MASK_SUITE_PROBE_REPORTS"
 
 cmd=( "$TRAIN_PY" "${REPO_ROOT}/src/cold_start/mask_interpretation_suite.py" )
 cmd+=( "${paths[@]}" )
@@ -142,5 +150,31 @@ if [ "$MASK_SUITE_RUN_CKA" = "1" ]; then
   cmd+=( --run-cka )
 fi
 
+if [ "$MASK_SUITE_PROBE_REPORTS" = "1" ]; then
+  cmd+=( --probe-reports --probe-mode "$MASK_SUITE_PROBE_MODE" )
+  if [ -n "${MASK_SUITE_PROBE_DATASET:-}" ]; then
+    cmd+=( --probe-dataset "$MASK_SUITE_PROBE_DATASET" )
+  fi
+  cmd+=( --probe-device "${MASK_SUITE_PROBE_DEVICE:-cuda}" )
+  cmd+=( --probe-n-samples "${MASK_SUITE_PROBE_N_SAMPLES:-64}" )
+  cmd+=( --probe-batch-size "${MASK_SUITE_PROBE_BATCH_SIZE:-4}" )
+  cmd+=( --probe-max-length "${MASK_SUITE_PROBE_MAX_LENGTH:-512}" )
+fi
+
 echo "RUN: ${cmd[*]}"
-exec "${cmd[@]}"
+"${cmd[@]}"
+
+if [ "${MASK_SUITE_RUN_PLOTS:-0}" = "1" ]; then
+  PDIR="${MASK_SUITE_OUT_DIR}/plots"
+  mkdir -p "$PDIR"
+  echo "=== plot_layer_metrics_csv -> $PDIR ==="
+  "$TRAIN_PY" "${REPO_ROOT}/src/cold_start/plot_layer_metrics_csv.py" \
+    --input-dir "${MASK_SUITE_OUT_DIR}/pairwise" \
+    --pattern "layer_metrics_*.csv" \
+    --output-dir "$PDIR" \
+    --jaccard-mc-trials "${MASK_SUITE_PLOT_MC_TRIALS:-200}" \
+    --jaccard-mc-seed 42 \
+    --y-scale "${MASK_SUITE_PLOT_Y_SCALE:-linear}" \
+    ${CKA_TOTAL_N:+--cka-total-n "${CKA_TOTAL_N}"} \
+    || echo "WARNING: plot_layer_metrics_csv exited non-zero" >&2
+fi

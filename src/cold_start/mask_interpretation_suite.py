@@ -280,8 +280,18 @@ def main() -> None:
         action="store_true",
         help="Run mask_to_cka.py per pair (GPU + HF model; slow).",
     )
-    parser.add_argument("--cka-model", type=str, default="google/gemma-3-270m-it")
-    parser.add_argument("--cka-dataset", type=str, default="tulu3")
+    parser.add_argument(
+        "--cka-model",
+        type=str,
+        default="meta-llama/Llama-3.1-8B-Instruct",
+        help="HF model for CKA (must match mask architecture).",
+    )
+    parser.add_argument(
+        "--cka-dataset",
+        type=str,
+        default="tulu3",
+        help="Calibration HF id or registry key for mask_to_cka (DPO-style rows).",
+    )
     parser.add_argument("--cka-device", type=str, default="cuda")
     parser.add_argument("--cka-n-samples", type=int, default=64)
     parser.add_argument("--cka-batch-size", type=int, default=4)
@@ -323,7 +333,7 @@ def main() -> None:
     parser.add_argument(
         "--smoke-sparsity",
         type=float,
-        default=90.0,
+        default=97.5,
         help="Target sparsity %% for both smoke masks.",
     )
     parser.add_argument(
@@ -331,6 +341,34 @@ def main() -> None:
         action="store_true",
         help="In smoke mode, skip mask_to_cka (CPU-friendly dry run).",
     )
+    parser.add_argument(
+        "--probe-reports",
+        action="store_true",
+        help="After pairwise metrics, run linear probes (CAV-style) per mask; writes probe_reports/*.json (GPU).",
+    )
+    parser.add_argument(
+        "--probe-mode",
+        type=str,
+        default="grpo",
+        choices=["grpo", "dpo"],
+        help="Calibration text layout for mask_probe_report.py.",
+    )
+    parser.add_argument(
+        "--probe-dataset",
+        type=str,
+        default=None,
+        help="Override HF dataset for probes (default: OpenR1-Math-220k for grpo, pipeline DPO id for dpo).",
+    )
+    parser.add_argument(
+        "--probe-device",
+        type=str,
+        default="cuda",
+        choices=["cpu", "cuda"],
+        help="Device for per-mask probe runs (usually cuda).",
+    )
+    parser.add_argument("--probe-n-samples", type=int, default=64)
+    parser.add_argument("--probe-batch-size", type=int, default=4)
+    parser.add_argument("--probe-max-length", type=int, default=512)
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir).resolve()
@@ -489,6 +527,91 @@ def main() -> None:
 
     if args.smoke_debug:
         _run_plot_layer_metrics(pair_dir, out_dir / "plots", py)
+
+    if args.probe_reports:
+        _run_probe_reports_for_masks(
+            py,
+            masks,
+            labels,
+            out_dir,
+            model_name=args.cka_model,
+            mode=args.probe_mode,
+            dataset_name=args.probe_dataset,
+            device=args.probe_device,
+            n_samples=args.probe_n_samples,
+            batch_size=args.probe_batch_size,
+            max_length=args.probe_max_length,
+        )
+
+
+def _run_probe_reports_for_masks(
+    py: str,
+    mask_paths: List[str],
+    labels: List[str],
+    out_dir: Path,
+    *,
+    model_name: str,
+    mode: str,
+    dataset_name: Optional[str],
+    device: str,
+    n_samples: int,
+    batch_size: int,
+    max_length: int,
+) -> None:
+    probe_dir = out_dir / "probe_reports"
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    probe_py = _REPO_ROOT / "src/cold_start/mask_probe_report.py"
+    per_mask: Dict[str, Any] = {}
+    for mp, lb in zip(mask_paths, labels):
+        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in lb)
+        outj = probe_dir / f"{safe}_probe_report.json"
+        cmd: List[str] = [
+            py,
+            str(probe_py),
+            mp,
+            "-o",
+            str(outj),
+            "--model-name",
+            model_name,
+            "--mode",
+            mode,
+            "--device",
+            device,
+            "--n-samples",
+            str(n_samples),
+            "--batch-size",
+            str(batch_size),
+            "--max-length",
+            str(max_length),
+        ]
+        if dataset_name:
+            cmd.extend(["--dataset-name", dataset_name])
+        print("RUN:", " ".join(cmd), flush=True)
+        r = subprocess.run(cmd, cwd=str(_REPO_ROOT))
+        if r.returncode != 0:
+            print(f"[probe] FAILED for {lb} ({mp})", file=sys.stderr)
+            continue
+        try:
+            with open(outj, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            per_mask[lb] = {
+                "path": mp,
+                "json": str(outj),
+                "summary": data.get("summary"),
+            }
+        except OSError as e:
+            per_mask[lb] = {"path": mp, "error": repr(e)}
+
+    summary_path = out_dir / "suite_summary.json"
+    if summary_path.is_file():
+        with open(summary_path, "r", encoding="utf-8") as f:
+            suite = json.load(f)
+        suite["per_mask_linear_probes"] = per_mask
+        with open(summary_path, "w", encoding="utf-8") as f:
+            json.dump(suite, f, indent=2, ensure_ascii=False)
+    with open(out_dir / "suite_probe_index.json", "w", encoding="utf-8") as f:
+        json.dump(per_mask, f, indent=2, ensure_ascii=False)
+    print(f"[probe] Wrote probe reports under {probe_dir}", flush=True)
 
 
 if __name__ == "__main__":
