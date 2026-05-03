@@ -75,6 +75,17 @@ if [[ "${HF_DATASETS_CACHE_ROOT}" == /hf_cache/* ]]; then
   HF_DATASETS_CACHE_ROOT="${SCRATCH_USER_ROOT}/hf_cache/datasets"
 fi
 
+# Poisoned: TRAIN_ENV=/conda_envs/... from sbatch --export=ALL (missing /scratch/$USER prefix).
+if [[ "${TRAIN_ENV}" == /conda_envs/* ]] && [[ "${TRAIN_ENV}" != "${SCRATCH_USER_ROOT}/conda_envs"* ]]; then
+  echo "NOTE: resetting TRAIN_ENV to \${SCRATCH_USER_ROOT}/conda_envs/rl_casino (was: ${TRAIN_ENV})" >&2
+  TRAIN_ENV="${SCRATCH_USER_ROOT}/conda_envs/rl_casino"
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+fi
+if [[ "${EVAL_ENV}" == /conda_envs/* ]] && [[ "${EVAL_ENV}" != "${SCRATCH_USER_ROOT}/conda_envs"* ]]; then
+  echo "NOTE: resetting EVAL_ENV to \${SCRATCH_USER_ROOT}/conda_envs/rl_casino_eval (was: ${EVAL_ENV})" >&2
+  EVAL_ENV="${SCRATCH_USER_ROOT}/conda_envs/rl_casino_eval"
+fi
+
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
 echo "Scratch: SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}  TRAIN_OUT_BASE=${TRAIN_OUT_BASE}  HF_DATASETS_CACHE_ROOT=${HF_DATASETS_CACHE_ROOT}"
 

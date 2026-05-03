@@ -56,6 +56,12 @@ if [[ "${HF_DATASETS_CACHE_ROOT}" == /hf_cache/* ]]; then
   HF_DATASETS_CACHE_ROOT="${SCRATCH_USER_ROOT}/hf_cache/datasets"
 fi
 
+if [[ "${TRAIN_ENV}" == /conda_envs/* ]] && [[ "${TRAIN_ENV}" != "${SCRATCH_USER_ROOT}/conda_envs"* ]]; then
+  echo "NOTE: resetting TRAIN_ENV to \${SCRATCH_USER_ROOT}/conda_envs/rl_casino (was: ${TRAIN_ENV})" >&2
+  TRAIN_ENV="${SCRATCH_USER_ROOT}/conda_envs/rl_casino"
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+fi
+
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
 
 # Model/dataset kept identical to the default pipeline unless overridden.

@@ -9,6 +9,16 @@
 #   export HF_TOKEN="${HF_TOKEN:?need Llama HF access}"
 #   sbatch scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh
 #
+# You do NOT need to unset login exports. scripts/pipeline_common.sh rewrites known-bad path
+# patterns inside this job only (e.g. /rl_casino_* , /conda_envs/* without /scratch/...).
+#
+# Other ways to steer this job without touching your interactive shell for other work:
+#   - Pull latest repo: sanitization runs automatically when this job sources pipeline_common.sh.
+#   - One-shot overrides on submit (adds/overrides for this allocation only; other jobs unchanged):
+#       sbatch --export=ALL,SCRATCH_USER_ROOT=/scratch/$USER,TRAIN_ENV=/scratch/$USER/conda_envs/rl_casino \
+#         scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh
+#   - Fix the source of bad exports (often ~/.bashrc) so new logins are clean — optional long-term.
+#
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
