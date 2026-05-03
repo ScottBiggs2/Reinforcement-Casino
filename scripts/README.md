@@ -196,7 +196,7 @@ This allocation runs dense DPO, masks, then **submits** parallel sparse GPU jobs
 
 ## H200 BSR DPO benchmark (throughput and random masks)
 
-This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.py` stage-4 jobs. It exercises [`src/full_training/sparse_dpo_bsr.py`](../src/full_training/sparse_dpo_bsr.py) (BSR sparse backward + `SparseAdamW`) for **timing comparisons**: optionally one **dense** phase (standard `nn.Linear`, dense AdamW, no BSR injection; enable with `H200_BSR_SKIP_DENSE=0`) plus **sparse** phases with **random global masks** at fixed target sparsities (`BENCHMARK_SPARSITIES`, default **`97.5,95,90`** in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh)).
+This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.py` stage-4 jobs. It exercises [`src/full_training/sparse_dpo_bsr.py`](../src/full_training/sparse_dpo_bsr.py) (BSR sparse backward + `SparseAdamW`) for **timing comparisons**: by default one **dense** baseline phase (standard `nn.Linear`, dense AdamW, no BSR injection; omit with `H200_BSR_SKIP_DENSE=1`) plus **sparse** phases with **random global masks** at fixed target sparsities (`BENCHMARK_SPARSITIES`, default **`99.75,97.5,95,90`** in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh)). The Slurm script does **not** pass `--mlp_only`—same default as sparse GRPO ([`grpo_openr1_llama31_slurm.sh`](grpo_openr1_llama31_slurm.sh) → [`sparse_GRPO_v2.py`](../src/magic/sparse_GRPO_v2.py), `mlp_only=False` unless you opt in). Large gaps in **benchmark CSV** `cumulative_steps_per_s` across phases are often **cold-start / per-phase accounting** (see [`docs/h200_bsr_benchmark_investigation.md`](../docs/h200_bsr_benchmark_investigation.md)); they are not a claim that steady sparse GRPO on curated masks is broken.
 
 - **Dataset / tokenizer** are loaded **once**; each phase **reloads the base model** from the Hub so timings are not chained across phases.
 - **No W&B** (set `WANDB_MODE=disabled` in the batch script). **No delta checkpoints** and **no final model save** in the benchmark driver.
@@ -206,14 +206,14 @@ This workflow is **separate from** the main pipeline’s `sparse_dpo_efficiency.
 **Entry point:** [`src/full_training/h200_sparse_dpo_bsr_benchmark.py`](../src/full_training/h200_sparse_dpo_bsr_benchmark.py)  
 **Slurm wrapper:** [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) (defaults: `gpu` partition, `gres=gpu:h200:1`, 128G RAM, 8h wall in-repo — adjust `#SBATCH` to match your site).
 
-**Steps per phase (`tqdm` total):** the Slurm script passes `--n_steps` from **`H200_BSR_STEPS_PER_PHASE` only** (default **50**). It does **not** read `NUM_STEPS_DPO`. That avoids accidentally running **500 steps per phase** when your shell already has `export NUM_STEPS_DPO=500` from another README snippet. Override length explicitly: `export H200_BSR_STEPS_PER_PHASE=500` if you really want that. The job log prints `H200_BSR_STEPS_PER_PHASE=...` at start; the Python driver prints `n_steps per phase=...`. The tqdm bar `161/500` means **`max_steps=500`** for that phase (not a bug in epoch reporting).
+**Steps per phase (`tqdm` total):** the Slurm script passes `--n_steps` from **`H200_BSR_STEPS_PER_PHASE` only** (default **25**). It does **not** read `NUM_STEPS_DPO`. That avoids accidentally running **500 steps per phase** when your shell already has `export NUM_STEPS_DPO=500` from another README snippet. Override length explicitly: `export H200_BSR_STEPS_PER_PHASE=500` if you really want that. The job log prints `H200_BSR_STEPS_PER_PHASE=...` at start; the Python driver prints `n_steps per phase=...`. The tqdm bar `161/500` means **`max_steps=500`** for that phase (not a bug in epoch reporting).
 
 Default LR/batch/seq knobs align with the **1024-seq** reference block at the end of this file (`DPO_LEARNING_RATE=5e-7`, batch `2` × grad-accum `64`, warmup ratio `0.1`, max prompt/response length `1024`). The shell exports those as `DPO_*` vars passed into the Python CLI.
 
 ### Wall time and what the driver does
 
 - **Pipeline stage 1** ([`pipeline_stage_01_dense.sh`](pipeline_stage_01_dense.sh) → [`DPO_train.py`](../src/full_training/DPO_train.py)) runs **dense DPO only**.
-- Phase count: **4 × (number of sparsity levels)** sparse phases, plus **1** dense phase when `H200_BSR_SKIP_DENSE=0` (default **skips** dense for faster sweeps). Per-phase step time varies (see `[throughput]` lines in the Slurm log); do not assume sparse vs dense ordering without measuring **your** run.
+- Phase count: **4 × (number of sparsity levels)** sparse phases, plus **1** dense phase when `H200_BSR_SKIP_DENSE=0` (**default**). Set `H200_BSR_SKIP_DENSE=1` for sparse-only faster sweeps. Per-phase step time varies (see `[throughput]` lines in the Slurm log); do not assume sparse vs dense ordering without measuring **your** run.
 - **Tokenizer + dataset** are loaded **once**. **Training** reloads model weights from the Hub/cache each phase (dense vs sparse need different module graphs). Random masks use a **meta skeleton** model for shapes only — not a full 8B CPU load per sparse phase.
 - **`TRITON_CACHE_DIR`** defaults to ``${SCRATCH_USER_ROOT}/.triton_cache`` in [`h200_sparse_dpo_bsr_benchmark.sh`](h200_sparse_dpo_bsr_benchmark.sh) so Triton can reuse compiled kernels across steps/phases. Treat this as the **first** kernel-related lever; **defer** custom Triton/kernel tuning until `theory_*` columns and `[throughput]` show whether steps look **math-bound** or **overhead-bound**.
 - **`RL_CASINO_BSR_QUIET_INJECTION`** defaults to **`1`** in that script so [`replace_linear_modules`](../src/mlps/bsr_sparse_mlp.py) does not print one line per layer (smaller `.out`, less NFS churn). Set to **`0`** when debugging injection order.
@@ -226,7 +226,7 @@ Use this checklist so “same hyperparameters as README” actually matches **bo
 
 | Knob | [`pipeline_common.sh`](pipeline_common.sh) / [`DPO_train.py`](../src/full_training/DPO_train.py) | H200 benchmark ([`sparse_dpo_bsr.py`](../src/full_training/sparse_dpo_bsr.py)) |
 |------|------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
-| **Steps** | `NUM_STEPS_DPO` (default **250** in `pipeline_common.sh`, not 500) | `H200_BSR_STEPS_PER_PHASE` only (default **50** per phase). **`NUM_STEPS_DPO` is ignored** by the Slurm script. |
+| **Steps** | `NUM_STEPS_DPO` (default **250** in `pipeline_common.sh`, not 500) | `H200_BSR_STEPS_PER_PHASE` only (default **25** per phase). **`NUM_STEPS_DPO` is ignored** by the Slurm script. |
 | **LR / warmup / weight decay / β** | Passed when `DPO_*` env vars set | Same `DPO_*` → CLI (`--lr`, `--warmup_ratio`, `--weight_decay`, `--dpo_beta`). |
 | **Batch** | `DPO_PER_DEVICE_TRAIN_BATCH_SIZE`, `DPO_GRADIENT_ACCUMULATION_STEPS` | Same env names → `--batch_size`, `--grad_accum`. |
 | **Seq lengths** | `DPO_MAX_LENGTH`, `DPO_MAX_PROMPT_LENGTH` — if **unset**, [`DPO_train.py`](../src/full_training/DPO_train.py) argparse defaults are **1024** / **512** respectively | Explicitly passes **`--max_length`** / **`--max_prompt_length`** from env (defaults **1024** / **1024** in the Slurm script). Set both sides the same for a fair comparison. |
@@ -251,8 +251,8 @@ export SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
 # Optional: where to write CSV + Slurm log context (default uses SLURM_JOB_ID when scheduled)
 export H200_BSR_OUT="${SCRATCH_USER_ROOT}/rl_casino_h200_bsr/run_${SLURM_JOB_ID:-manual}"
 
-# Optional: steps per phase (default 50). Do not rely on NUM_STEPS_DPO for this job.
-# export H200_BSR_STEPS_PER_PHASE=50
+# Optional: steps per phase (default 25). Do not rely on NUM_STEPS_DPO for this job.
+# export H200_BSR_STEPS_PER_PHASE=25
 
 sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 ```
@@ -266,7 +266,7 @@ tail -f logs/h200_bsr_bench_<JOBID>.out
 
 **Outputs:** CSV at `$H200_BSR_OUT/benchmark_training_log.csv`, `benchmark_theory.json`, and the paths printed in the job log. Per-phase HF run folders also appear under `$H200_BSR_OUT/` with names like `h200_bsr_<jobid>_phase_dense/` (checkpoints disabled; mostly empty dirs).
 
-**Defaults (throughput fidelity):** `H200_BSR_MLP_ONLY=1` passes **`--mlp_only`** (masks + BSR on **MLP Linears only**; set `H200_BSR_MLP_ONLY=0` for full-model masks). `H200_BSR_STEPS_PER_PHASE` defaults to **50** so cumulative steps/s is not dominated by load/compile over a tiny step count.
+**Defaults (corrected full grid):** **no** `--mlp_only` from the Slurm script (full-model mask scope). `H200_BSR_STEPS_PER_PHASE` defaults to **25**. Dense baseline is **on** (`H200_BSR_SKIP_DENSE=0`); sparsities default to **99.75,97.5,95,90**. For MLP-only ablations, invoke `h200_sparse_dpo_bsr_benchmark.py` manually with `--mlp_only`.
 
 **Paper-ready report + LaTeX:** after the job, run [`scripts/benchmark_training_log_to_report_md.py`](benchmark_training_log_to_report_md.py) on the CSV (tail mean **and** std, incomplete-phase flags, optional `--baseline-csv`, `--emit-tex DIR`). Investigation notes: [`docs/h200_bsr_benchmark_investigation.md`](../docs/h200_bsr_benchmark_investigation.md).
 
@@ -291,7 +291,7 @@ export HF_TOKEN="hf_xxxxxxxx"
 export PYTHONPATH=/path/to/rl_casino
 "$TRAIN_ENV/bin/python" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --model_name meta-llama/Llama-3.1-8B-Instruct \
-  --n_steps 50 \
+  --n_steps 25 \
   --output_dir /scratch/${USER}/h200_bsr_manual \
   --dataset_cache_dir /scratch/${USER}/hf_cache/datasets \
   --device_map none
@@ -450,4 +450,4 @@ export DPO_GRADIENT_CHECKPOINTING=1
 export DPO_OPTIM=adamw_8bit
 ```
 
-The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) uses `H200_BSR_STEPS_PER_PHASE` (default **50**) for `--n_steps`, not `NUM_STEPS_DPO`. **`pipeline_common.sh` defaults `NUM_STEPS_DPO` to 250**, not 500 — override explicitly if you want 500-step pipeline runs.
+The [H200 BSR benchmark](#h200-bsr-dpo-benchmark-throughput-and-random-masks) uses `H200_BSR_STEPS_PER_PHASE` (default **25**) for `--n_steps`, not `NUM_STEPS_DPO`. **`pipeline_common.sh` defaults `NUM_STEPS_DPO` to 250**, not 500 — override explicitly if you want 500-step pipeline runs.

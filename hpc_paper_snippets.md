@@ -1,12 +1,12 @@
 # Paper snippets — H200 BSR DPO benchmark tables
 
-Numeric tables in the **export block** below come from [`scripts/export_h200_bsr_paper_tables.py`](scripts/export_h200_bsr_paper_tables.py) (aggregating `benchmark_training_log.csv`). Use **`--compact`** into this file to avoid duplicated LaTeX blocks. Elsewhere, **NEG** / negative placeholders still mean “paste from env snapshot.” Driver: [`scripts/h200_sparse_dpo_bsr_benchmark.sh`](scripts/h200_sparse_dpo_bsr_benchmark.sh) (default: **no dense baseline**, **`BENCHMARK_SPARSITIES=97.5,95,90`**).
+Numeric tables in the **export block** below come from [`scripts/export_h200_bsr_paper_tables.py`](scripts/export_h200_bsr_paper_tables.py) (aggregating `benchmark_training_log.csv`). Use **`--compact`** into this file to avoid duplicated LaTeX blocks. Elsewhere, **NEG** / negative placeholders still mean “paste from env snapshot.” Driver: [`scripts/h200_sparse_dpo_bsr_benchmark.sh`](scripts/h200_sparse_dpo_bsr_benchmark.sh) (default: **dense baseline included**, **`BENCHMARK_SPARSITIES=99.75,97.5,95,90`**; Slurm script does **not** pass `--mlp_only`).
 
 ### CSV columns and aggregation (read before filling tables)
 
 **Always present** (including default fast sweep with `RL_CASINO_BSR_DETAILED_TIMING=0`): `phase`, `step`, `wall_time_s`, `cumulative_steps_per_s`, `cumulative_samples_per_s`, trainer metrics (`loss`, etc.), `trainer_per_device_train_batch_size`, `trainer_grad_accum_steps`, and **theory** fields from the mask sidecar—especially **`theory_bsr_backward_flops_proxy`** (masked-linear backward FLOPs **per optimizer step**; includes gradient accumulation in the token proxy). The exporter fills the **“Theory BWD FLOP/step”** column from this—no detailed CUDA timing required.
 
-**Timed TFLOP/s columns** (`TFLOP/s (bwd)`, `TFLOP/s (step)` in Markdown; `\textsubscript{bwd}` / `\textsubscript{step}` in LaTeX) come from **`eff_bsr_backward_tflops`** and **`eff_bsr_backward_tflops_over_e2e_step`**, which the logger computes **only when** CUDA segment timings exist (`t_backward_ms`, `t_step_total_ms`, etc.). Those appear **only** with `RL_CASINO_BSR_DETAILED_TIMING=1`. That mode wraps each micro-batch with `torch.cuda.synchronize()` and can **severely slow** training when gradient accumulation is large—use it only for short diagnostic runs, not full 12-phase grids, unless you accept the slowdown.
+**Timed TFLOP/s columns** (`TFLOP/s (bwd)`, `TFLOP/s (step)` in Markdown; `\textsubscript{bwd}` / `\textsubscript{step}` in LaTeX) come from **`eff_bsr_backward_tflops`** and **`eff_bsr_backward_tflops_over_e2e_step`**, which the logger computes **only when** CUDA segment timings exist (`t_backward_ms`, `t_step_total_ms`, etc.). Those appear **only** with `RL_CASINO_BSR_DETAILED_TIMING=1`. That mode wraps each micro-batch with `torch.cuda.synchronize()` and can **severely slow** training when gradient accumulation is large—use it only for short diagnostic runs, not full multi-phase grids, unless you accept the slowdown.
 
 **Caveats when detailed timing is on:**
 
@@ -33,7 +33,7 @@ python scripts/export_h200_bsr_paper_tables.py \
 
 Example layout CSV (drafting only — **replace with your measured CSV** before submission): `scripts/fixtures/h200_bsr_table_export_example.csv`.
 
-**Grid reference:** `h200_sparse_dpo_bsr_benchmark.sh` defaults to **`H200_BSR_SKIP_DENSE=1`** (no dense baseline) and **`BENCHMARK_SPARSITIES=97.5,95,90`**. Each sparsity level adds **4** phases (element vs block mask \(\times\) Adam block\_1d vs block\_2d; grad\_input=dense only) \(\Rightarrow\) **12** phases by default. Export `--compact` \(\Rightarrow\) Markdown + one throughput LaTeX block; omit `--compact` for timing + appendix LaTeX tables. Partial runs contribute fewer phases.
+**Grid reference:** `h200_sparse_dpo_bsr_benchmark.sh` defaults to **`H200_BSR_SKIP_DENSE=0`** (one dense baseline) and **`BENCHMARK_SPARSITIES=99.75,97.5,95,90`**. Each sparsity level adds **4** phases (element vs block mask \(\times\) Adam block\_1d vs block\_2d; grad\_input=dense only) \(\Rightarrow\) **17** phases by default (1 dense + 16 sparse). Export `--compact` \(\Rightarrow\) Markdown + one throughput LaTeX block; omit `--compact` for timing + appendix LaTeX tables. Partial runs contribute fewer phases.
 
 <!-- H200_BSR_PAPER_EXPORT_START -->
 
@@ -344,8 +344,8 @@ These apply when using BSR sparse backprop and/or SparseAdamW (DPO or GRPO), inc
     Knob & Default (repo) & Value used \\
     \midrule
     \texttt{RL\_CASINO\_ADAM\_KERNEL} & \texttt{block\_1d} / \texttt{block\_2d} (H200 benchmark phase grid) & \texttt{NEG} \\
-    \texttt{H200\_BSR\_SKIP\_DENSE} & 1 (= omit dense baseline; set 0 to include one dense phase) & -1 \\
-    \texttt{BENCHMARK\_SPARSITIES} & \texttt{97.5,95,90} (\texttt{h200\_sparse\_dpo\_bsr\_benchmark.sh} driver default; comma-separated) & \texttt{NEG} \\
+    \texttt{H200\_BSR\_SKIP\_DENSE} & 0 (= include one dense baseline; set 1 to omit) & -1 \\
+    \texttt{BENCHMARK\_SPARSITIES} & \texttt{99.75,97.5,95,90} (\texttt{h200\_sparse\_dpo\_bsr\_benchmark.sh} driver default; comma-separated) & \texttt{NEG} \\
     \texttt{RL\_CASINO\_BSR\_GRAD\_INPUT\_MODE} & \texttt{dense} (\texttt{h200\_sparse\_dpo\_bsr\_benchmark.sh} default; sparse grad\_i only if overridden elsewhere) & \texttt{NEG} \\
     \texttt{RL\_CASINO\_BSR\_DETAILED\_TIMING} & \texttt{0} (off for sweeps; \texttt{1} enables \texttt{t\_*} CSV columns + per-micro-batch sync) & -1 \\
     \texttt{BSR\_USE\_ATOMIC} & 0 & -1 \\
