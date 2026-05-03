@@ -58,21 +58,17 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-2}"
 MODEL="${MODEL:-allenai/Llama-3.1-Tulu-3-8B-DPO}"
 OUT_DIR="${OUT_DIR:-/scratch/xie.yiyi/probe_tulu3_oracle_on_allen_dpo}"
 MASK_DIR="${MASK_DIR:-/scratch/xie.yiyi/transfer_v1/oracle_masks_llama8b}"
-MASK_STEP150="$MASK_DIR/oracle_dpo_tulu3_step150_sp97.5.pt"
 MASK_STEP500="$MASK_DIR/oracle_dpo_tulu3_step500_sp97.5.pt"
 
-for f in "$MASK_STEP150" "$MASK_STEP500"; do
-    if [ ! -f "$f" ]; then
-        echo "[error] mask not found: $f"
-        exit 1
-    fi
-done
+if [ ! -f "$MASK_STEP500" ]; then
+    echo "[error] mask not found: $MASK_STEP500"
+    exit 1
+fi
 
 mkdir -p "$OUT_DIR"
 MASKS_JSON="${OUT_DIR}/tulu3_oracle_masks.json"
 cat > "$MASKS_JSON" <<JSON
 [
-  {"label": "Oracle-DPO-tulu3-step150", "path": "${MASK_STEP150}"},
   {"label": "Oracle-DPO-tulu3-step500", "path": "${MASK_STEP500}"}
 ]
 JSON
@@ -109,7 +105,7 @@ echo ""
 echo "========================================"
 echo "Done: $(date)"
 echo "Results: $OUT_DIR/"
-echo "  - probe_pair_results.json   (3 configs: baseline + step150 + step500)"
+echo "  - probe_pair_results.json   (2 configs: baseline + step500)"
 echo "  - probe_pair_heatmap_all.png"
 echo "  - probe_pair_delta_all.png  (mask − baseline)"
 echo "========================================"
