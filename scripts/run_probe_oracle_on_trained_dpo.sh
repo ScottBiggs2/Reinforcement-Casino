@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=probe_tulu3_oracle_dpo
+#SBATCH --job-name=probe_lightr1_oracle_dpo
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,14 +7,13 @@
 #SBATCH --mem=240G
 #SBATCH --gres=gpu:h200:1
 #SBATCH --time=08:00:00
-#SBATCH --output=logs/probe_tulu3_oracle_dpo_%j.out
-#SBATCH --error=logs/probe_tulu3_oracle_dpo_%j.err
+#SBATCH --output=logs/probe_lightr1_oracle_dpo_%j.out
+#SBATCH --error=logs/probe_lightr1_oracle_dpo_%j.err
 
-# Apply the user's tulu3 oracle masks (step150, step500) to the public
-# allenai/Llama-3.1-Tulu-3-8B-DPO checkpoint and run linear probes against
-# the unmasked dense baseline. Both Allen's DPO model and the masks were
-# derived on the Tulu3 preference mix, so the trajectory is data-matched
-# (though hparam/seed-mismatched).
+# Apply the user's lightr1 oracle mask (step500) to the user's own lightr1
+# DPO checkpoint and run a linear probe against the unmasked dense baseline.
+# Strict trajectory-matched: same training run produced both the model
+# weights and the warm-magnitude mask.
 
 set -euo pipefail
 
@@ -55,21 +54,25 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-2}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-2}"
 
-MODEL="${MODEL:-allenai/Llama-3.1-Tulu-3-8B-DPO}"
-OUT_DIR="${OUT_DIR:-/scratch/xie.yiyi/probe_tulu3_oracle_on_allen_dpo}"
+MODEL="${MODEL:-/scratch/xie.yiyi/transfer_v1/dense_dpo_lightr1_llama8b/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
+OUT_DIR="${OUT_DIR:-/scratch/xie.yiyi/probe_lightr1_oracle_on_own_dpo}"
 MASK_DIR="${MASK_DIR:-/scratch/xie.yiyi/transfer_v1/oracle_masks_llama8b}"
-MASK_STEP500="$MASK_DIR/oracle_dpo_tulu3_step500_sp97.5.pt"
+MASK_STEP500="$MASK_DIR/oracle_dpo_lightr1_step500_sp97.5.pt"
 
+if [ ! -d "$MODEL" ] || [ ! -f "$MODEL/config.json" ]; then
+    echo "[error] model checkpoint not found: $MODEL"
+    exit 1
+fi
 if [ ! -f "$MASK_STEP500" ]; then
     echo "[error] mask not found: $MASK_STEP500"
     exit 1
 fi
 
 mkdir -p "$OUT_DIR"
-MASKS_JSON="${OUT_DIR}/tulu3_oracle_masks.json"
+MASKS_JSON="${OUT_DIR}/lightr1_oracle_masks.json"
 cat > "$MASKS_JSON" <<JSON
 [
-  {"label": "Oracle-DPO-tulu3-step500", "path": "${MASK_STEP500}"}
+  {"label": "Oracle-DPO-lightr1-step500", "path": "${MASK_STEP500}"}
 ]
 JSON
 
