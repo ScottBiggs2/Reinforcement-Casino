@@ -490,3 +490,57 @@ Mask job id: 6497892
 Submitted batch job 6497893
 Submitted batch job 6497894
 
+---
+
+### BSR-aware SparseAdamW kernels (block\_1d vs block\_2d)
+
+Sparse phases of the H200 BSR DPO benchmark ([`scripts/h200_sparse_dpo_bsr_benchmark.sh`](scripts/h200_sparse_dpo_bsr_benchmark.sh)) use **SparseAdamW** with Triton kernels in [`src/kernels/indexed_sparse_adam.py`](src/kernels/indexed_sparse_adam.py). When a 2D parameter has a block-structured mask, [`src/utils/mask_manager.py`](src/utils/mask_manager.py) pads the mask to multiples of $B{=}16$, marks each $B{\times}B$ tile active if any entry is non-zero, and stores flat block indices $b \in \{0,\ldots,\lceil M/B\rceil\lceil N/B\rceil-1\}$ with $b = b_m \cdot \lceil N/B\rceil + b_n$. [`src/optimizers/sparse_adamw.py`](src/optimizers/sparse_adamw.py) then chooses the launch via \texttt{RL\_CASINO\_ADAM\_KERNEL}: \texttt{block\_1d} calls \texttt{triton\_bsr\_sparse\_adamw\_step} (1D grid, one program per active block); \texttt{block\_2d} calls \texttt{triton\_bsr\_sparse\_adamw\_step\_2d} (2D grid with row tiling). Optimizer states in the block regime are packed as length $K B^2$ vectors ($K$ active blocks). Host code precomputes bias corrections $\texttt{bc}_1 = 1-\beta_1^t$ and $\texttt{bc}_2 = 1-\beta_2^t$ for training step $t$. Optional launch tuning (\texttt{BSR\_NUM\_WARPS}, \texttt{BSR\_NUM\_STAGES}, \texttt{BSR\_ADAM\_ROW\_TILE}) affects occupancy only, not numerics.
+
+\begin{algorithm}[h]
+\caption{BSR-aware AdamW update --- \texttt{block\_1d} (1D grid, \texttt{bsr\_sparse\_adamw\_kernel})}
+\label{alg:bsr-adamw-1d}
+\begin{algorithmic}[1]
+\Require Weight matrix $P \in \mathbb{R}^{M \times N}$, gradient $G$ (same shape); first/second moments $m,v$ (dense $M\times N$ \textbf{or} packed length $K B^2$ if sparse storage); active block list $\texttt{active\_blocks} \in \mathbb{Z}^{K}$; block size $B$ (\texttt{BLOCK\_SIZE}${}=16$); $(\texttt{lr},\beta_1,\beta_2,\varepsilon,\texttt{wd})$; bias corrections $\texttt{bc}_1,\texttt{bc}_2$; flag \texttt{USE\_SPARSE\_STATES}
+\Ensure In-place updates to $P$, $m$, $v$ on active tiles only
+\State Launch one program per active block: $\texttt{pid} \in \{0,\ldots,K-1\}$
+\If{$\texttt{pid} \geq K$} \textbf{return} \EndIf
+\State $b \gets \texttt{active\_blocks}[\texttt{pid}]$ \Comment{flat block id}
+\State $N_b \gets \lceil N / B \rceil$,\quad $b_m \gets \lfloor b / N_b \rfloor$,\quad $b_n \gets b \bmod N_b$
+\State Form row indices $r_s \gets b_m B + s$ and column indices $c_t \gets b_n B + t$ for $s,t \in \{0,\ldots,B-1\}$
+\State Validity mask $\mathcal{V}_{s,t} \gets (r_s < M) \land (c_t < N)$
+\State Load $B\times B$ tiles $\mathbf{p},\mathbf{g}$ from $P,G$ at $(r_s,c_t)$, treating out-of-bounds as $0$
+\If{\texttt{USE\_SPARSE\_STATES}}
+    \State Base offset $\ell_0 \gets \texttt{pid} \cdot B^2$; load $\mathbf{m},\mathbf{v}$ from contiguous slices $m[\ell_0{:}\ell_0{+}B^2)$, $v[\ell_0{:}\ell_0{+}B^2)$ reshaped in row-major order aligned with $(s,t)$
+\Else
+    \State Load $\mathbf{m},\mathbf{v}$ from $m,v$ at the same $(r_s,c_t)$ coordinates as $\mathbf{p}$
+\EndIf
+\State \textbf{AdamW:} $\mathbf{p}' \gets \mathbf{p} \odot (1 - \texttt{lr}\cdot\texttt{wd})$ \Comment{elementwise}
+\State $\mathbf{m}' \gets \beta_1 \mathbf{m} + (1-\beta_1)\mathbf{g}$,\quad $\mathbf{v}' \gets \beta_2 \mathbf{v} + (1-\beta_2)\mathbf{g}\odot\mathbf{g}$
+\State $\widehat{\mathbf{m}} \gets \mathbf{m}' / \texttt{bc}_1$,\quad $\widehat{\mathbf{v}} \gets \mathbf{v}' / \texttt{bc}_2$
+\State $\mathbf{p}_{\mathrm{new}} \gets \mathbf{p}' - \texttt{lr}\cdot (\widehat{\mathbf{m}} / (\sqrt{\widehat{\mathbf{v}}} + \varepsilon))$ \Comment{``$/$'' is elementwise (Hadamard) division}
+\State Store $\mathbf{p}_{\mathrm{new}}$ into $P$ at valid $(r_s,c_t)$; store $\mathbf{m}',\mathbf{v}'$ to the same storage layout used for loads
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[h]
+\caption{BSR-aware AdamW update --- \texttt{block\_2d} (2D grid, \texttt{bsr\_sparse\_adamw\_kernel\_2d}; \texttt{block\_1d} is the $T{=}B$ special case)}
+\label{alg:bsr-adamw-2d}
+\begin{algorithmic}[1]
+\Require Same tensors and hyperparameters as Algorithm~\ref{alg:bsr-adamw-1d}; row tile size $T{=}$\texttt{ROW\_TILE} with $B/T \in \mathbb{Z}_{>0}$ (default $T{=}8$ when $B{=}16$)
+\Ensure In-place updates to $P$, $m$, $v$ on active row-tiles only
+\State Launch 2D grid: $\texttt{pid}_b \in \{0,\ldots,K-1\}$, $\texttt{pid}_t \in \{0,\ldots,B/T-1\}$
+\If{$\texttt{pid}_b \geq K$} \textbf{return} \EndIf
+\State $b \gets \texttt{active\_blocks}[\texttt{pid}_b]$;\quad $N_b \gets \lceil N / B \rceil$;\quad decode $(b_m,b_n)$ as in Algorithm~\ref{alg:bsr-adamw-1d}
+\State Row slice $r_s \gets b_m B + \texttt{pid}_t\cdot T + s$ for $s \in \{0,\ldots,T-1\}$;\quad $c_t \gets b_n B + t$ for $t \in \{0,\ldots,B-1\}$
+\State $\mathcal{V}_{s,t} \gets (r_s < M) \land (c_t < N)$;\quad load $T\times B$ tiles $\mathbf{p},\mathbf{g}$ from $P,G$
+\If{\texttt{USE\_SPARSE\_STATES}}
+    \State $\ell_0 \gets \texttt{pid}_b\cdot B^2$;\quad $\ell_1 \gets \texttt{pid}_t\cdot T\cdot B$;\quad load $\mathbf{m},\mathbf{v}$ from $m,v$ at offsets $\ell_0+\ell_1$ in row-major layout over the full $B\times B$ block
+\Else
+    \State Load $\mathbf{m},\mathbf{v}$ at coordinates $(r_s,c_t)$
+\EndIf
+\State $\mathbf{p}' \gets \mathbf{p} \odot (1 - \texttt{lr}\cdot\texttt{wd})$;\quad $\mathbf{m}' \gets \beta_1 \mathbf{m} + (1-\beta_1)\mathbf{g}$;\quad $\mathbf{v}' \gets \beta_2 \mathbf{v} + (1-\beta_2)\mathbf{g}\odot\mathbf{g}$
+\State $\widehat{\mathbf{m}} \gets \mathbf{m}' / \texttt{bc}_1$;\quad $\widehat{\mathbf{v}} \gets \mathbf{v}' / \texttt{bc}_2$;\quad $\mathbf{p}_{\mathrm{new}} \gets \mathbf{p}' - \texttt{lr}\cdot (\widehat{\mathbf{m}} / (\sqrt{\widehat{\mathbf{v}}} + \varepsilon))$ \Comment{``$/$'' elementwise}
+\State Scatter results back to $P,m,v$ with the same indexing as the loads
+\end{algorithmic}
+\end{algorithm}
+
