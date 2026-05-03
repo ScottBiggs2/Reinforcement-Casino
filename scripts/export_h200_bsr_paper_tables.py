@@ -96,8 +96,11 @@ def aggregate_phases(rows: List[Dict[str, str]], tail_rows: int) -> List[Dict[st
         nums = {}
         for col in (
             "wall_time_s",
+            "wall_delta_s",
             "cumulative_steps_per_s",
             "cumulative_samples_per_s",
+            "inst_steps_per_s",
+            "inst_samples_per_s",
             "t_step_total_ms",
             "t_forward_ms",
             "t_backward_ms",

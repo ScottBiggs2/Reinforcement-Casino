@@ -1,11 +1,10 @@
-# Synthetic layout for export smoke test (replace with real benchmark_training_log.csv).
-phase,sparsity_target_pct,optimizer,step,wall_time_s,cumulative_steps_per_s,cumulative_samples_per_s,loss,trainer_per_device_train_batch_size,trainer_grad_accum_steps,theory_bsr_backward_flops_proxy,theory_active_fraction_global,theory_b_tokens_proxy
-dense,,adamw_8bit,8,322.8,0.0248,3.17,0.692,2,64,,,
-s99p75_elem_gidense_block_1d,99.75,sparse_adamw,8,6488.0,0.00123,0.158,0.693,2,64,8.1e14,0.0025,131072
-s99p75_elem_gidense_block_2d,99.75,sparse_adamw,8,6487.0,0.00123,0.158,0.693,2,64,8.1e14,0.0025,131072
-s99p75_blk_gidense_block_1d,99.75,sparse_adamw,8,5210.0,0.00154,0.197,0.692,2,64,7.9e14,0.0031,131072
-s99p75_blk_gidense_block_2d,99.75,sparse_adamw,8,5205.0,0.00154,0.197,0.692,2,64,7.9e14,0.0031,131072
-s97p5_elem_gidense_block_1d,97.5,sparse_adamw,8,6100.0,0.00131,0.168,0.691,2,64,2.4e14,0.025,131072
-s97p5_elem_gidense_block_2d,97.5,sparse_adamw,8,6095.0,0.00131,0.168,0.691,2,64,2.4e14,0.025,131072
-s97p5_blk_gidense_block_1d,97.5,sparse_adamw,8,4800.0,0.00167,0.214,0.690,2,64,2.2e14,0.028,131072
-s97p5_blk_gidense_block_2d,97.5,sparse_adamw,8,4795.0,0.00167,0.214,0.690,2,64,2.2e14,0.028,131072
+# Synthetic CSV for export + report smoke tests.
+phase,sparsity_target_pct,optimizer,step,wall_time_s,cumulative_steps_per_s,cumulative_samples_per_s,wall_delta_s,inst_steps_per_s,inst_samples_per_s,loss,trainer_per_device_train_batch_size,trainer_grad_accum_steps,theory_bsr_backward_flops_proxy,theory_active_fraction_global,theory_b_tokens_proxy,benchmark_phase_target_steps,benchmark_mlp_only,benchmark_mask_key_count
+dense,,adamw_8bit,46,310.0,0.0148,1.90,,,,0.69,2,64,,,,50,1,0
+dense,,adamw_8bit,47,315.0,0.0149,1.91,5.0,0.2,25.6,0.69,2,64,,,,50,1,0
+dense,,adamw_8bit,48,320.0,0.0150,1.92,5.0,0.2,25.6,0.69,2,64,,,,50,1,0
+dense,,adamw_8bit,49,325.0,0.0151,1.93,5.0,0.2,25.6,0.69,2,64,,,,50,1,0
+dense,,adamw_8bit,50,330.0,0.0152,1.94,5.0,0.2,25.6,0.69,2,64,,,,50,1,0
+s99p75_elem_gidense_block_1d,99.75,sparse_adamw,48,6200.0,0.00129,0.165,100.0,0.01,1.28,0.69,2,64,8.1e14,0.0025,131072,50,1,120
+s99p75_elem_gidense_block_1d,99.75,sparse_adamw,49,6300.0,0.00130,0.166,100.0,0.01,1.28,0.69,2,64,8.1e14,0.0025,131072,50,1,120
+s99p75_elem_gidense_block_1d,99.75,sparse_adamw,50,6400.0,0.00131,0.167,100.0,0.01,1.28,0.69,2,64,8.1e14,0.0025,131072,50,1,120

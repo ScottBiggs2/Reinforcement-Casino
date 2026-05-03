@@ -185,6 +185,11 @@ class BenchmarkRunLogSink:
 class BenchmarkThroughputCallback(TrainerCallback):
     """
     Per-log throughput (cumulative since phase start) plus phase metadata for plotting.
+
+    ``cumulative_steps_per_s`` / ``wall_time_s`` are measured from ``on_train_begin`` (includes
+    model load, mask I/O, injection, and early-step compilation). For a **steady-interval** view,
+    use ``wall_delta_s`` and ``inst_steps_per_s`` (delta since the previous logged row), when the
+    trainer logs frequently enough that consecutive rows bracket completed optimizer steps.
     """
 
     def __init__(
@@ -203,9 +208,13 @@ class BenchmarkThroughputCallback(TrainerCallback):
         self._t0: Optional[float] = None
         self.print_every = int(print_every) if print_every and int(print_every) > 0 else 0
         self._extra_log_fields = extra_log_fields or {}
+        self._prev_wall: Optional[float] = None
+        self._prev_step: Optional[int] = None
 
     def on_train_begin(self, args, state, control, **kwargs):
         self._t0 = time.perf_counter()
+        self._prev_wall = None
+        self._prev_step = None
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None or self._t0 is None:
@@ -233,6 +242,17 @@ class BenchmarkThroughputCallback(TrainerCallback):
             "trainer_grad_accum_steps": ga,
             "trainer_per_device_train_batch_size": int(args.per_device_train_batch_size),
         }
+        # Interval rates (since previous log): closer to steady-state when logging every step.
+        if self._prev_wall is not None and self._prev_step is not None:
+            dw = wall - self._prev_wall
+            dst = step - self._prev_step
+            if dw > 1e-9 and dst > 0:
+                row["wall_delta_s"] = round(dw, 6)
+                row["inst_steps_per_s"] = round(dst / dw, 8)
+                row["inst_samples_per_s"] = round((dst * samples_per_step) / dw, 6)
+        self._prev_wall = wall
+        self._prev_step = step
+
         row.update(self._extra_log_fields)
         row.update(logs)
 

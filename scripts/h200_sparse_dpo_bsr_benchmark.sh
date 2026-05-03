@@ -4,7 +4,9 @@
 # Submit from repo root:  sbatch scripts/h200_sparse_dpo_bsr_benchmark.sh
 #
 # --- Why end-to-end [throughput] often differs only ~few % across phases ---
-# 1) Sparse phases use Triton for sparse grad_w; this benchmark pins RL_CASINO_BSR_GRAD_INPUT_MODE to
+# 1) By default **MLP-only** masks (`H200_BSR_MLP_ONLY=1` → `--mlp_only`): BSR replaces MLP Linears only.
+#    Set `H200_BSR_MLP_ONLY=0` for full-model masks (attention/embed + MLP; often much slower).
+#    Sparse phases use Triton for sparse grad_w; this benchmark pins RL_CASINO_BSR_GRAD_INPUT_MODE to
 #    **dense** (standard grad_output @ weight for grad_input). Only the *forward* matmul is dense F.linear.
 #    The dense baseline phase skips injection entirely (standard nn.Linear + dense optimizer).
 # 2) A Llama-style step is dominated by attention/Flash, norms, activations, DPO/ref forward paths,
@@ -88,10 +90,9 @@ export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 export HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_DATASETS_CACHE_ROOT}"
 
-# Steps **per phase** (default 50). Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read
-# NUM_STEPS_DPO here, so a leftover export NUM_STEPS_DPO=500 from other README snippets
-# cannot silently turn this into a 500-step-per-phase run.
-export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-8}"
+# Steps **per phase** (default 50 so cumulative steps/s is not dominated by load/compile over ~8 steps).
+# Uses H200_BSR_STEPS_PER_PHASE only — we do NOT read NUM_STEPS_DPO here.
+export H200_BSR_STEPS_PER_PHASE="${H200_BSR_STEPS_PER_PHASE:-50}"
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
@@ -123,6 +124,14 @@ if [ "${H200_BSR_SKIP_DENSE}" != "0" ]; then
   SKIP_DENSE_ARGS+=(--no_dense_baseline)
 fi
 
+# 1 (default): --mlp_only — random masks + BSR only on MLP Linears (matches typical sparse-DPO scope).
+# Set H200_BSR_MLP_ONLY=0 to benchmark full-model masks (attention/embed + MLP; can be vastly slower).
+export H200_BSR_MLP_ONLY="${H200_BSR_MLP_ONLY:-1}"
+MLP_ONLY_ARGS=()
+if [ "${H200_BSR_MLP_ONLY}" != "0" ]; then
+  MLP_ONLY_ARGS+=(--mlp_only)
+fi
+
 # Per-micro-batch CUDA timing + synchronize() for CSV columns t_* — default OFF (large gradient_accum
 # makes this path ruin throughput). Set RL_CASINO_BSR_DETAILED_TIMING=1 only for short debug phases.
 export RL_CASINO_BSR_DETAILED_TIMING="${RL_CASINO_BSR_DETAILED_TIMING:-0}"
@@ -147,6 +156,7 @@ echo "DPO_OPTIM=${DPO_OPTIM} (dense phase; sparse uses SparseAdamW)"
 echo "TRITON_CACHE_DIR=${TRITON_CACHE_DIR}  RL_CASINO_BSR_QUIET_INJECTION=${RL_CASINO_BSR_QUIET_INJECTION}"
 echo "RL_CASINO_BSR_DETAILED_TIMING=${RL_CASINO_BSR_DETAILED_TIMING}  RL_CASINO_BSR_GRAD_INPUT_MODE=${RL_CASINO_BSR_GRAD_INPUT_MODE}  RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS}"
 echo "H200_BSR_SKIP_DENSE=${H200_BSR_SKIP_DENSE}  (≠0 ⇒ --no_dense_baseline)"
+echo "H200_BSR_MLP_ONLY=${H200_BSR_MLP_ONLY}  (≠0 ⇒ --mlp_only: MLP Linears only for masks/BSR)"
 echo "BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}  (each level → +4 sparse phases: elem|block × block_1d|block_2d; grad_input=dense only)"
 
 GC_ARGS=()
@@ -172,4 +182,5 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --phase_grad_input_modes "dense" \
   --phase_adam_kernels "block_1d,block_2d" \
   "${SKIP_DENSE_ARGS[@]}" \
+  "${MLP_ONLY_ARGS[@]}" \
   "${GC_ARGS[@]}"

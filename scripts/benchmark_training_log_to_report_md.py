@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-Build a standalone Markdown report from ``benchmark_training_log.csv``.
+Build a Markdown + optional LaTeX report from ``benchmark_training_log.csv``.
 
-Includes:
-  - Explicit **dense baseline** row when the CSV contains a ``dense`` phase (steps/s, samples/s,
-    and **relative throughput** vs that baseline for every other phase).
-  - When no dense phase exists, states that clearly and still lists sparse phases (no fake ratios).
-  - **Theory** columns (mask-sidecar FLOP proxy, active fraction, token proxy) whenever present.
-  - **CUDA segment breakdown** (step / forward / backward / optim / non-optim / other ms) when
-    ``RL_CASINO_BSR_DETAILED_TIMING=1`` populated those columns; otherwise a short note.
+Features:
+  - **Dense baseline** from this CSV or from ``--baseline-csv`` (dense tail mean for ratios).
+  - **Variance:** mean and sample std over the tail for ``cumulative_*`` and ``inst_*`` when present.
+  - **Incomplete phases:** compare max logged ``step`` to ``benchmark_phase_target_steps`` when present.
+  - **Warnings** for incomplete phases or high coefficient of variation (``--cv-warn``).
+  - **``--emit-tex DIR``:** booktabs-ready ``.tex`` fragments (throughput + stability).
 
-Usage (repo root or anywhere):
+Newer benchmark rows may include ``wall_delta_s``, ``inst_steps_per_s`` (interval rates since the
+previous log). ``cumulative_steps_per_s`` still includes cold start from ``on_train_begin``; prefer
+``inst_steps_per_s`` tail statistics when logging every step.
+
+Usage::
 
   python3 scripts/benchmark_training_log_to_report_md.py \\
     --csv /scratch/USER/rl_casino_h200_bsr/JOBID/benchmark_training_log.csv \\
-    --out benchmark_h200_report.md
+    --out benchmark_h200_report.md \\
+    --emit-tex ./paper_tables/
 
-  python3 scripts/benchmark_training_log_to_report_md.py --csv run.csv --tail-rows 8
+  python3 scripts/benchmark_training_log_to_report_md.py \\
+    --csv sparse_only.csv --baseline-csv dense_baseline.csv --tail-rows 16
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ import sys
 from collections import defaultdict
 from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def _phase_sort_key(phase: str) -> Tuple[Any, ...]:
@@ -64,6 +69,23 @@ def _mean(vals: List[float]) -> float:
     return sum(finite) / len(finite)
 
 
+def _std_sample(vals: List[float]) -> float:
+    finite = [v for v in vals if not math.isnan(v)]
+    if len(finite) < 2:
+        return float("nan")
+    m = sum(finite) / len(finite)
+    var = sum((x - m) ** 2 for x in finite) / (len(finite) - 1)
+    return math.sqrt(var)
+
+
+def _cv(mean_v: float, std_v: float) -> float:
+    if mean_v is None or std_v is None or math.isnan(mean_v) or math.isnan(std_v):
+        return float("nan")
+    if abs(mean_v) < 1e-18:
+        return float("nan")
+    return std_v / abs(mean_v)
+
+
 def _fmt(x: float, nd: int = 4, empty: str = "—") -> str:
     if x is None or math.isnan(x) or math.isinf(x):
         return empty
@@ -77,10 +99,13 @@ def _fmt_sci(x: float) -> str:
 
 
 def _fmt_pct_ratio(x: float) -> str:
-    """e.g. 0.42 -> '42.0% of baseline' ; >1 -> '124% of baseline'."""
     if x is None or math.isnan(x) or math.isinf(x) or x <= 0:
         return "—"
     return f"{100.0 * x:.1f}% of baseline"
+
+
+def _latex_tt(s: str) -> str:
+    return "\\texttt{" + str(s).replace("_", "\\_").replace("%", "\\%") + "}"
 
 
 def load_csv_rows(path: Path) -> List[Dict[str, str]]:
@@ -89,7 +114,25 @@ def load_csv_rows(path: Path) -> List[Dict[str, str]]:
     return list(csv.DictReader(StringIO("".join(lines))))
 
 
-def aggregate_phases(rows: List[Dict[str, str]], tail_rows: int) -> List[Dict[str, Any]]:
+def _expected_target_steps(rows_for_phase: List[Dict[str, str]], override: Optional[int]) -> Optional[int]:
+    if override is not None:
+        return int(override)
+    for x in reversed(rows_for_phase):
+        v = (x.get("benchmark_phase_target_steps") or "").strip()
+        if not v:
+            continue
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def compute_phase_statistics(
+    rows: List[Dict[str, str]],
+    tail_rows: int,
+    expected_steps_override: Optional[int],
+) -> List[Dict[str, Any]]:
     by_phase: Dict[str, List[Dict[str, str]]] = defaultdict(list)
     for r in rows:
         ph = (r.get("phase") or "").strip()
@@ -97,254 +140,293 @@ def aggregate_phases(rows: List[Dict[str, str]], tail_rows: int) -> List[Dict[st
             continue
         by_phase[ph].append(r)
 
-    phases_sorted = sorted(by_phase.keys(), key=_phase_sort_key)
     out: List[Dict[str, Any]] = []
-    numeric_cols = (
-        "wall_time_s",
-        "cumulative_steps_per_s",
-        "cumulative_samples_per_s",
-        "t_step_total_ms",
-        "t_forward_ms",
-        "t_backward_ms",
-        "t_optim_ms",
-        "t_nonoptim_ms",
-        "t_other_ms",
-        "eff_bsr_backward_tflops",
-        "eff_bsr_backward_tflops_over_e2e_step",
-        "theory_bsr_backward_flops_proxy",
-        "theory_active_fraction_global",
-        "theory_b_tokens_proxy",
-    )
-
-    for phase in phases_sorted:
-        g = by_phase[phase]
-        g.sort(key=lambda x: int(float(x.get("step") or 0)))
+    for phase in sorted(by_phase.keys(), key=_phase_sort_key):
+        g = sorted(by_phase[phase], key=lambda x: int(float(x.get("step") or 0)))
         tail = g[-max(1, tail_rows) :]
-        row: Dict[str, Any] = {"phase": phase}
         last = tail[-1]
+        max_step = max(int(float(x.get("step") or 0)) for x in g)
+        exp = _expected_target_steps(g, expected_steps_override)
+        incomplete = bool(exp is not None and max_step < exp)
+
         sp = last.get("sparsity_target_pct", "").strip()
         if sp == "":
-            row["sparsity_target_pct"] = ""
+            sp_val: Any = ""
         else:
-            row["sparsity_target_pct"] = _to_float(sp)
-        row["optimizer"] = (last.get("optimizer") or "").strip()
+            sp_val = _to_float(sp)
 
-        for col in numeric_cols:
-            row[col] = _mean([_to_float(x.get(col)) for x in tail])
+        cum_sps = [_to_float(x.get("cumulative_steps_per_s")) for x in tail]
+        cum_sms = [_to_float(x.get("cumulative_samples_per_s")) for x in tail]
+        inst_sps = [_to_float(x.get("inst_steps_per_s")) for x in tail]
+        inst_sms = [_to_float(x.get("inst_samples_per_s")) for x in tail]
+        walls = [_to_float(x.get("wall_time_s")) for x in tail]
 
-        try:
-            row["last_logged_step"] = int(float(tail[-1].get("step") or 0))
-        except (TypeError, ValueError):
-            row["last_logged_step"] = 0
-        try:
-            row["trainer_grad_accum_steps"] = int(float(tail[-1].get("trainer_grad_accum_steps") or 0))
-        except (TypeError, ValueError):
-            row["trainer_grad_accum_steps"] = 0
-        try:
-            row["trainer_per_device_train_batch_size"] = int(
-                float(tail[-1].get("trainer_per_device_train_batch_size") or 0)
-            )
-        except (TypeError, ValueError):
-            row["trainer_per_device_train_batch_size"] = 0
+        m_cum_sps = _mean(cum_sps)
+        s_cum_sps = _std_sample(cum_sps)
+        cv_cum = _cv(m_cum_sps, s_cum_sps)
+        m_inst_sps = _mean(inst_sps)
+        s_inst_sps = _std_sample(inst_sps)
+
+        row: Dict[str, Any] = {
+            "phase": phase,
+            "sparsity_target_pct": sp_val,
+            "optimizer": (last.get("optimizer") or "").strip(),
+            "last_logged_step": max_step,
+            "expected_steps": exp,
+            "incomplete": incomplete,
+            "mean_cumulative_steps_per_s": m_cum_sps,
+            "std_cumulative_steps_per_s": s_cum_sps,
+            "cv_cumulative_steps_per_s": cv_cum,
+            "mean_cumulative_samples_per_s": _mean(cum_sms),
+            "std_cumulative_samples_per_s": _std_sample(cum_sms),
+            "mean_inst_steps_per_s": m_inst_sps,
+            "std_inst_steps_per_s": s_inst_sps,
+            "mean_inst_samples_per_s": _mean(inst_sms),
+            "mean_wall_time_s": _mean(walls),
+            "trainer_grad_accum_steps": int(float(last.get("trainer_grad_accum_steps") or 0) or 0),
+            "trainer_per_device_train_batch_size": int(
+                float(last.get("trainer_per_device_train_batch_size") or 0) or 0
+            ),
+            "benchmark_mlp_only": (last.get("benchmark_mlp_only") or "").strip(),
+            "benchmark_mask_key_count": (last.get("benchmark_mask_key_count") or "").strip(),
+        }
+
+        for col in (
+            "t_step_total_ms",
+            "t_forward_ms",
+            "t_backward_ms",
+            "t_optim_ms",
+            "eff_bsr_backward_tflops",
+            "eff_bsr_backward_tflops_over_e2e_step",
+            "theory_bsr_backward_flops_proxy",
+            "theory_active_fraction_global",
+            "theory_b_tokens_proxy",
+        ):
+            row[f"mean_{col}"] = _mean([_to_float(x.get(col)) for x in tail])
 
         out.append(row)
     return out
 
 
-def _has_cuda_timing(agg: List[Dict[str, Any]]) -> bool:
-    for r in agg:
-        v = float(r.get("t_step_total_ms", float("nan")))
-        if not math.isnan(v) and v > 0:
-            return True
-    return False
+def _dense_baseline_rates(stats: List[Dict[str, Any]]) -> Tuple[float, float]:
+    dense = next((s for s in stats if s["phase"] == "dense"), None)
+    if dense is None:
+        return float("nan"), float("nan")
+    return float(dense["mean_cumulative_steps_per_s"]), float(dense["mean_cumulative_samples_per_s"])
 
 
-def _has_theory(agg: List[Dict[str, Any]]) -> bool:
-    for r in agg:
-        if str(r.get("phase")) == "dense":
-            continue
-        v = float(r.get("theory_bsr_backward_flops_proxy", float("nan")))
-        if not math.isnan(v) and v > 0:
-            return True
-    return False
+def _load_external_dense_baseline(path: Path, tail_rows: int) -> Tuple[float, float]:
+    rows = load_csv_rows(path)
+    stats = compute_phase_statistics(rows, tail_rows, None)
+    ds, dm = _dense_baseline_rates(stats)
+    if math.isnan(ds) or ds <= 0:
+        raise SystemExit(
+            f"ERROR: --baseline-csv {path} has no usable `dense` phase for baseline rates."
+        )
+    return ds, dm
+
+
+def _collect_warnings(stats: List[Dict[str, Any]], cv_threshold: float) -> List[str]:
+    w: List[str] = []
+    for s in stats:
+        if s.get("incomplete"):
+            exp = s.get("expected_steps")
+            w.append(
+                f"Phase `{s['phase']}` appears **incomplete**: max step {s['last_logged_step']} "
+                f"< expected {exp}."
+            )
+        cv = float(s.get("cv_cumulative_steps_per_s", float("nan")))
+        if not math.isnan(cv) and cv > cv_threshold:
+            w.append(
+                f"Phase `{s['phase']}` has high tail CV on cumulative steps/s "
+                f"(CV={cv:.3f} > threshold {cv_threshold:.3f}); treat tail mean as noisy."
+            )
+    return w
 
 
 def build_markdown(
     *,
     csv_path: Path,
-    agg: List[Dict[str, Any]],
+    stats: List[Dict[str, Any]],
     tail_rows: int,
+    warnings: List[str],
+    external_baseline: Optional[Tuple[float, float]],
 ) -> str:
     lines: List[str] = []
     lines.append(f"# Benchmark report: `{csv_path.name}`")
     lines.append("")
     lines.append(f"- **Source:** `{csv_path.resolve()}`")
-    lines.append(f"- **Aggregation:** mean over the last **{tail_rows}** logged rows per `phase`.")
+    lines.append(
+        f"- **Per-phase stats:** mean and sample **std** over the last **{tail_rows}** rows; "
+        "**CV** = std / |mean| on cumulative steps/s."
+    )
+    lines.append(
+        "- **Throughput:** `cumulative_steps_per_s` includes cold start from train begin (load, compile). "
+        "When present, **`inst_steps_per_s`** is the interval rate since the previous log (closer to steady-state if you log every step)."
+    )
     lines.append("")
 
-    dense = next((r for r in agg if r["phase"] == "dense"), None)
-    if dense:
-        ds = float(dense["cumulative_steps_per_s"])
-        dm = float(dense["cumulative_samples_per_s"])
-        lines.append("## Baseline (dense phase in this CSV)")
+    if warnings:
+        lines.append("## Warnings")
         lines.append("")
-        lines.append(
-            "This run includes a **dense** DPO phase (`nn.Linear` + dense optimizer). "
-            "All sparse rows below are expressed **relative to that same job’s dense tail mean**."
-        )
+        for msg in warnings:
+            lines.append(f"- {msg}")
         lines.append("")
-        lines.append("| Metric | Dense baseline (tail mean) |")
-        lines.append("|--------|------------------------------|")
-        lines.append(f"| Optimizer steps / s | {_fmt(ds, 6)} |")
-        lines.append(f"| Samples / s | {_fmt(dm, 4)} |")
-        lines.append(f"| Wall time (tail mean, s) | {_fmt(float(dense['wall_time_s']), 2)} |")
+
+    d_sps, d_sms = _dense_baseline_rates(stats)
+    baseline_label = "dense phase in this CSV"
+    if external_baseline is not None:
+        d_sps, d_sms = external_baseline
+        baseline_label = "external `--baseline-csv` (dense tail mean)"
+
+    if not math.isnan(d_sps) and d_sps > 0:
+        lines.append("## Baseline (for ratios)")
+        lines.append("")
+        lines.append(f"Steps/s and samples/s are taken from **{baseline_label}**.")
+        lines.append("")
+        lines.append("| Metric | Baseline |")
+        lines.append("|--------|----------|")
+        lines.append(f"| Optimizer steps / s | {_fmt(d_sps, 6)} |")
+        lines.append(f"| Samples / s | {_fmt(d_sms, 4)} |")
         lines.append("")
     else:
         lines.append("## Baseline")
         lines.append("")
         lines.append(
-            "**No `dense` phase appears in this CSV** (typical for sparse-only throughput sweeps). "
-            "End-to-end **steps/s** and **samples/s** are absolute; there is **no in-run dense ratio**. "
-            "To obtain “vs dense” numbers, either (a) rerun with a dense baseline phase included, or "
-            "(b) join against a separate dense benchmark CSV taken under matched batch, sequence, and steps."
+            "No dense phase in this CSV and no ``--baseline-csv`` provided — **no vs-dense ratios**."
         )
         lines.append("")
 
-    lines.append("## Throughput (all phases)")
+    lines.append("## Throughput and stability (tail window)")
     lines.append("")
-    if dense and not math.isnan(float(dense["cumulative_steps_per_s"])) and float(dense["cumulative_steps_per_s"]) > 0:
-        lines.append(
-            "| Phase | Sparse % | Optimizer | Last step | microBS / accum | steps/s | samples/s | "
-            "vs dense steps/s | vs dense samples/s | wall (s) |"
+    if not math.isnan(d_sps) and d_sps > 0:
+        head = (
+            "| Phase | Sparse % | Opt | Target steps | Max step | Complete? | "
+            "cum steps/s μ | σ | CV | inst steps/s μ | σ | wall μ (s) | mlp_only | #mask keys | "
+            "vs baseline steps/s |"
         )
-        lines.append(
-            "|-------|------------|-----------|-----------|-----------------|---------|-----------|-------------------|--------------------|----------|"
+        sep = (
+            "|-------|------------|-----|----------------|----------|-----------|"
+            "-----------------|---|---|------------------|---|------------|----------|"
+            "------------|--------------------|"
         )
-        d_sps = float(dense["cumulative_steps_per_s"])
-        d_sms = float(dense["cumulative_samples_per_s"])
     else:
-        lines.append(
-            "| Phase | Sparse % | Optimizer | Last step | microBS / accum | steps/s | samples/s | wall (s) |"
+        head = (
+            "| Phase | Sparse % | Opt | Target steps | Max step | Complete? | "
+            "cum steps/s μ | σ | CV | inst steps/s μ | σ | wall μ (s) | mlp_only | #mask keys |"
         )
-        lines.append(
-            "|-------|------------|-----------|-----------|-----------------|---------|-----------|----------|"
+        sep = (
+            "|-------|------------|-----|----------------|----------|-----------|"
+            "-----------------|---|---|------------------|---|------------|----------|------------|"
         )
-        d_sps = d_sms = float("nan")
+    lines.append(head)
+    lines.append(sep)
 
-    for r in agg:
-        ph = str(r["phase"])
-        sp = r.get("sparsity_target_pct", "")
-        if sp == "" or (isinstance(sp, float) and math.isnan(sp)):
-            sp_s = ""
-        else:
-            sp_s = str(sp)
-        mbs = int(r.get("trainer_per_device_train_batch_size") or 0)
-        ga = int(r.get("trainer_grad_accum_steps") or 0)
-        bs = f"{mbs}/{ga}" if mbs > 0 and ga > 0 else "—"
-        sps = float(r["cumulative_steps_per_s"])
-        sms = float(r["cumulative_samples_per_s"])
+    for s in stats:
+        sp = s.get("sparsity_target_pct", "")
+        sp_s = "" if sp == "" or (isinstance(sp, float) and math.isnan(sp)) else str(sp)
+        exp_s = str(s["expected_steps"]) if s.get("expected_steps") is not None else "—"
+        ok = "yes" if not s.get("incomplete") else "**no**"
+        mlp = s.get("benchmark_mlp_only", "") or "—"
+        mk = s.get("benchmark_mask_key_count", "") or "—"
         row_cells = [
-            f"`{ph}`",
+            f"`{s['phase']}`",
             sp_s,
-            str(r.get("optimizer", "")),
-            str(int(r.get("last_logged_step") or 0)),
-            bs,
-            _fmt(sps, 6),
-            _fmt(sms, 4),
+            str(s.get("optimizer", "")),
+            exp_s,
+            str(s["last_logged_step"]),
+            ok,
+            _fmt(float(s["mean_cumulative_steps_per_s"]), 6),
+            _fmt(float(s["std_cumulative_steps_per_s"]), 6),
+            _fmt(float(s["cv_cumulative_steps_per_s"]), 4),
+            _fmt(float(s["mean_inst_steps_per_s"]), 6),
+            _fmt(float(s["std_inst_steps_per_s"]), 6),
+            _fmt(float(s["mean_wall_time_s"]), 2),
+            mlp,
+            mk,
         ]
-        if dense and not math.isnan(d_sps) and d_sps > 0 and not math.isnan(d_sms) and d_sms > 0:
-            rs = sps / d_sps if ph != "dense" else 1.0
-            rm = sms / d_sms if ph != "dense" else 1.0
-            row_cells.extend([_fmt_pct_ratio(rs), _fmt_pct_ratio(rm)])
-        row_cells.append(_fmt(float(r["wall_time_s"]), 2))
+        if not math.isnan(d_sps) and d_sps > 0:
+            ratio = float(s["mean_cumulative_steps_per_s"]) / d_sps if s["phase"] != "dense" else 1.0
+            row_cells.append(_fmt_pct_ratio(ratio))
         lines.append("| " + " | ".join(row_cells) + " |")
     lines.append("")
 
-    if _has_theory(agg):
-        lines.append("## Theory / accounting (mask sidecar, sparse phases)")
+    # Theory
+    has_theory = any(
+        not math.isnan(float(s.get("mean_theory_bsr_backward_flops_proxy", float("nan"))))
+        and float(s.get("mean_theory_bsr_backward_flops_proxy", 0)) > 0
+        for s in stats
+        if s["phase"] != "dense"
+    )
+    if has_theory:
+        lines.append("## Theory (mask sidecar, tail mean)")
         lines.append("")
-        lines.append(
-            "**`theory_bsr_backward_flops_proxy`:** masked-linear backward FLOPs **per optimizer step** "
-            "(see `src/utils/bsr_theory_metrics.py`). Does not include full dense-forward FLOPs."
-        )
-        lines.append("")
-        lines.append(
-            "| Phase | Sparse % | Theory BWD FLOP/step | active fraction | b-token proxy |"
-        )
-        lines.append("|-------|------------|----------------------|-----------------|----------------|")
-        for r in agg:
-            if r["phase"] == "dense":
+        lines.append("| Phase | Sparse % | Theory BWD FLOP/step | active fraction | b-token |")
+        lines.append("|-------|------------|----------------------|-----------------|---------|")
+        for s in stats:
+            if s["phase"] == "dense":
                 continue
-            sp = r.get("sparsity_target_pct", "")
+            th = float(s.get("mean_theory_bsr_backward_flops_proxy", float("nan")))
+            if math.isnan(th) or th <= 0:
+                continue
+            sp = s.get("sparsity_target_pct", "")
             sp_s = "" if sp == "" or (isinstance(sp, float) and math.isnan(sp)) else str(sp)
-            th = float(r.get("theory_bsr_backward_flops_proxy", float("nan")))
-            th_s = _fmt_sci(th) if not math.isnan(th) and th > 0 else "—"
-            af = float(r.get("theory_active_fraction_global", float("nan")))
-            af_s = _fmt(af, 6) if not math.isnan(af) else "—"
-            bt = float(r.get("theory_b_tokens_proxy", float("nan")))
-            bt_s = str(int(bt)) if not math.isnan(bt) and bt > 0 else "—"
             lines.append(
-                "| `" + str(r["phase"]) + "` | " + sp_s + " | " + th_s + " | " + af_s + " | " + bt_s + " |"
+                "| `"
+                + s["phase"]
+                + "` | "
+                + sp_s
+                + " | "
+                + _fmt_sci(th)
+                + " | "
+                + _fmt(float(s.get("mean_theory_active_fraction_global", float("nan"))), 6)
+                + " | "
+                + (
+                    str(int(float(s.get("mean_theory_b_tokens_proxy"))))
+                    if not math.isnan(float(s.get("mean_theory_b_tokens_proxy", float("nan"))))
+                    and float(s.get("mean_theory_b_tokens_proxy", 0)) > 0
+                    else "—"
+                )
+                + " |"
             )
         lines.append("")
 
-    has_tim = _has_cuda_timing(agg)
-    lines.append("## CUDA segment timings (micro-batch–level)")
+    # CUDA timing
+    has_tim = any(
+        not math.isnan(float(s.get("mean_t_step_total_ms", float("nan"))))
+        and float(s.get("mean_t_step_total_ms", 0)) > 0
+        for s in stats
+    )
+    lines.append("## CUDA segment timings (tail mean)")
     lines.append("")
     if not has_tim:
         lines.append(
-            "*No non-empty `t_step_total_ms` in the tail window — this CSV was almost certainly logged with "
-            "**`RL_CASINO_BSR_DETAILED_TIMING=0`**. Forward/backward/optim ms and effective TFLOP/s from "
-            "backward slices are therefore unavailable here.*"
+            "*No `t_step_total_ms` in tail — run with **`RL_CASINO_BSR_DETAILED_TIMING=1`** for segment ms and effective TFLOP/s.*"
         )
         lines.append("")
     else:
         lines.append(
-            "Means over the same tail rows. **Caveat:** `t_forward_ms` / `t_backward_ms` refer to the "
-            "**last gradient-accumulation micro-batch**, not the full optimizer step; interpret `t_other_ms` "
-            "with care."
+            "| Phase | t_step | t_fwd | t_bwd | t_opt | TFLOP/s bwd | TFLOP/s step |"
         )
-        lines.append("")
-        lines.append(
-            "| Phase | t_step ms | t_fwd ms | t_bwd ms | t_optim ms | t_nonoptim ms | t_other ms | "
-            "TFLOP/s (bwd) | TFLOP/s (step) |"
-        )
-        lines.append(
-            "|-------|-----------|----------|----------|------------|---------------|------------|---------------|----------------|"
-        )
-        for r in agg:
-            ph = str(r["phase"])
-            tb = float(r.get("eff_bsr_backward_tflops", float("nan")))
-            ts = float(r.get("eff_bsr_backward_tflops_over_e2e_step", float("nan")))
-            tb_s = "—" if ph == "dense" or math.isnan(tb) else _fmt(tb, 4)
-            ts_s = "—" if ph == "dense" or math.isnan(ts) else _fmt(ts, 4)
+        lines.append("|-------|--------|-------|-------|-------|-------------|--------------|")
+        for s in stats:
             lines.append(
                 "| `"
-                + ph
+                + s["phase"]
                 + "` | "
-                + _fmt(float(r["t_step_total_ms"]), 2)
+                + _fmt(float(s.get("mean_t_step_total_ms", float("nan"))), 2)
                 + " | "
-                + _fmt(float(r["t_forward_ms"]), 2)
+                + _fmt(float(s.get("mean_t_forward_ms", float("nan"))), 2)
                 + " | "
-                + _fmt(float(r["t_backward_ms"]), 2)
+                + _fmt(float(s.get("mean_t_backward_ms", float("nan"))), 2)
                 + " | "
-                + _fmt(float(r["t_optim_ms"]), 2)
+                + _fmt(float(s.get("mean_t_optim_ms", float("nan"))), 2)
                 + " | "
-                + _fmt(float(r.get("t_nonoptim_ms", float("nan"))), 2)
+                + _fmt(float(s.get("mean_eff_bsr_backward_tflops", float("nan"))), 4)
                 + " | "
-                + _fmt(float(r.get("t_other_ms", float("nan"))), 2)
-                + " | "
-                + tb_s
-                + " | "
-                + ts_s
+                + _fmt(float(s.get("mean_eff_bsr_backward_tflops_over_e2e_step", float("nan"))), 4)
                 + " |"
             )
-        lines.append("")
-        lines.append(
-            "_Effective TFLOP/s:_ from CSV columns `eff_bsr_backward_tflops` and "
-            "`eff_bsr_backward_tflops_over_e2e_step` (see `logging_utils.BenchmarkThroughputCallback`). "
-            "Re-run `scripts/recalc_benchmark_training_log_eff.py` if older rows omitted grad-accum scaling."
-        )
         lines.append("")
 
     lines.append("---")
@@ -352,6 +434,86 @@ def build_markdown(
     lines.append("*Generated by `scripts/benchmark_training_log_to_report_md.py`.*")
     lines.append("")
     return "\n".join(lines)
+
+
+def emit_latex_tables(
+    *,
+    out_dir: Path,
+    csv_stem: str,
+    stats: List[Dict[str, Any]],
+    warnings: List[str],
+    d_sps: float,
+    d_sms: float,
+) -> None:
+    del warnings  # surfaced in Markdown; LaTeX captions should stay ASCII-safe
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pfx = csv_stem.replace(" ", "_")
+
+    # Throughput + stability
+    body: List[str] = [
+        r"\begin{table}[t]",
+        r"  \centering",
+        r"  \footnotesize",
+        r"  \caption{H200 BSR benchmark: tail mean ($\mu$) and sample std ($\sigma$) of cumulative and interval steps/s.}",
+        r"  \label{tab:" + pfx + r"_throughput_stability}",
+        r"  \begin{tabular}{@{}lccccccc@{}}",
+        r"    \toprule",
+        r"    Phase & $\mu_{\mathrm{cum}}$ s$^{-1}$ & $\sigma_{\mathrm{cum}}$ & CV & "
+        r"$\mu_{\mathrm{inst}}$ s$^{-1}$ & max step & target & ok? \\",
+        r"    \midrule",
+    ]
+    for s in stats:
+        exp = s.get("expected_steps")
+        exp_s = str(exp) if exp is not None else "---"
+        ok = "yes" if not s.get("incomplete") else "no"
+        body.append(
+            "    "
+            + _latex_tt(s["phase"])
+            + " & "
+            + _fmt(float(s["mean_cumulative_steps_per_s"]), 6)
+            + " & "
+            + _fmt(float(s["std_cumulative_steps_per_s"]), 6)
+            + " & "
+            + _fmt(float(s["cv_cumulative_steps_per_s"]), 4)
+            + " & "
+            + _fmt(float(s["mean_inst_steps_per_s"]), 6)
+            + " & "
+            + str(s["last_logged_step"])
+            + " & "
+            + exp_s
+            + " & "
+            + ok
+            + r" \\"
+        )
+    body += [
+        r"    \bottomrule",
+        r"  \end{tabular}",
+        r"\end{table}",
+        "",
+    ]
+    (out_dir / f"{pfx}_throughput_stability.tex").write_text("\n".join(body), encoding="utf-8")
+
+    # Baseline ratios if dense baseline known
+    if not math.isnan(d_sps) and d_sps > 0:
+        rb: List[str] = [
+            r"\begin{table}[t]",
+            r"  \centering",
+            r"  \small",
+            r"  \caption{Throughput relative to dense baseline ($\mu_{\mathrm{cum}}$ steps/s).}",
+            r"  \label{tab:" + pfx + r"_vs_dense}",
+            r"  \begin{tabular}{@{}lc@{}}",
+            r"    \toprule",
+            r"    Phase & frac of dense \\",
+            r"    \midrule",
+        ]
+        for s in stats:
+            if s["phase"] == "dense":
+                frac = 1.0
+            else:
+                frac = float(s["mean_cumulative_steps_per_s"]) / d_sps if not math.isnan(d_sps) else float("nan")
+            rb.append(f"    {_latex_tt(s['phase'])} & {_fmt(frac, 4)} \\\\")
+        rb += [r"    \bottomrule", r"  \end{tabular}", r"\end{table}", ""]
+        (out_dir / f"{pfx}_vs_dense.tex").write_text("\n".join(rb), encoding="utf-8")
 
 
 def main() -> None:
@@ -363,11 +525,30 @@ def main() -> None:
         default=None,
         help="Output Markdown path (default: <csv_stem>_report.md next to the CSV)",
     )
+    ap.add_argument("--tail-rows", type=int, default=8, help="Tail window size per phase")
     ap.add_argument(
-        "--tail-rows",
+        "--baseline-csv",
+        type=Path,
+        default=None,
+        help="Optional second CSV containing a `dense` phase for baseline ratios",
+    )
+    ap.add_argument(
+        "--expected-steps",
         type=int,
-        default=8,
-        help="Mean metrics over the last N rows per phase",
+        default=None,
+        help="Override expected optimizer steps per phase (else use benchmark_phase_target_steps column)",
+    )
+    ap.add_argument(
+        "--cv-warn",
+        type=float,
+        default=0.35,
+        help="Warn when tail CV of cumulative steps/s exceeds this threshold",
+    )
+    ap.add_argument(
+        "--emit-tex",
+        type=Path,
+        default=None,
+        help="Write LaTeX table fragments under this directory",
     )
     args = ap.parse_args()
 
@@ -384,17 +565,45 @@ def main() -> None:
         print("ERROR: CSV needs columns phase, step", file=sys.stderr)
         sys.exit(1)
 
-    agg = aggregate_phases(rows, args.tail_rows)
-    md = build_markdown(csv_path=csv_path, agg=agg, tail_rows=args.tail_rows)
+    stats = compute_phase_statistics(rows, args.tail_rows, args.expected_steps)
+    warnings = _collect_warnings(stats, args.cv_warn)
 
-    out_path = args.out
-    if out_path is None:
-        out_path = csv_path.parent / f"{csv_path.stem}_report.md"
-    else:
-        out_path = out_path.resolve()
+    external: Optional[Tuple[float, float]] = None
+    if args.baseline_csv is not None:
+        bp = args.baseline_csv.resolve()
+        if not bp.is_file():
+            print(f"ERROR: baseline CSV not found: {bp}", file=sys.stderr)
+            sys.exit(1)
+        external = _load_external_dense_baseline(bp, args.tail_rows)
+
+    d_sps, d_sms = _dense_baseline_rates(stats)
+    if external is not None:
+        d_sps, d_sms = external
+
+    md = build_markdown(
+        csv_path=csv_path,
+        stats=stats,
+        tail_rows=args.tail_rows,
+        warnings=warnings,
+        external_baseline=external,
+    )
+
+    out_path = args.out if args.out is not None else csv_path.parent / f"{csv_path.stem}_report.md"
+    out_path = out_path.resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")
     print(f"Wrote {out_path}")
+
+    if args.emit_tex is not None:
+        emit_latex_tables(
+            out_dir=args.emit_tex.resolve(),
+            csv_stem=csv_path.stem,
+            stats=stats,
+            warnings=warnings,
+            d_sps=d_sps,
+            d_sms=d_sms,
+        )
+        print(f"Wrote LaTeX tables under {args.emit_tex.resolve()}")
 
 
 if __name__ == "__main__":

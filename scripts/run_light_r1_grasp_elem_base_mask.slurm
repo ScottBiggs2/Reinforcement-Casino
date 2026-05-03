@@ -8,7 +8,8 @@
 #   sbatch --export=ALL,SCRATCH_USER_ROOT=/scratch/biggs.s,MASK_RUN_ID=my_run_001 \
 #     scripts/run_light_r1_grasp_elem_base_mask.slurm
 #
-#SBATCH --partition=gpu
+# Explorer: use multigpu when gpu is drained (matches scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh).
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1

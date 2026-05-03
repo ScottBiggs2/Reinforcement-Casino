@@ -469,6 +469,9 @@ def main():
             base_log["adam_kernel"] = adam_kernel or ""
             base_log["grad_input_mode"] = grad_input_mode or ""
             base_log["mask_seed"] = int(seed)
+            base_log["benchmark_phase_target_steps"] = int(args.n_steps)
+            base_log["benchmark_mask_key_count"] = int(len(bool_masks))
+            base_log["benchmark_mlp_only"] = int(bool(args.mlp_only))
             extra_log = base_log
             theory_records.append(
                 {"phase": phase_name, "sparsity_target_pct": float(sparsity_pct), **base_log}
@@ -479,6 +482,9 @@ def main():
                 print(f"WARNING: could not write incremental benchmark_theory.json: {e}", file=sys.stderr)
         else:
             stub = dense_phase_theory_stub(b_tokens=b_tokens)
+            stub["benchmark_phase_target_steps"] = int(args.n_steps)
+            stub["benchmark_mask_key_count"] = 0
+            stub["benchmark_mlp_only"] = int(bool(args.mlp_only))
             extra_log = stub
             theory_records.append({"phase": phase_name, "sparsity_target_pct": None, **stub})
             try:

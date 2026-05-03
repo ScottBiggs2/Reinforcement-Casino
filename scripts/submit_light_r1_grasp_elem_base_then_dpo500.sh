@@ -6,7 +6,8 @@
 #   bash scripts/submit_light_r1_grasp_elem_base_then_dpo500.sh
 #
 # Optional overrides (export before running):
-#   SCRATCH_USER_ROOT  HF_TOKEN  MODEL  MASK_RUN_ID  RUN_ID  SPARSE_SLURM_PARTITION  SPARSE_SLURM_GRES
+#   SCRATCH_USER_ROOT  HF_TOKEN  MODEL  MASK_SLURM_PARTITION  MASK_SLURM_GRES  SPARSE_SLURM_PARTITION  SPARSE_SLURM_GRES
+# To reuse a fixed MASK_RUN_ID / RUN_ID from the shell: SUBMIT_LR1_GRASP_REUSE_IDS=1 bash ...
 #
 set -euo pipefail
 
@@ -15,6 +16,11 @@ cd "$REPO_ROOT"
 mkdir -p logs
 
 export SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
+
+# Stale login exports caused doubled RUN_ID and wrong MASK_RUN_ID; clear unless explicitly reusing.
+if [ "${SUBMIT_LR1_GRASP_REUSE_IDS:-0}" != "1" ]; then
+  unset RUN_ID PIPELINE_RUN_ID MASK_RUN_ID MASK_OUT_BASE 2>/dev/null || true
+fi
 
 # shellcheck source=/dev/null
 source "${REPO_ROOT}/scripts/export_pipeline_step_targets.sh"
@@ -25,8 +31,11 @@ export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-${RUN_ID}}"
 export DPO_DS_KEY_LIGHT_R1="${DPO_DS_KEY_LIGHT_R1:-light-r1}"
 export DPO_DATASET_KEY="${DPO_DATASET_KEY:-${DPO_DS_KEY_LIGHT_R1}}"
 
-export SPARSE_SLURM_PARTITION="${SPARSE_SLURM_PARTITION:-gpu}"
-export SPARSE_SLURM_GRES="${SPARSE_SLURM_GRES:-gpu:a100:1}"
+# Match working GRPO on Explorer: orchestrate_grpo_500step_5way.slurm + mask suite use multigpu + h200.
+export MASK_SLURM_PARTITION="${MASK_SLURM_PARTITION:-multigpu}"
+export MASK_SLURM_GRES="${MASK_SLURM_GRES:-gpu:h200:1}"
+export SPARSE_SLURM_PARTITION="${SPARSE_SLURM_PARTITION:-multigpu}"
+export SPARSE_SLURM_GRES="${SPARSE_SLURM_GRES:-gpu:h200:1}"
 
 export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-100}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-3}"
@@ -59,6 +68,8 @@ echo "NUM_STEPS_DPO=${NUM_STEPS_DPO}"
 
 # HF_TOKEN / W&B: export in your shell before running; sbatch --export=ALL forwards them.
 MASK_JID="$(sbatch --parsable \
+  --partition="${MASK_SLURM_PARTITION}" \
+  --gres="${MASK_SLURM_GRES}" \
   --export=ALL,"SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT},MASK_RUN_ID=${MASK_RUN_ID}" \
   "${REPO_ROOT}/scripts/run_light_r1_grasp_elem_base_mask.slurm")"
 

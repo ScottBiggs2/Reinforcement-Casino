@@ -21,7 +21,10 @@ fi
 export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$RUN_ID}"
 
 # Envs — same defaults as scripts/pipeline_common.sh (override SCRATCH_USER_ROOT per cluster)
-SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-${LOGNAME:-unknown}}}"
+if [ -z "${SCRATCH_USER_ROOT}" ] || [ "${SCRATCH_USER_ROOT}" = "/" ]; then
+  SCRATCH_USER_ROOT="/scratch/${USER:-${LOGNAME:-unknown}}"
+fi
 export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
 TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
@@ -31,6 +34,27 @@ MASK_OUT_BASE="${MASK_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_masks}"
 SPARSE_OUT_BASE="${SPARSE_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train}"
 EVAL_OUT_BASE="${EVAL_OUT_BASE:-${SCRATCH_USER_ROOT}/rl_casino_eval_runs}"
 HF_DATASETS_CACHE_ROOT="${HF_DATASETS_CACHE_ROOT:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
+
+if [[ "${MASK_OUT_BASE}" == /rl_casino_* ]]; then
+  echo "NOTE: resetting MASK_OUT_BASE to \${SCRATCH_USER_ROOT}/rl_casino_masks (was: ${MASK_OUT_BASE})" >&2
+  MASK_OUT_BASE="${SCRATCH_USER_ROOT}/rl_casino_masks"
+fi
+if [[ "${SPARSE_OUT_BASE}" == /rl_casino_* ]]; then
+  echo "NOTE: resetting SPARSE_OUT_BASE to \${SCRATCH_USER_ROOT}/rl_casino_sparse_train (was: ${SPARSE_OUT_BASE})" >&2
+  SPARSE_OUT_BASE="${SCRATCH_USER_ROOT}/rl_casino_sparse_train"
+fi
+if [[ "${TRAIN_OUT_BASE}" == /rl_casino_* ]]; then
+  echo "NOTE: resetting TRAIN_OUT_BASE to \${SCRATCH_USER_ROOT}/rl_casino_train (was: ${TRAIN_OUT_BASE})" >&2
+  TRAIN_OUT_BASE="${SCRATCH_USER_ROOT}/rl_casino_train"
+fi
+if [[ "${EVAL_OUT_BASE}" == /rl_casino_* ]]; then
+  echo "NOTE: resetting EVAL_OUT_BASE to \${SCRATCH_USER_ROOT}/rl_casino_eval_runs (was: ${EVAL_OUT_BASE})" >&2
+  EVAL_OUT_BASE="${SCRATCH_USER_ROOT}/rl_casino_eval_runs"
+fi
+if [[ "${HF_DATASETS_CACHE_ROOT}" == /hf_cache/* ]]; then
+  echo "NOTE: resetting HF_DATASETS_CACHE_ROOT to \${SCRATCH_USER_ROOT}/hf_cache/datasets (was: ${HF_DATASETS_CACHE_ROOT})" >&2
+  HF_DATASETS_CACHE_ROOT="${SCRATCH_USER_ROOT}/hf_cache/datasets"
+fi
 
 mkdir -p "$TRAIN_OUT_BASE" "$MASK_OUT_BASE" "$SPARSE_OUT_BASE" "$EVAL_OUT_BASE" logs
 
