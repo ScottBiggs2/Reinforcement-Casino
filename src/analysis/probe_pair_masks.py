@@ -115,6 +115,18 @@ def parse_args():
                    help="Skip the unmasked baseline (disables delta heatmap)")
     p.add_argument("--skip_missing", action="store_true",
                    help="If a mask file is missing, log a warning and skip instead of failing")
+    p.add_argument("--patch_mode", default="zero_out",
+                   choices=["zero_out", "delta_only", "anti_delta_only"],
+                   help="How apply_mask edits weights. zero_out (default) = "
+                        "w_ft * M (legacy). delta_only = w_base + (w_ft-w_base)*M "
+                        "(sufficiency: keep RL Δθ only on M). anti_delta_only = "
+                        "w_base + (w_ft-w_base)*(1-M) (necessity: revert M back "
+                        "to base, keep Δθ on the complement). The latter two "
+                        "require --base_model.")
+    p.add_argument("--base_model", default=None,
+                   help="HF id or local path of the base (pre-finetune) model. "
+                        "Required when --patch_mode is delta_only or "
+                        "anti_delta_only. Loaded once on CPU as a state-dict.")
     return p.parse_args()
 
 
@@ -173,9 +185,16 @@ def load_probe_datasets(args):
 
 def evaluate_config(model, tokenizer, extractor, all_texts, args,
                     sample_index_set, property_slices, probe_datasets,
-                    mask_dict, label_clean):
+                    mask_dict, label_clean, base_state_dict=None):
     """Run one forward pass + train pairwise probes for a single config."""
-    ctx = apply_mask(model, mask_dict) if mask_dict is not None else no_mask()
+    if mask_dict is None:
+        ctx = no_mask()
+    else:
+        ctx = apply_mask(
+            model, mask_dict,
+            patch_mode=args.patch_mode,
+            base_state_dict=base_state_dict,
+        )
     t0 = time.time()
     with ctx:
         device = next(model.parameters()).device
@@ -348,6 +367,38 @@ def main():
         loaded_masks.append((spec["label"], load_mask(spec["path"])))
 
     # ------------------------------------------------------------------
+    # Optional: load base model state dict for delta_only / anti_delta_only
+    # ------------------------------------------------------------------
+    base_state_dict = None
+    if args.patch_mode in {"delta_only", "anti_delta_only"}:
+        if not args.base_model:
+            raise ValueError(
+                f"--patch_mode={args.patch_mode} requires --base_model "
+                f"(pre-finetune checkpoint, e.g. meta-llama/Llama-3.1-8B-Instruct)."
+            )
+        print(f"\n[main] Loading base model state dict for patch_mode="
+              f"{args.patch_mode}: {args.base_model}")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            args.base_model,
+            torch_dtype=torch.bfloat16,
+            device_map="cpu",
+            low_cpu_mem_usage=True,
+        )
+        # Snapshot only the params we'll touch (intersection with masks). Keeps
+        # CPU RAM lean.
+        wanted = set()
+        for _, md in loaded_masks:
+            wanted.update(md.keys())
+        base_state_dict = {
+            n: p.detach().cpu().clone()
+            for n, p in base_model.named_parameters()
+            if n in wanted
+        }
+        print(f"[main] Base state dict snapped: "
+              f"{len(base_state_dict)}/{len(wanted)} mask params matched")
+        del base_model
+
+    # ------------------------------------------------------------------
     # Evaluate baseline once, then each mask
     # ------------------------------------------------------------------
     extractor = FeatureExtractor().register(model)
@@ -359,6 +410,7 @@ def main():
             model, tokenizer, extractor, all_texts, args,
             sample_index_set, property_slices, probe_datasets,
             mask_dict=None, label_clean="baseline",
+            base_state_dict=base_state_dict,
         )
 
     for label, mask_dict in loaded_masks:
@@ -367,6 +419,7 @@ def main():
             model, tokenizer, extractor, all_texts, args,
             sample_index_set, property_slices, probe_datasets,
             mask_dict=mask_dict, label_clean=label,
+            base_state_dict=base_state_dict,
         )
         # Save after each mask so partial progress survives crashes
         partial_path = os.path.join(args.output_dir, "probe_pair_results.json")

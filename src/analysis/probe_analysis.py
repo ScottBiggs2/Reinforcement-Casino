@@ -341,39 +341,93 @@ def load_mask(path: str) -> dict:
 
 
 @contextmanager
-def apply_mask(model, mask_dict: dict):
-    """Context manager: temporarily zero out weights according to mask_dict.
+def apply_mask(model, mask_dict: dict, patch_mode: str = "zero_out",
+               base_state_dict: dict = None):
+    """Context manager: temporarily edit weights according to mask_dict + patch_mode.
 
     mask_dict maps param_name -> binary tensor (1=keep, 0=prune).
     Original weights are restored on exit regardless of exceptions.
+
+    patch_mode controls *how* the mask is applied:
+      - "zero_out"        (default, backwards-compatible): w' = w_ft * M
+                          Keeps the fine-tuned weights only on M.
+      - "delta_only":     w' = w_base + (w_ft - w_base) * M
+                          Reverts every position to the base model EXCEPT M, where
+                          the RL Δθ is preserved. Tests *sufficiency* of M.
+      - "anti_delta_only":w' = w_ft - (w_ft - w_base) * M = w_base + Δθ * (1 - M)
+                          Reverts the M positions back to base, keeping Δθ on ¬M.
+                          Tests *necessity* of M.
+
+    For "delta_only" / "anti_delta_only", base_state_dict must be supplied; it
+    is keyed by the same param names as mask_dict.
     """
+    if patch_mode not in {"zero_out", "delta_only", "anti_delta_only"}:
+        raise ValueError(f"Unknown patch_mode: {patch_mode!r}")
+    if patch_mode in {"delta_only", "anti_delta_only"} and base_state_dict is None:
+        raise ValueError(
+            f"patch_mode={patch_mode!r} requires base_state_dict; got None."
+        )
+
     originals = {}
     skipped_shape = []
+    skipped_no_base = []
     try:
         for name, param in model.named_parameters():
-            if name in mask_dict:
-                m = mask_dict[name]
-                # Skip shape mismatches (e.g. vocab differences between
-                # mask-source model and the model being probed). Recording
-                # these lets the caller surface them without crashing the run.
-                if m.shape != param.shape:
-                    skipped_shape.append((name, tuple(m.shape), tuple(param.shape)))
+            if name not in mask_dict:
+                continue
+            m = mask_dict[name]
+            # Skip shape mismatches (e.g. vocab differences between
+            # mask-source model and the model being probed). Recording
+            # these lets the caller surface them without crashing the run.
+            if m.shape != param.shape:
+                skipped_shape.append((name, tuple(m.shape), tuple(param.shape)))
+                continue
+            # Strict {0,1} check: non-binary masks would silently scale
+            # weights, corrupting the baseline restore below.
+            if not torch.all((m == 0) | (m == 1)):
+                raise ValueError(
+                    f"Mask for {name} contains non-binary values; "
+                    f"refusing to apply to avoid precision loss."
+                )
+            m_dev = m.to(param.device, dtype=param.dtype)
+            originals[name] = param.data.clone()
+
+            if patch_mode == "zero_out":
+                param.data.mul_(m_dev)
+            else:
+                if name not in base_state_dict:
+                    skipped_no_base.append(name)
+                    # Roll back the placeholder we just stored so the
+                    # restore loop is a no-op for this param.
+                    del originals[name]
                     continue
-                # Strict {0,1} check: non-binary masks would silently scale
-                # weights, corrupting the baseline restore below.
-                if not torch.all((m == 0) | (m == 1)):
-                    raise ValueError(
-                        f"Mask for {name} contains non-binary values; "
-                        f"refusing to apply to avoid precision loss."
+                base = base_state_dict[name].to(param.device, dtype=param.dtype)
+                if base.shape != param.shape:
+                    skipped_shape.append(
+                        (name, tuple(base.shape), tuple(param.shape))
                     )
-                originals[name] = param.data.clone()
-                param.data.mul_(m.to(param.device, dtype=param.dtype))
+                    del originals[name]
+                    continue
+                if patch_mode == "delta_only":
+                    # w_base + (w_ft - w_base) * M
+                    param.data.copy_(base + (param.data - base) * m_dev)
+                else:  # anti_delta_only
+                    # w_base + (w_ft - w_base) * (1 - M) = w_ft - (w_ft - w_base) * M
+                    param.data.sub_((param.data - base) * m_dev)
         if skipped_shape:
             print(f"[apply_mask] skipped {len(skipped_shape)} param(s) due to shape mismatch:")
             for n, ms, ps in skipped_shape[:5]:
-                print(f"  {n}: mask {ms} vs param {ps}")
+                print(f"  {n}: mask/base {ms} vs param {ps}")
             if len(skipped_shape) > 5:
                 print(f"  ... and {len(skipped_shape) - 5} more")
+        if skipped_no_base:
+            print(f"[apply_mask] {len(skipped_no_base)} param(s) in mask but not "
+                  f"in base_state_dict — left at fine-tuned values "
+                  f"(patch_mode={patch_mode}):")
+            for n in skipped_no_base[:5]:
+                print(f"  {n}")
+            if len(skipped_no_base) > 5:
+                print(f"  ... and {len(skipped_no_base) - 5} more")
         yield
     finally:
         for name, param in model.named_parameters():

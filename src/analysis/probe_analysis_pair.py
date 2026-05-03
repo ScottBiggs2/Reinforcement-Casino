@@ -157,6 +157,8 @@ def _train_one_layer(
     test_accs, train_accs = [], []
     all_converged = True
 
+    # When pos_splits / neg_splits are empty, CV is disabled (cv=0 path).
+    # Holdout is then the only test signal; cv_* fields stay NaN.
     for (p_tr, p_te), (n_tr, n_te) in zip(pos_splits, neg_splits):
         pos_tr = pos_idx_cv[p_tr]
         pos_te = pos_idx_cv[p_te]
@@ -180,11 +182,16 @@ def _train_one_layer(
         train_accs.append(pipe.score(X_train, y_train))
         test_accs.append(pipe.score(X_test, y_test))
 
-    test_arr = np.array(test_accs)
-    train_arr = np.array(train_accs)
-    cv_test = float(test_arr.mean())
-    cv_std = float(test_arr.std())
-    cv_train = float(train_arr.mean())
+    if test_accs:
+        test_arr = np.array(test_accs)
+        train_arr = np.array(train_accs)
+        cv_test = float(test_arr.mean())
+        cv_std = float(test_arr.std())
+        cv_train = float(train_arr.mean())
+    else:
+        cv_test = float("nan")
+        cv_std = float("nan")
+        cv_train = float("nan")
 
     holdout_test = None
     holdout_train = None
@@ -281,21 +288,38 @@ def train_pairwise_probes(
             f"use_holdout_as_test={use_holdout_as_test}"
         )
 
-    # Guard: KFold crashes if n_splits > n_samples. Fall back to min class size.
-    effective_cv = min(cv, len(pos_idx_cv), len(neg_idx_cv))
-    if effective_cv < 2:
-        raise ValueError(
-            f"Need >=2 samples per class for CV, got "
-            f"pos={len(pos_idx_cv)}, neg={len(neg_idx_cv)}"
-        )
-    if effective_cv < cv:
-        print(f"[pair] WARNING: reducing cv from {cv} to {effective_cv} "
-              f"(pos={len(pos_idx_cv)}, neg={len(neg_idx_cv)})")
+    # cv=0 disables CV entirely (only the holdout split is used as the test
+    # set). This is the simple-protocol path: train on `pos_idx_cv ∪
+    # neg_idx_cv` once, test on the holdout. Requires holdout_frac > 0.
+    if cv == 0:
+        if holdout_frac <= 0.0:
+            raise ValueError(
+                "cv=0 requires holdout_frac > 0 — need at least one test split."
+            )
+        if not use_holdout_as_test:
+            print("[pair] WARNING: cv=0 implies holdout is the only test signal; "
+                  "forcing use_holdout_as_test=True.")
+            use_holdout_as_test = True
+        pos_splits = []
+        neg_splits = []
+        print(f"[pair] cv=0: skipping CV, using holdout-only protocol "
+              f"(train pos/neg={len(pos_idx_cv)}/{len(neg_idx_cv)})")
+    else:
+        # Guard: KFold crashes if n_splits > n_samples. Fall back to min class size.
+        effective_cv = min(cv, len(pos_idx_cv), len(neg_idx_cv))
+        if effective_cv < 2:
+            raise ValueError(
+                f"Need >=2 samples per class for CV, got "
+                f"pos={len(pos_idx_cv)}, neg={len(neg_idx_cv)}"
+            )
+        if effective_cv < cv:
+            print(f"[pair] WARNING: reducing cv from {cv} to {effective_cv} "
+                  f"(pos={len(pos_idx_cv)}, neg={len(neg_idx_cv)})")
 
-    kf_pos = KFold(n_splits=effective_cv, shuffle=True, random_state=seed)
-    kf_neg = KFold(n_splits=effective_cv, shuffle=True, random_state=seed + 1)
-    pos_splits = list(kf_pos.split(pos_idx_cv))
-    neg_splits = list(kf_neg.split(neg_idx_cv))
+        kf_pos = KFold(n_splits=effective_cv, shuffle=True, random_state=seed)
+        kf_neg = KFold(n_splits=effective_cv, shuffle=True, random_state=seed + 1)
+        pos_splits = list(kf_pos.split(pos_idx_cv))
+        neg_splits = list(kf_neg.split(neg_idx_cv))
 
     # Convert activations to numpy once, outside the parallel section, so
     # worker processes receive already-materialized arrays (joblib with
