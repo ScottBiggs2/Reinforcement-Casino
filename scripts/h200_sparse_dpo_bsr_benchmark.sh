@@ -57,10 +57,21 @@ case "${H200_BSR_OUT:-}" in
     unset H200_BSR_OUT
     ;;
 esac
-TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
-TRAIN_PY="${TRAIN_ENV}/bin/python"
-if [ ! -x "$TRAIN_PY" ]; then
-  echo "ERROR: TRAIN_PY not found: ${TRAIN_PY}" >&2
+# Canonical env on Explorer-style scratch (sbatch --export=ALL can inherit a broken TRAIN_ENV, e.g.
+# /conda_envs/rl_casino if TRAIN_ENV was built when SCRATCH_USER_ROOT was empty on the login node).
+DEFAULT_TRAIN_ENV="${SCRATCH_USER_ROOT}/conda_envs/rl_casino"
+if [ -n "${TRAIN_PY:-}" ] && [ -x "$TRAIN_PY" ]; then
+  TRAIN_ENV="$(dirname "$(dirname "$TRAIN_PY")")"
+elif [ -n "${TRAIN_ENV:-}" ] && [ -x "${TRAIN_ENV}/bin/python" ]; then
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+elif [ -x "${DEFAULT_TRAIN_ENV}/bin/python" ]; then
+  if [ -n "${TRAIN_ENV:-}" ]; then
+    echo "WARNING: TRAIN_ENV=${TRAIN_ENV} has no usable bin/python; using ${DEFAULT_TRAIN_ENV}." >&2
+  fi
+  TRAIN_ENV="${DEFAULT_TRAIN_ENV}"
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+else
+  echo "ERROR: TRAIN_PY not found. Checked TRAIN_PY=${TRAIN_PY:-<unset>}, TRAIN_ENV=${TRAIN_ENV:-<unset>}/bin/python, and ${DEFAULT_TRAIN_ENV}/bin/python" >&2
   exit 1
 fi
 export PATH="${TRAIN_ENV}/bin:${PATH}"
@@ -140,6 +151,7 @@ OUT_BASE="${H200_BSR_OUT:-${SCRATCH_USER_ROOT}/rl_casino_h200_bsr}/${RUN_ID:-${S
 mkdir -p "$OUT_BASE"
 
 echo "REPO_ROOT=${REPO_ROOT}"
+echo "SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}  TRAIN_ENV=${TRAIN_ENV}  TRAIN_PY=${TRAIN_PY}"
 echo "OUT_BASE=${OUT_BASE}"
 echo "MODEL=${MODEL}"
 echo "H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE} (optimizer steps per dense/sparse phase)"
