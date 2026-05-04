@@ -15,6 +15,8 @@ Key Features:
 import os
 import sys
 import argparse
+import json
+import time
 import types
 from typing import Any, Dict, Optional
 
@@ -182,7 +184,9 @@ def train(
     os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join(output_base_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
-    
+
+    _prepare_t0 = time.perf_counter()
+
     slurm_safe_print(f"\n{'='*60}")
     slurm_safe_print(f"SPARSE DPO BSR TRAINING")
     slurm_safe_print(f"{'='*60}")
@@ -530,7 +534,25 @@ def train(
 
         trainer.accelerator.backward = types.MethodType(_timed_backward, trainer.accelerator)  # type: ignore[assignment]
 
+    _prepare_s = time.perf_counter() - _prepare_t0
+    _train_t0 = time.perf_counter()
     trainer.train()
+    _trainer_s = time.perf_counter() - _train_t0
+
+    if benchmark_log_sink is not None and benchmark_phase:
+        slurm_safe_print(
+            "BENCH_JSON "
+            + json.dumps(
+                {
+                    "kind": "train_wall",
+                    "phase": benchmark_phase,
+                    "run_name": run_name,
+                    "prepare_s": round(_prepare_s, 6),
+                    "trainer_s": round(_trainer_s, 6),
+                },
+                separators=(",", ":"),
+            )
+        )
 
     # Optional: print BSR kernel compile/variant diagnostics for this phase.
     if os.environ.get("RL_CASINO_BSR_RECOMPILE_DIAG", "").strip().lower() in ("1", "true", "yes"):

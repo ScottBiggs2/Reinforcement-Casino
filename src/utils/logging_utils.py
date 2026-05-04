@@ -186,10 +186,15 @@ class BenchmarkThroughputCallback(TrainerCallback):
     """
     Per-log throughput (cumulative since phase start) plus phase metadata for plotting.
 
-    ``cumulative_steps_per_s`` / ``wall_time_s`` are measured from ``on_train_begin`` (includes
-    model load, mask I/O, injection, and early-step compilation). For a **steady-interval** view,
-    use ``wall_delta_s`` and ``inst_steps_per_s`` (delta since the previous logged row), when the
-    trainer logs frequently enough that consecutive rows bracket completed optimizer steps.
+    ``cumulative_steps_per_s`` / ``wall_time_s`` are measured from ``on_train_begin`` (HF trainer
+    start only — excludes model load / injection when those ran before ``trainer.train()``).
+
+    ``wall_time_since_first_step_end_s`` / ``cumulative_steps_per_s_excl_first`` start after the
+    first optimizer step completes (reduces first-step compile skew in headline rates).
+
+    For a **steady-interval** view, use ``wall_delta_s`` and ``inst_steps_per_s`` (delta since the
+    previous logged row), when the trainer logs frequently enough that consecutive rows bracket
+    completed optimizer steps.
     """
 
     def __init__(
@@ -206,6 +211,7 @@ class BenchmarkThroughputCallback(TrainerCallback):
         self.sparsity_target_pct = sparsity_target_pct
         self.optimizer_label = optimizer_label
         self._t0: Optional[float] = None
+        self._t_after_step1: Optional[float] = None
         self.print_every = int(print_every) if print_every and int(print_every) > 0 else 0
         self._extra_log_fields = extra_log_fields or {}
         self._prev_wall: Optional[float] = None
@@ -213,8 +219,13 @@ class BenchmarkThroughputCallback(TrainerCallback):
 
     def on_train_begin(self, args, state, control, **kwargs):
         self._t0 = time.perf_counter()
+        self._t_after_step1 = None
         self._prev_wall = None
         self._prev_step = None
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if self._t_after_step1 is None and int(state.global_step) >= 1:
+            self._t_after_step1 = time.perf_counter()
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None or self._t0 is None:
@@ -242,6 +253,15 @@ class BenchmarkThroughputCallback(TrainerCallback):
             "trainer_grad_accum_steps": ga,
             "trainer_per_device_train_batch_size": int(args.per_device_train_batch_size),
         }
+        if self._t_after_step1 is not None and step >= 1:
+            w_ex = time.perf_counter() - self._t_after_step1
+            row["wall_time_since_first_step_end_s"] = round(w_ex, 6)
+            completed_after_first = max(0, step - 1)
+            if w_ex > 1e-9 and completed_after_first > 0:
+                row["cumulative_steps_per_s_excl_first"] = round(completed_after_first / w_ex, 8)
+                row["cumulative_samples_per_s_excl_first"] = round(
+                    (completed_after_first * samples_per_step) / w_ex, 6
+                )
         # Interval rates (since previous log): closer to steady-state when logging every step.
         if self._prev_wall is not None and self._prev_step is not None:
             dw = wall - self._prev_wall
@@ -287,7 +307,11 @@ class BenchmarkThroughputCallback(TrainerCallback):
         # Live timing printouts for Slurm .out monitoring.
         if self.print_every and step > 0 and (step % self.print_every == 0):
             sp = "dense" if self.sparsity_target_pct is None else f"{float(self.sparsity_target_pct):g}%"
+            extra = ""
+            ex = row.get("cumulative_steps_per_s_excl_first")
+            if isinstance(ex, (int, float)) and ex == ex and ex > 0:
+                extra = f" steps/s_excl_first={float(ex):.4f}"
             slurm_safe_print(
                 f"[throughput] phase={self.phase} sparsity={sp} step={step} "
-                f"steps/s={sps:.4f} samples/s={sms:.2f} wall_s={wall:.1f}"
+                f"steps/s={sps:.4f} samples/s={sms:.2f} wall_s={wall:.1f}{extra}"
             )

@@ -115,7 +115,8 @@ export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
 
 # For stable benchmarking (avoid layer-dependent kernel variants)
 # - BSR_USE_ATOMIC: keep constexpr stable across all layers in a phase
-# - BSR_BATCH_CHUNKS: keep grid shape deterministic (disable auto heuristic)
+# - BSR_BATCH_CHUNKS: minimum batch-axis launch tiles for grad_weight Triton; the kernel also
+#   autoscales to ~1024 total programs (active_blocks × chunks). Env is a floor, not a cap.
 export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
 export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
 
@@ -167,6 +168,14 @@ if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
   GC_ARGS+=(--no_gradient_checkpointing)
 fi
 
+PHASE_SLICE_ARGS=()
+if [ -n "${H200_BSR_PHASE_START:-}" ]; then
+  PHASE_SLICE_ARGS+=(--phase_start "${H200_BSR_PHASE_START}")
+fi
+if [ -n "${H200_BSR_PHASE_END:-}" ]; then
+  PHASE_SLICE_ARGS+=(--phase_end "${H200_BSR_PHASE_END}")
+fi
+
 exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --model_name "$MODEL" \
   --dataset tulu3 \
@@ -184,5 +193,6 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --benchmark_sparsities "$BENCHMARK_SPARSITIES" \
   --phase_grad_input_modes "dense" \
   --phase_adam_kernels "block_1d,block_2d" \
+  "${PHASE_SLICE_ARGS[@]}" \
   "${SKIP_DENSE_ARGS[@]}" \
   "${GC_ARGS[@]}"

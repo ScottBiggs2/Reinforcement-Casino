@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# Mask score-gap analysis: oracle (HF base vs checkpoint-500) vs warm magnitude @200 vs random.
+# Writes CSV + NPZ + JSON under OUT_DIR, then CPU matplotlib figures under OUT_DIR/figures.
+#
+# Submit from repo root (Explorer defaults match NEU scratch layout):
+#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+#
+# With HF gated model:
+#   sbatch --export=ALL,HF_TOKEN=...,TRAIN_ENV=/scratch/$USER/conda_envs/rl_casino \\
+#     scripts/slurm_mask_score_gap_light_r1.slurm
+#
+# Local smoke (tiny subset of layers; still loads full checkpoints — use HPC for real runs):
+#   mkdir -p /tmp/mask_gap_smoke && \\
+#   python src/analysis/mask_score_gap_analysis.py \\
+#     --initial_model meta-llama/Llama-3.1-8B-Instruct \\
+#     --final_model "${CKPT500_DIR}" \\
+#     --delta_log_dir "${DELTA_LOG_DIR}" \\
+#     --magnitude_target_step 200 \\
+#     --out_dir /tmp/mask_gap_smoke \\
+#     --max_keys 3 --histogram_bins 256 \\
+#     --verify_deltas_dir "${DELTA_LOG_DIR}"
+#
+#SBATCH --partition=short
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
+#SBATCH --time=08:00:00
+#SBATCH --job-name=mask_score_gap
+#SBATCH --output=logs/mask_score_gap_%j.out
+#SBATCH --error=logs/mask_score_gap_%j.err
+
+set -euo pipefail
+
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${_HERE}/.." && pwd)"
+fi
+cd "$REPO_ROOT"
+mkdir -p logs
+
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
+TRAIN_PY="${TRAIN_ENV}/bin/python"
+if [ ! -x "$TRAIN_PY" ]; then
+  echo "ERROR: TRAIN_PY not found: ${TRAIN_PY}" >&2
+  exit 1
+fi
+export PATH="${TRAIN_ENV}/bin:${PATH}"
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+export PYTHONUNBUFFERED=1
+
+export HF_TOKEN="${HF_TOKEN:-}"
+export HF_HOME="${HF_HOME:-${SCRATCH_USER_ROOT}/hf_cache/hub}"
+
+BASE_MODEL="${BASE_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+CKPT500_DIR="${CKPT500_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
+DELTA_LOG_DIR="${DELTA_LOG_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/deltas/meta_llama_llama_3_1_8b_instruct_light_r1}"
+OUT_DIR="${OUT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_analysis/mask_score_gap_light_r1/${SLURM_JOB_ID:-local}}"
+MAGNITUDE_TARGET_STEP="${MAGNITUDE_TARGET_STEP:-200}"
+RANDOM_SEEDS="${RANDOM_SEEDS:-}"
+HISTOGRAM_BINS="${HISTOGRAM_BINS:-2048}"
+MAX_KEYS="${MAX_KEYS:-}"
+MAGNITUDE_CACHE="${MAGNITUDE_CACHE:-}"
+# Optional: directory containing deltas_step_500.pt (omit if that snapshot does not exist yet).
+VERIFY_DELTAS_DIR="${VERIFY_DELTAS_DIR:-}"
+
+mkdir -p "${OUT_DIR}"
+
+echo "REPO_ROOT=${REPO_ROOT}"
+echo "TRAIN_PY=${TRAIN_PY}"
+echo "BASE_MODEL=${BASE_MODEL}"
+echo "CKPT500_DIR=${CKPT500_DIR}"
+echo "DELTA_LOG_DIR=${DELTA_LOG_DIR}"
+echo "OUT_DIR=${OUT_DIR}"
+
+ARGS=(
+  src/analysis/mask_score_gap_analysis.py
+  --initial_model "${BASE_MODEL}"
+  --final_model "${CKPT500_DIR}"
+  --delta_log_dir "${DELTA_LOG_DIR}"
+  --magnitude_target_step "${MAGNITUDE_TARGET_STEP}"
+  --out_dir "${OUT_DIR}"
+  --histogram_bins "${HISTOGRAM_BINS}"
+)
+if [ -n "${VERIFY_DELTAS_DIR}" ]; then
+  ARGS+=( --verify_deltas_dir "${VERIFY_DELTAS_DIR}" )
+fi
+if [ -n "${RANDOM_SEEDS}" ]; then
+  ARGS+=( --random_seeds "${RANDOM_SEEDS}" )
+fi
+if [ -n "${MAX_KEYS}" ]; then
+  ARGS+=( --max_keys "${MAX_KEYS}" )
+fi
+if [ -n "${MAGNITUDE_CACHE}" ]; then
+  ARGS+=( --magnitude_scores_cache "${MAGNITUDE_CACHE}" )
+fi
+
+"${TRAIN_PY}" "${ARGS[@]}"
+
+"${TRAIN_PY}" scripts/report_mask_score_gap_plots.py --analysis-dir "${OUT_DIR}"
+
+echo "Done. Artifacts: ${OUT_DIR} (figures in ${OUT_DIR}/figures)"

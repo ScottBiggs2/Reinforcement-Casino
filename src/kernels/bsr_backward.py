@@ -258,13 +258,14 @@ def sparse_weight_gradient_triton(grad_output, input_tensor, mask, active_blocks
         except Exception:
             pass
         
-    # Parallelize over batch dimension for high sparsity (fewer active blocks)
-    # H200 has ~132 SMs; we want enough programs to saturate them (target 1024+)
-    num_batch_chunks = get_env_int("BSR_BATCH_CHUNKS", 1)
-    if num_batch_chunks == 1:
-        target_total_programs = 1024
-        num_batch_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
-        
+    # Parallelize over batch dimension for high sparsity (fewer active blocks).
+    # H200 has ~132 SMs; target ~1024+ total programs (active_blocks × batch_chunks).
+    # BSR_BATCH_CHUNKS is a *floor*: never go below autoscale, or small layers under-fill the GPU.
+    target_total_programs = 1024
+    autoscale_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
+    env_floor = max(1, get_env_int("BSR_BATCH_CHUNKS", 1))
+    num_batch_chunks = max(env_floor, autoscale_chunks)
+
     grid = (num_active_blocks, num_batch_chunks)
     # Phase-constant atomic choice (prevents layer-dependent constexpr flips / recompiles).
     # Default off unless explicitly enabled.
@@ -381,10 +382,10 @@ def sparse_grad_input_triton(
         return torch.zeros((batch_size, input_dim), device=device, dtype=out_dtype)
 
     # Parallelize over batch dimension for extreme sparsity (few active blocks).
-    num_batch_chunks = get_env_int("BSR_GRAD_INPUT_BATCH_CHUNKS", 1)
-    if num_batch_chunks == 1:
-        target_total_programs = 1024
-        num_batch_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
+    target_total_programs = 1024
+    autoscale_chunks = (target_total_programs + num_active_blocks - 1) // num_active_blocks
+    env_floor = max(1, get_env_int("BSR_GRAD_INPUT_BATCH_CHUNKS", 1))
+    num_batch_chunks = max(env_floor, autoscale_chunks)
     grid = (num_active_blocks, num_batch_chunks)
 
     if _env_flag("RL_CASINO_BSR_KERNEL_STATS", "0"):

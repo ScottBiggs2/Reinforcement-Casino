@@ -14,6 +14,9 @@ per ``--benchmark_sparsities``.
   materialization per sparse phase). Falls back to a full CPU load if meta init fails.
 
 CSV: <output_dir>/benchmark_training_log.csv (via BenchmarkRunLogSink + BenchmarkThroughputCallback).
+Rows include ``wall_time_since_first_step_end_s`` / ``cumulative_steps_per_s_excl_first`` (clock starts
+after the first completed optimizer step). Stdout emits ``BENCH_JSON`` lines for mask I/O and
+``sparse_dpo_bsr.train`` prepare vs ``trainer.train()`` wall times (parse with ``report_h200_speed_ablation.py``).
 **CUDA segment columns** (``t_step_total_ms``, ``t_forward_ms``, ``t_backward_ms``, etc.) are written only
 when ``RL_CASINO_BSR_DETAILED_TIMING=1`` (see ``sparse_dpo_bsr.train``); default is **off** so sweeps stay fast.
 Theory: <output_dir>/benchmark_theory.json (one object per phase) plus ``theory_*`` columns duplicated on
@@ -39,6 +42,7 @@ import argparse
 import gc
 import json
 import hashlib
+import time
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -62,6 +66,11 @@ from src.utils.bsr_theory_metrics import (
     dense_phase_theory_stub,
 )
 from src.utils.block_profiler import print_block_sparsity_profile
+
+
+def _bench_json(payload: Dict[str, Any]) -> None:
+    """Single-line machine-readable record for post-hoc Slurm .out parsing."""
+    slurm_safe_print("BENCH_JSON " + json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
 
 def _build_random_scores_for_masks(model: torch.nn.Module, mlp_only: bool) -> dict:
@@ -308,6 +317,18 @@ def main():
         default="block_1d,block_2d",
         help="Comma-separated SparseAdamW kernels: block_1d,block_2d.",
     )
+    p.add_argument(
+        "--phase_start",
+        type=int,
+        default=0,
+        help="0-based inclusive index into the expanded phase list (use with --phase_end or Slurm arrays).",
+    )
+    p.add_argument(
+        "--phase_end",
+        type=int,
+        default=None,
+        help="Exclusive end index into the phase list; omit to run all phases from phase_start onward.",
+    )
     args = p.parse_args()
 
     sparsity_levels = [
@@ -340,6 +361,15 @@ def main():
         mask_types=mask_types,
         grad_input_modes=grad_input_modes,
         adam_kernels=adam_kernels,
+    )
+
+    n_phases_total = len(phases)
+    _ps = max(0, int(args.phase_start))
+    _pe = n_phases_total if args.phase_end is None else int(args.phase_end)
+    _pe = max(_ps, min(_pe, n_phases_total))
+    phases = phases[_ps:_pe]
+    slurm_safe_print(
+        f"Phase slice: [{_ps}:{_pe}) of {n_phases_total} expanded phases → running {len(phases)} phase(s)"
     )
 
     dense_ct = (
@@ -419,11 +449,25 @@ def main():
                 slurm_safe_print(f"  Reusing cached mask: {cache_path}")
                 mask_path = cache_path
                 # We still need theory metrics for the CSV/theory sidecar.
+                _t_mask = time.perf_counter()
                 from src.utils.mask_manager import SparseMaskManager
+
                 mm = SparseMaskManager(cache_path, device=torch.device("cpu"))
                 # SparseMaskManager stores the loaded mask tensors in `mm.masks` (no `list_masks()` helper).
                 bool_masks = {k: mm.get_mask(k).bool() for k in mm.masks.keys()}
+                _mask_s = time.perf_counter() - _t_mask
+                _bench_json(
+                    {
+                        "kind": "mask",
+                        "phase": phase_name,
+                        "seconds": round(_mask_s, 6),
+                        "cached": True,
+                        "cache_path": cache_path,
+                        "mask_keys": int(len(bool_masks)),
+                    }
+                )
             else:
+                _t_mask = time.perf_counter()
                 if mt == "block":
                     masks = generate_block_random_masks_cpu(
                         args.model_name,
@@ -461,6 +505,17 @@ def main():
                 save_masks(bool_masks, cache_path, metadata=meta)
                 slurm_safe_print(f"  Saved cached mask: {cache_path}")
                 mask_path = cache_path
+                _mask_s = time.perf_counter() - _t_mask
+                _bench_json(
+                    {
+                        "kind": "mask",
+                        "phase": phase_name,
+                        "seconds": round(_mask_s, 6),
+                        "cached": False,
+                        "cache_path": cache_path,
+                        "mask_keys": int(len(bool_masks)),
+                    }
+                )
                 del masks
                 gc.collect()
 
