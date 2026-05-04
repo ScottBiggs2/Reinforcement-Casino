@@ -21,6 +21,8 @@ export SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER}}"
 if [ "${SUBMIT_LR1_GRASP_REUSE_IDS:-0}" != "1" ]; then
   unset RUN_ID PIPELINE_RUN_ID MASK_RUN_ID MASK_OUT_BASE 2>/dev/null || true
 fi
+# sbatch --export=ALL forwards login TRAIN_ENV; a stale broken value breaks mask + sparse jobs.
+unset TRAIN_ENV TRAIN_PY 2>/dev/null || true
 
 # shellcheck source=/dev/null
 source "${REPO_ROOT}/scripts/export_pipeline_step_targets.sh"

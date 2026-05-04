@@ -31,18 +31,31 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
+# Same order as scripts/grpo_openr1_llama31_slurm.sh: scratch first, then conda paths.
+# sbatch --export=ALL often forwards a broken TRAIN_ENV from an earlier login session
+# (e.g. /conda_envs/rl_casino when SCRATCH was empty); never trust it unless the binary exists.
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+if [[ -z "${SCRATCH_USER_ROOT// }" ]]; then
+  SCRATCH_USER_ROOT="/scratch/${USER:-unknown}"
+fi
+export SCRATCH_USER_ROOT
 export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
 
-# Poisoned login env (empty SCRATCH + stale export) produced MASK_OUT_BASE=/rl_casino_masks — reset.
+# Poisoned login env produced MASK_OUT_BASE=/rl_casino_masks — reset.
 if [ -z "${MASK_OUT_BASE:-}" ] || [[ "${MASK_OUT_BASE}" == /rl_casino_* ]]; then
-  echo "NOTE: resetting MASK_OUT_BASE to \${SCRATCH_USER_ROOT}/rl_casino_masks (was: ${MASK_OUT_BASE:-<unset>})" >&2
+  echo "NOTE: resetting MASK_OUT_BASE to ${SCRATCH_USER_ROOT}/rl_casino_masks (was: ${MASK_OUT_BASE:-<unset>})" >&2
   MASK_OUT_BASE="${SCRATCH_USER_ROOT}/rl_casino_masks"
 fi
 export MASK_OUT_BASE
 
-TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
+_default_train_env="${SCRATCH_USER_ROOT}/conda_envs/rl_casino"
+if [ -n "${TRAIN_ENV:-}" ] && [ -x "${TRAIN_ENV}/bin/python" ]; then
+  :
+else
+  TRAIN_ENV="${_default_train_env}"
+fi
 TRAIN_PY="${TRAIN_ENV}/bin/python"
+export TRAIN_ENV
 export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
