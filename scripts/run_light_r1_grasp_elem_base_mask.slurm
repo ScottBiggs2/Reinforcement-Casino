@@ -15,7 +15,7 @@
 #SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --time=01:30:00
+#SBATCH --time=02:15:00
 #SBATCH --job-name=lr1_grsp_mk
 #SBATCH --output=logs/run_lr1_grasp_elem_base_mask_%j.out
 #SBATCH --error=logs/run_lr1_grasp_elem_base_mask_%j.err
