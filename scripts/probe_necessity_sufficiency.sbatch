@@ -3,11 +3,11 @@
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=320G
-#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=96G
+#SBATCH --gres=gpu:h200:1
 #SBATCH --exclude=d1025
-#SBATCH --time=02:30:00
+#SBATCH --time=02:00:00
 #SBATCH --output=logs/probe_necsuff_%j.out
 #SBATCH --error=logs/probe_necsuff_%j.err
 
