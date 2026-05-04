@@ -336,6 +336,7 @@ def main():
 
         s_a = compute_basic_stats(t_a)
         s_b = compute_basic_stats(t_b)
+        ckv = cka_value_for_layer_row(ca, raw_cka)
 
         if args.skip_effective_rank:
             er_a = er_a_norm = er_b = er_b_norm = None
@@ -363,7 +364,7 @@ def main():
                 "effective_rank_b": None if er_b is None else round(er_b, 8),
                 "effective_rank_b_norm": None if er_b_norm is None else round(er_b_norm, 8),
                 "jaccard": round(per_layer_jaccard.get(ca, float("nan")), 8),
-                "cka": round(cka_value_for_layer_row(ca, raw_cka), 8),
+                "cka": ("" if ckv != ckv else round(ckv, 8)),
             }
         )
 

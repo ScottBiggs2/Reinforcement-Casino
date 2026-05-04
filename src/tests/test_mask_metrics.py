@@ -76,6 +76,22 @@ def test_linear_cka_range():
     assert 0.0 <= c <= 1.0 + 1e-5
 
 
+def test_linear_cka_correlated_columns():
+    torch.manual_seed(2)
+    X = torch.randn(20, 8)
+    Y = X + 0.05 * torch.randn(20, 8)
+    c = linear_cka(X, Y)
+    assert c == c
+    assert c > 0.85
+
+
+def test_linear_cka_degenerate_returns_nan():
+    X = torch.zeros(10, 4)
+    Y = torch.randn(10, 4)
+    c = linear_cka(X, Y)
+    assert c != c
+
+
 def test_effective_rank_rank_one_matrix():
     W = torch.ones(4, 4)
     er, er_n = effective_rank(W)

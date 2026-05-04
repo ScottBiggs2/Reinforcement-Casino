@@ -115,16 +115,20 @@ def restore_weights(model, original):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-def _hsic(Kc: torch.Tensor, Lc: torch.Tensor, n: int) -> torch.Tensor:
-    """Biased HSIC estimator on pre-centered Gram matrices."""
-    return (Kc * Lc).sum() / (n - 1) ** 2
-
-
 def linear_cka(X: torch.Tensor, Y: torch.Tensor) -> float:
-    """Compute linear CKA between two activation matrices.
+    """Linear CKA between paired activation matrices (same n rows = same prompts).
 
-    Always runs the linear-algebra core on **CPU float64** so results are stable and we avoid
-    rare CUDA float64 / multi-device edge cases; n is at most batch×samples (small).
+    Uses the **column-centered feature-space** ratio (Kornblith et al., NeurIPS 2019):
+
+        CKA = ||Yᵀ X||_F² / ( ||Xᵀ X||_F · ||Yᵀ Y||_F )
+
+    with X,Y **column-mean-centered** (subtract mean over samples per feature). Shapes:
+    ``X`` is ``[n, d_x]``, ``Y`` is ``[n, d_y]`` (paired rows); ``Yᵀ X`` is ``[d_y, d_x]``.
+    More numerically stable than the older double-centered Gram / HSIC path on ``X Xᵀ``,
+    which could underflow to a false **0.0** when activations were extremely small after
+    aggressive weight masking.
+
+    Runs on **CPU float64** for stability.
     """
     X = X.detach().cpu().double()
     Y = Y.detach().cpu().double()
@@ -133,23 +137,21 @@ def linear_cka(X: torch.Tensor, Y: torch.Tensor) -> float:
     if n < 2:
         return float("nan")
 
-    K = X @ X.t()   # [n, n]
-    L = Y @ Y.t()   # [n, n]
+    X = X - X.mean(dim=0, keepdim=True)
+    Y = Y - Y.mean(dim=0, keepdim=True)
 
-    ones = torch.ones(n, n, dtype=X.dtype, device=X.device) / n
-    H    = torch.eye(n,     dtype=X.dtype, device=X.device) - ones
+    cross = Y.T @ X
+    num = (cross * cross).sum()
+    xa = X.T @ X
+    yb = Y.T @ Y
+    denom = (xa * xa).sum().sqrt() * (yb * yb).sum().sqrt()
 
-    Kc = H @ K @ H   # [n, n]
-    Lc = H @ L @ H   # [n, n]
-
-    hsic_kl = _hsic(Kc, Lc, n)
-    hsic_kk = _hsic(Kc, Kc, n)
-    hsic_ll = _hsic(Lc, Lc, n)
-
-    denom = (hsic_kk * hsic_ll).sqrt()
-    if denom.abs().item() < 1e-30:
-        return 0.0
-    return (hsic_kl / denom).clamp(0.0, 1.0).item()
+    if denom.item() < 1e-24 or not torch.isfinite(denom):
+        return float("nan")
+    ratio = (num / denom).clamp(0.0, 1.0)
+    if not torch.isfinite(ratio):
+        return float("nan")
+    return float(ratio.item())
 
 def collect_activations(model, extractor, tokenizer, texts, device,
                         max_length=512, batch_size=4):
@@ -168,12 +170,18 @@ def compute_layerwise_cka(acts_a: dict, acts_b: dict, device="cpu") -> dict:
     common = sorted(set(acts_a.keys()) & set(acts_b.keys()))
     if not common:
         ka, kb = list(acts_a.keys())[:5], list(acts_b.keys())[:5]
-        return {"mean_cka": 0.0, "min_cka": 0.0, "max_cka": 0.0,
-                "per_layer": {}, "n_layers": 0, "n_skipped": 0,
-                "note": (
-                    "No common layer names between the two activation dicts. "
-                    f"Example keys A={ka} B={kb}"
-                )}
+        return {
+            "mean_cka": None,
+            "min_cka": None,
+            "max_cka": None,
+            "per_layer": {},
+            "n_layers": 0,
+            "n_skipped": 0,
+            "note": (
+                "No common layer names between the two activation dicts. "
+                f"Example keys A={ka} B={kb}"
+            ),
+        }
 
     per_layer = {}
     n_skipped = 0
@@ -192,16 +200,25 @@ def compute_layerwise_cka(acts_a: dict, acts_b: dict, device="cpu") -> dict:
     valid = [v for v in per_layer.values() if v is not None]
     if not valid:
         all_skipped = sum(v is None for v in per_layer.values())
-        return {"mean_cka": 0.0, "min_cka": 0.0, "max_cka": 0.0,
-                "per_layer": per_layer, "n_layers": 0,
-                "n_skipped": all_skipped}
+        return {
+            "mean_cka": None,
+            "min_cka": None,
+            "max_cka": None,
+            "per_layer": per_layer,
+            "n_layers": 0,
+            "n_skipped": all_skipped,
+            "note": (
+                "No finite per-layer CKA (all NaN/degenerate activations, shape skips, or "
+                "numerical failure). Check mask_to_cka stderr for hook counts and calibration size."
+            ),
+        }
 
     return {
         "mean_cka": round(sum(valid) / len(valid), 6),
-        "min_cka":  round(min(valid), 6),
-        "max_cka":  round(max(valid), 6),
+        "min_cka": round(min(valid), 6),
+        "max_cka": round(max(valid), 6),
         "per_layer": per_layer,
-        "n_layers":  len(valid),
+        "n_layers": len(valid),
         "n_skipped": n_skipped,
     }
 
@@ -431,9 +448,9 @@ def main():
         "seed": args.seed,
         "cka": {
             "mean": result["mean_cka"],
-            "min":  result["min_cka"],
-            "max":  result["max_cka"],
-            "n_layers":  result.get("n_layers"),
+            "min": result["min_cka"],
+            "max": result["max_cka"],
+            "n_layers": result.get("n_layers"),
             "n_skipped": result.get("n_skipped", 0),
         },
         "per_layer_cka": result["per_layer"],
@@ -462,9 +479,16 @@ def main():
         json.dump(report, f, indent=2, ensure_ascii=False)
 
     print(f"\nCKA summary  ({label_a}  vs  {label_b}):")
-    print(f"  mean: {result['mean_cka']:.4f}")
-    print(f"  min:  {result['min_cka']:.4f}")
-    print(f"  max:  {result['max_cka']:.4f}")
+    _m, _i, _a = result.get("mean_cka"), result.get("min_cka"), result.get("max_cka")
+
+    def _fmt(v):
+        if v is None or (isinstance(v, float) and v != v):
+            return "<no finite layers>"
+        return f"{float(v):.4f}"
+
+    print(f"  mean: {_fmt(_m)}")
+    print(f"  min:  {_fmt(_i)}")
+    print(f"  max:  {_fmt(_a)}")
     if result.get("n_skipped", 0):
         print(f"  skipped (shape mismatch): {result['n_skipped']} layers")
     print(f"\nReport written to: {args.output}")

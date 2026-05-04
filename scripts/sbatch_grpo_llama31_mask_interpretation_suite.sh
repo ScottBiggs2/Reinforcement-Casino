@@ -9,6 +9,8 @@
 #   export HF_TOKEN="${HF_TOKEN:?need Llama HF access}"
 #   sbatch scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh
 #
+# Faster two-mask (magnitude + oracle only): scripts/sbatch_grpo_llama31_mask_interpretation_mag_oracle.sh
+#
 # You do NOT need to unset login exports. scripts/pipeline_common.sh rewrites known-bad path
 # patterns inside this job only (e.g. /rl_casino_* , /conda_envs/* without /scratch/...).
 #

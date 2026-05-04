@@ -40,6 +40,7 @@ def _run_cka_pair(
     device: str,
     n_samples: int,
     batch_size: int,
+    max_length: int = 512,
 ) -> bool:
     cka_py = _REPO_ROOT / "src" / "cold_start" / "mask_to_cka.py"
     cmd = [
@@ -57,6 +58,8 @@ def _run_cka_pair(
         str(n_samples),
         "--batch_size",
         str(batch_size),
+        "--max_length",
+        str(max_length),
         "-o",
         str(out_json),
     ]
@@ -296,6 +299,17 @@ def main() -> None:
     parser.add_argument("--cka-n-samples", type=int, default=64)
     parser.add_argument("--cka-batch-size", type=int, default=4)
     parser.add_argument(
+        "--cka-max-length",
+        type=int,
+        default=512,
+        help="Tokenizer max_length for CKA forwards (lower = faster, less context).",
+    )
+    parser.add_argument(
+        "--suite-fast",
+        action="store_true",
+        help="Cap CKA/probe samples at 32 and skip effective rank in CSV (faster suite).",
+    )
+    parser.add_argument(
         "--skip-effective-rank",
         action="store_true",
         help="Pass --skip_effective_rank to export_layer_metrics_csv.py.",
@@ -369,7 +383,17 @@ def main() -> None:
     parser.add_argument("--probe-n-samples", type=int, default=64)
     parser.add_argument("--probe-batch-size", type=int, default=4)
     parser.add_argument("--probe-max-length", type=int, default=512)
+    parser.add_argument(
+        "--no-probe-plots",
+        action="store_true",
+        help="With --probe-reports, skip matplotlib charts under probe_plots/ (default: plots on).",
+    )
     args = parser.parse_args()
+
+    if args.suite_fast:
+        args.cka_n_samples = min(args.cka_n_samples, 32)
+        args.probe_n_samples = min(args.probe_n_samples, 32)
+        args.skip_effective_rank = True
 
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -463,6 +487,7 @@ def main() -> None:
                 device=args.cka_device,
                 n_samples=args.cka_n_samples,
                 batch_size=args.cka_batch_size,
+                max_length=args.cka_max_length,
             )
             if not ok:
                 print(f"CKA failed for {tag}; continuing without CKA JSON", file=sys.stderr)
@@ -542,6 +567,17 @@ def main() -> None:
             batch_size=args.probe_batch_size,
             max_length=args.probe_max_length,
         )
+        if not args.no_probe_plots:
+            _run_plot_probe_reports(py, out_dir)
+
+
+def _run_plot_probe_reports(py: str, out_dir: Path) -> None:
+    plot_py = _REPO_ROOT / "src" / "cold_start" / "plot_probe_reports.py"
+    cmd = [py, str(plot_py), "--suite-dir", str(out_dir)]
+    print("RUN:", " ".join(cmd), flush=True)
+    r = subprocess.run(cmd, cwd=str(_REPO_ROOT))
+    if r.returncode != 0:
+        print("[probe] plot_probe_reports failed (non-fatal)", file=sys.stderr)
 
 
 def _run_probe_reports_for_masks(

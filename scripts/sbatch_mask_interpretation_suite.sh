@@ -28,6 +28,9 @@
 #   MASK_SUITE_CKA_DEVICE=cuda
 #   MASK_SUITE_CKA_N_SAMPLES=64
 #   MASK_SUITE_CKA_BATCH_SIZE=4
+#   MASK_SUITE_CKA_MAX_LENGTH=384          # shorter CKA forwards (speed)
+#   MASK_SUITE_SUITE_FAST=1               # cap CKA/probe samples at 32 + skip effective rank
+#   MASK_SUITE_NO_PROBE_PLOTS=1           # skip probe_plots/*.png (default: probe plots on with probes)
 #
 # Default resources are CPU-only (Jaccard + CSV). For MASK_SUITE_RUN_CKA=1, use a GPU partition,
 # e.g. sbatch --partition=gpu --gres=gpu:a100:1 --mem=128G --time=04:00:00 scripts/sbatch_mask_interpretation_suite.sh
@@ -127,6 +130,11 @@ cmd+=( --cka-dataset "$MASK_SUITE_CKA_DATASET" )
 cmd+=( --cka-device "$MASK_SUITE_CKA_DEVICE" )
 cmd+=( --cka-n-samples "$MASK_SUITE_CKA_N_SAMPLES" )
 cmd+=( --cka-batch-size "$MASK_SUITE_CKA_BATCH_SIZE" )
+cmd+=( --cka-max-length "${MASK_SUITE_CKA_MAX_LENGTH:-512}" )
+
+if [ "${MASK_SUITE_SUITE_FAST:-0}" = "1" ]; then
+  cmd+=( --suite-fast )
+fi
 
 if [ -n "${MASK_SUITE_LABELS:-}" ]; then
   # shellcheck disable=2206
@@ -159,6 +167,9 @@ if [ "$MASK_SUITE_PROBE_REPORTS" = "1" ]; then
   cmd+=( --probe-n-samples "${MASK_SUITE_PROBE_N_SAMPLES:-64}" )
   cmd+=( --probe-batch-size "${MASK_SUITE_PROBE_BATCH_SIZE:-4}" )
   cmd+=( --probe-max-length "${MASK_SUITE_PROBE_MAX_LENGTH:-512}" )
+  if [ "${MASK_SUITE_NO_PROBE_PLOTS:-0}" = "1" ]; then
+    cmd+=( --no-probe-plots )
+  fi
 fi
 
 echo "RUN: ${cmd[*]}"
