@@ -166,9 +166,11 @@ run_mode() {
         extra="--base_model $BASE_MODEL"
     fi
 
-    # Simple protocol: 80/20 single train/test split, default L2 (C=1.0),
-    # pairs_per_pos=2. CV disabled (cv_folds=0) — variance estimate comes
-    # from the 6-seed random mask band, not from probe-side CV.
+    # Simple protocol: 80/20 single train/test split, L2 C=0.01 (kept from
+    # commit e371adb — default C=1.0 makes probe memorize train (acc=1.000)
+    # and produce below-chance holdout on the 1270-sample × 14336-dim
+    # preference probes; the simplification round confirmed this on
+    # Baseline). cv_folds=0 — variance comes from random-seed band only.
     python src/analysis/probe_pair_masks.py \
         --model "$DENSE_MODEL" \
         --masks_json "$MASKS_JSON" \
@@ -181,6 +183,7 @@ run_mode() {
         --n_jobs 8 \
         --holdout_frac 0.2 \
         --use_holdout_as_test \
+        --probe_C 0.01 \
         --patch_mode "$mode" \
         $extra
 }

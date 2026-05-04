@@ -59,7 +59,7 @@ mechanisms and keeps the protocol describable in one sentence.
 | Probed model                 | dense tulu3 DPO, ckpt-500 (Llama-3.1-8B-Instruct)  |
 | Base model (delta modes)     | `meta-llama/Llama-3.1-8B-Instruct`                 |
 | Probe                        | BT pairwise logistic regression                    |
-| `--probe_C` (L2)             | 1.0 (default; `--probe_C` flag dropped)            |
+| `--probe_C` (L2)             | 0.01 (restored after default-1.0 sanity-check failed: probe memorized train=1.000 and Baseline holdout went BELOW chance on preference probes — see job 6522535) |
 | `--pairs_per_pos`            | 2                                                  |
 | `--cv_folds`                 | 0 (CV disabled — new bypass in `probe_analysis_pair.py`) |
 | `--holdout_frac`             | 0.2 + `--use_holdout_as_test`                      |
