@@ -60,8 +60,9 @@ mechanisms and keeps the protocol describable in one sentence.
 | Base model (delta modes)     | `meta-llama/Llama-3.1-8B-Instruct`                 |
 | Probe                        | BT pairwise logistic regression                    |
 | `--probe_C` (L2)             | 0.01 (restored after default-1.0 sanity-check failed: probe memorized train=1.000 and Baseline holdout went BELOW chance on preference probes — see job 6522535) |
+| `--cv_folds`                 | 3 (light CV — single-split 0 was still anti-predictive on preference even with C=0.01 in job 6522862; benchmark probes were fine at 0.92-0.99 but preference acc went 0.355/0.176, indicating split-luck variance on n=1270 × d=14336. CV averages this out without 5-fold reporting clutter.) |
 | `--pairs_per_pos`            | 2                                                  |
-| `--cv_folds`                 | 0 (CV disabled — new bypass in `probe_analysis_pair.py`) |
+<!-- cv_folds row moved above; placeholder kept to avoid stale duplication -->
 | `--holdout_frac`             | 0.2 + `--use_holdout_as_test`                      |
 | `--layer_stride`             | 4 (9 sampled MLP layers + last)                    |
 | `--batch_size`               | 8                                                  |

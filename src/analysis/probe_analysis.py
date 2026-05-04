@@ -390,7 +390,11 @@ def apply_mask(model, mask_dict: dict, patch_mode: str = "zero_out",
                     f"refusing to apply to avoid precision loss."
                 )
             m_dev = m.to(param.device, dtype=param.dtype)
-            originals[name] = param.data.clone()
+            # Clone originals to CPU, not GPU. With ~32 down_proj weights at
+            # ~117 MB each (4096×14336 bf16), GPU clones add ~3.7 GB on top
+            # of the already-loaded 8B model — enough to push v100-32GB into
+            # OOM during lm_head forward (job 6522862).
+            originals[name] = param.data.detach().to("cpu", copy=True)
 
             if patch_mode == "zero_out":
                 param.data.mul_(m_dev)
@@ -432,7 +436,9 @@ def apply_mask(model, mask_dict: dict, patch_mode: str = "zero_out",
     finally:
         for name, param in model.named_parameters():
             if name in originals:
-                param.data.copy_(originals[name])
+                # originals[name] lives on CPU now; copy_ handles the
+                # cross-device transfer back to wherever param is.
+                param.data.copy_(originals[name].to(param.device, dtype=param.dtype))
 
 
 @contextmanager

@@ -166,11 +166,14 @@ run_mode() {
         extra="--base_model $BASE_MODEL"
     fi
 
-    # Simple protocol: 80/20 single train/test split, L2 C=0.01 (kept from
-    # commit e371adb — default C=1.0 makes probe memorize train (acc=1.000)
-    # and produce below-chance holdout on the 1270-sample × 14336-dim
-    # preference probes; the simplification round confirmed this on
-    # Baseline). cv_folds=0 — variance comes from random-seed band only.
+    # Protocol: 3-fold CV + 20% holdout, L2 C=0.01.
+    # Why CV came back: cv_folds=0 (single 80/20 split) gave Baseline
+    # preference probe acc=0.355/0.176 — below chance — even though the
+    # 4 benchmark probes scored 0.92-0.99. The single split is too
+    # high-variance on the 1270-sample × 14336-dim preference probes
+    # (job 6522862 confirmed). 3-fold CV averages out the unlucky split
+    # without re-introducing 5-fold reporting clutter; holdout is still
+    # reported as the primary test metric, CV is the stabilizer.
     python src/analysis/probe_pair_masks.py \
         --model "$DENSE_MODEL" \
         --masks_json "$MASKS_JSON" \
@@ -178,7 +181,7 @@ run_mode() {
         --layer_stride 4 \
         --batch_size 8 \
         --max_length 256 \
-        --cv_folds 0 \
+        --cv_folds 3 \
         --pairs_per_pos 2 \
         --n_jobs 8 \
         --holdout_frac 0.2 \
