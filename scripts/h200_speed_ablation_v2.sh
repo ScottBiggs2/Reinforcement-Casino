@@ -1,21 +1,14 @@
 #!/bin/bash
-# H200 BSR–DPO speed ablation v2 (rebuilt driver): 8h-friendly defaults, BENCH_JSON timing,
-# post-run ``report_h200_speed_ablation.py``, and optional Slurm-array phase sharding.
+# H200 DPO speed ablation v2 — **optimizer-only** (SparseAdamW vs dense AdamW), matching pipeline
+# Stage‑4 semantics (no BSR sparse backprop). BENCH_JSON timing + post-run ``report_h200_speed_ablation.py``.
 #
 # Submit from repo root:
 #   sbatch scripts/h200_speed_ablation_v2.sh
 #
-# Default sparsity sweep: **99.75, 97.5, 95, 90** (element masks, block_1d Adam, dense grad-input)
-# → 1 dense + 4 sparse = **5 phases** unless you override ``BENCHMARK_SPARSITIES``.
+# Defaults: sparsities **99.75, 97.5, 95, 90** × mask types **element + block** → 1 dense + 8 sparse = **9 phases**.
+# Override mask types: ``export H200_BSR_MASK_TYPES=element`` (comma-separated).
 #
-# Full legacy-style grid (element+block masks × block_1d+block_2d; may need ``H200_BSR_ARRAY_PHASE=1``):
-#   export H200_BSR_FULL_GRID=1
-#   export BENCHMARK_SPARSITIES=99.75,97.5,95,90   # optional explicit list
-#   sbatch scripts/h200_speed_ablation_v2.sh
-#
-# One phase per array task (match ``--array`` upper bound to expanded phase count minus one):
-#   export H200_BSR_ARRAY_PHASE=1
-#   sbatch --array=0-16 scripts/h200_speed_ablation_v2.sh   # example for 17-phase full grid
+# Slurm array (one phase per task): set ``H200_BSR_ARRAY_PHASE=1`` and ``sbatch --array=0-8`` for 9 phases.
 #
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
@@ -105,22 +98,15 @@ fi
 
 export H200_ABLATION_MODE="${H200_ABLATION_MODE:-optimizer}"
 if [ "${H200_ABLATION_MODE}" != "optimizer" ]; then
-  echo "WARNING: H200_ABLATION_MODE=${H200_ABLATION_MODE} unsupported in this deadline-safe mode; forcing optimizer-only benchmark." >&2
+  echo "WARNING: H200_ABLATION_MODE=${H200_ABLATION_MODE} unsupported; this script runs optimizer-only." >&2
   export H200_ABLATION_MODE="optimizer"
 fi
 
+export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
+# Optimizer benchmark accepts only --phase_mask_types (no Adam kernel grid — not applicable).
+PY_GRID_ARGS=(--phase_mask_types "${H200_BSR_MASK_TYPES:-element,block}")
 if [ "${H200_BSR_FULL_GRID:-0}" = "1" ]; then
-  export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
-  PY_GRID_ARGS=(
-    --phase_mask_types "${H200_BSR_MASK_TYPES:-element,block}"
-    --phase_adam_kernels "${H200_BSR_ADAM_KERNELS:-block_1d,block_2d}"
-  )
-else
-  export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
-  PY_GRID_ARGS=(
-    --phase_mask_types "${H200_BSR_MASK_TYPES:-element}"
-    --phase_adam_kernels "${H200_BSR_ADAM_KERNELS:-block_1d}"
-  )
+  echo "NOTE: H200_BSR_FULL_GRID=1 is legacy; optimizer-only mode ignores BSR kernel grids. Using PY_GRID_ARGS only." >&2
 fi
 
 export H200_BSR_SKIP_DENSE="${H200_BSR_SKIP_DENSE:-0}"
@@ -141,8 +127,8 @@ mkdir -p "$OUT_BASE"
 echo "REPO_ROOT=${REPO_ROOT}"
 echo "OUT_BASE=${OUT_BASE}"
 echo "H200_BSR_FULL_GRID=${H200_BSR_FULL_GRID:-0}  BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}"
+echo "H200_BSR_MASK_TYPES=${H200_BSR_MASK_TYPES:-element,block}  (passed as --phase_mask_types)"
 echo "H200_BSR_ARRAY_PHASE=${H200_BSR_ARRAY_PHASE:-0}  phase_slice=${PHASE_SLICE_ARGS[*]}"
-echo "BSR_BATCH_CHUNKS=${BSR_BATCH_CHUNKS} (floor; kernel autoscales total programs)"
 
 GC_ARGS=()
 if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then

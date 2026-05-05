@@ -137,3 +137,23 @@ shopt -u nullglob
 echo "Found ${#PNG[@]} PNG(s) under $PLOT_DIR"
 [ "${#PNG[@]}" -gt 0 ] && cp -av "${PNG[@]}" "$FIG_SNAP"/ && echo "Copied to $FIG_SNAP"
 ```
+
+05/05 4pm
+
+# Score gaps again
+(base) [biggs.s@explorer-01 rl_casino]$ export CHECKPOINT_DTYPE=bfloat16   # explicit
+sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+Submitted batch job 6573913
+
+# Make masks before launching interp suite on them later
+(base) [biggs.s@explorer-01 rl_casino]$ cd ~/rl_casino
+export HF_TOKEN="${HF_TOKEN:?}"
+export PIPELINE_RUN_ID=dpo5k_dense_tulu3
+export DPO_DATASET_KEY=tulu3
+export CHECKPOINT_STEP=500
+export TARGET_STEP_DPO=200
+export SPARSITY_PERCENT=97.5
+export MASK_RUN_ID="tulu3_mag_oracle_rand_${PIPELINE_RUN_ID}"
+sbatch scripts/sbatch_make_mag_oracle_random_masks_from_run.sh
+Submitted batch job 6573918
+
