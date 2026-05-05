@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
-# Mask score-gap analysis: oracle (HF base vs checkpoint-500) vs warm magnitude @200 vs random.
-# Writes CSV + NPZ + JSON under OUT_DIR, then CPU matplotlib figures under OUT_DIR/figures.
+# Mask score-gap analysis: oracle vs warm magnitude at deltas 50/100/150/200 (+ random baseline).
+# Writes CSV/NPZ/gap diagnostics + matplotlib overlays under OUT_DIR/figures.
+#
+# Drop-in (Explorer defaults; HF + repo path unchanged from last run):
+#
+#   cd /home/$USER/rl_casino
+#   export HF_TOKEN="$(tr -d '\n\r' < ~/.cache/huggingface/token)"   # optional if --export=ALL
+#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+#
+# Copy out (after job):
+#   mkdir -p ~/rl_casino/results/mask_score_gap_${JOBID} && \
+#   cp -a /scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/${JOBID}/. ~/rl_casino/results/mask_score_gap_${JOBID}/
+# (Or rely on job-end mirror to ~/rl_casino/results/mask_score_gap_<jobid>/ — see bottom of script.)
 #
 # Submit ONLY with sbatch (this file is not chmod +x; do not run it as ./scripts/... or you get
 # "Permission denied"). Always: sbatch path/to/this/file.slurm
@@ -33,7 +44,7 @@
 #     --initial_model meta-llama/Llama-3.1-8B-Instruct \\
 #     --final_model "${CKPT500_DIR}" \\
 #     --delta_log_dir "${DELTA_LOG_DIR}" \\
-#     --magnitude_target_step 200 \\
+#     --magnitude_milestones 50,100,150,200 \\
 #     --out_dir /tmp/mask_gap_smoke \\
 #     --max_keys 3 --histogram_bins 256 \\
 #     --verify_deltas_dir "${DELTA_LOG_DIR}"
@@ -105,11 +116,11 @@ BASE_MODEL="${BASE_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 CKPT500_DIR="${CKPT500_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
 DELTA_LOG_DIR="${DELTA_LOG_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/deltas/meta_llama_llama_3_1_8b_instruct_light_r1}"
 OUT_DIR="${OUT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_analysis/mask_score_gap_light_r1/${SLURM_JOB_ID:-local}}"
-MAGNITUDE_TARGET_STEP="${MAGNITUDE_TARGET_STEP:-200}"
+MAGNITUDE_MILESTONES="${MAGNITUDE_MILESTONES:-50,100,150,200}"
+FORCE_MAG_CACHE_REBUILD="${FORCE_MAG_CACHE_REBUILD:-0}"
 RANDOM_SEEDS="${RANDOM_SEEDS:-}"
 HISTOGRAM_BINS="${HISTOGRAM_BINS:-2048}"
 MAX_KEYS="${MAX_KEYS:-}"
-MAGNITUDE_CACHE="${MAGNITUDE_CACHE:-}"
 # Optional: directory containing deltas_step_500.pt (omit if that snapshot does not exist yet).
 VERIFY_DELTAS_DIR="${VERIFY_DELTAS_DIR:-}"
 
@@ -123,16 +134,20 @@ echo "BASE_MODEL=${BASE_MODEL}"
 echo "CKPT500_DIR=${CKPT500_DIR}"
 echo "DELTA_LOG_DIR=${DELTA_LOG_DIR}"
 echo "OUT_DIR=${OUT_DIR}"
+echo "MAGNITUDE_MILESTONES=${MAGNITUDE_MILESTONES}"
 
 ARGS=(
   src/analysis/mask_score_gap_analysis.py
   --initial_model "${BASE_MODEL}"
   --final_model "${CKPT500_DIR}"
   --delta_log_dir "${DELTA_LOG_DIR}"
-  --magnitude_target_step "${MAGNITUDE_TARGET_STEP}"
+  --magnitude_milestones "${MAGNITUDE_MILESTONES}"
   --out_dir "${OUT_DIR}"
   --histogram_bins "${HISTOGRAM_BINS}"
 )
+if [ "${FORCE_MAG_CACHE_REBUILD}" = "1" ]; then
+  ARGS+=( --force_magnitude_cache_rebuild )
+fi
 if [ -n "${VERIFY_DELTAS_DIR}" ]; then
   ARGS+=( --verify_deltas_dir "${VERIFY_DELTAS_DIR}" )
 fi
@@ -142,10 +157,6 @@ fi
 if [ -n "${MAX_KEYS}" ]; then
   ARGS+=( --max_keys "${MAX_KEYS}" )
 fi
-if [ -n "${MAGNITUDE_CACHE}" ]; then
-  ARGS+=( --magnitude_scores_cache "${MAGNITUDE_CACHE}" )
-fi
-
 "${TRAIN_PY}" "${ARGS[@]}"
 
 "${TRAIN_PY}" scripts/report_mask_score_gap_plots.py --analysis-dir "${OUT_DIR}"

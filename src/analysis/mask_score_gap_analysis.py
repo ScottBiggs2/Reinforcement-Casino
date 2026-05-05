@@ -3,20 +3,14 @@
 Compare mask construction scores against an oracle: per-weight gaps v_i = |s_i^other - s_i^oracle|.
 
 Oracle scores: |w_final - w_initial| (same as checkpoint_diff_mask_finder).
-Warm magnitude @T: sum over delta snapshots with step <= T of |w_t - w_base| (even_better_mask_finder magnitude).
+Warm magnitude milestones: sum of |w_snapshot - w_base| over snapshots with step ≤ t
+(even_better_mask_finder semantics), evaluated at each intermediate step (default 50,100,150,200).
 Random: Uniform(0,1) per element.
 
-Writes summary CSV, per-layer CSV, histogram NPZ, and run metadata JSON.
+Writes summary CSV, per-layer CSV, histogram NPZ, gap diagnostics JSON, metadata JSON.
 
-Smoke test (few layers, low RAM):
-    python src/analysis/mask_score_gap_analysis.py \\
-        --initial_model meta-llama/Llama-3.1-8B-Instruct \\
-        --final_model /path/to/checkpoint-500 \\
-        --delta_log_dir /path/to/deltas/run \\
-        --magnitude_target_step 200 \\
-        --out_dir /tmp/mask_gap_smoke \\
-        --max_keys 3 \\
-        --histogram_bins 256
+Log histogram bins use log10(v + eps_batch) where eps adapts per chunk from small positive values,
+so stacking at 1e-30 from a hard clamp is avoided (zeros still map near log(eps)).
 
 Slurm: see scripts/slurm_mask_score_gap_light_r1.slurm
 """
@@ -27,6 +21,7 @@ import argparse
 import csv
 import gc
 import json
+import math
 import os
 import subprocess
 import sys
@@ -49,10 +44,6 @@ from src.warm_start.even_better_mask_finder import load_deltas_streaming  # noqa
 
 
 def ensure_hf_hub_token() -> None:
-    """
-    Slurm/batch jobs often do not inherit the login environment, so HF_TOKEN is empty even
-    after `hf auth login`. The CLI stores a token in ~/.cache/huggingface/token on shared $HOME.
-    """
     if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         return
     candidates: List[Path] = []
@@ -74,13 +65,11 @@ def ensure_hf_hub_token() -> None:
 
 def _git_rev() -> Optional[str]:
     try:
-        return (
-            subprocess.check_output(
-                ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],
-                stderr=subprocess.DEVNULL,
-                text=True,
-            ).strip()
-        )
+        return subprocess.check_output(
+            ["git", "-C", str(_REPO_ROOT), "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return None
 
@@ -94,8 +83,6 @@ def safe_torch_load(path: str, map_location: str = "cpu"):
 
 @dataclass
 class MomentAccum:
-    """Streaming mean / population std over many tensor chunks."""
-
     n: int = 0
     sum: float = 0.0
     sumsq: float = 0.0
@@ -119,8 +106,17 @@ class MomentAccum:
         return float(np.sqrt(max(v, 0.0)))
 
 
+def _histogram_eps_positive(flat_nn: torch.Tensor) -> float:
+    """Epsilon for log10(v + eps): avoids artefactual stacking at log(1e-30) while preserving tiny positives."""
+    if flat_nn.numel() == 0:
+        return 1e-30
+    a = flat_nn.detach().float().cpu().numpy()
+    q = float(np.quantile(a, 0.01))
+    return max(1e-30, abs(q) * 1e-4)
+
+
 class LogSpaceHistogram:
-    """Histogram for nonnegative values with wide dynamic range (log10 bins)."""
+    """log10 bins on adjusted values log10(v + eps) with per-chunk epsilon from positive quantile."""
 
     def __init__(self, num_bins: int, log_min: float = -30.0, log_max: float = 6.0):
         self.num_bins = num_bins
@@ -132,18 +128,21 @@ class LogSpaceHistogram:
     def update(self, v: torch.Tensor, chunk: int = 50_000_000) -> None:
         if v.numel() == 0:
             return
-        flat = v.reshape(-1).float().clamp(min=1e-30).cpu()
+        flat = v.reshape(-1).float().cpu().clamp(min=0.0)
         n = flat.numel()
         for start in range(0, n, chunk):
             end = min(n, start + chunk)
-            lx = torch.log10(flat[start:end]).numpy()
+            part = flat[start:end]
+            pos = part[part > 0]
+            eps = _histogram_eps_positive(pos)
+            adj = part + eps
+            lx = torch.log10(adj).numpy()
+            lx = np.clip(lx, self.log_min + 1e-9, self.log_max)
             c, _ = np.histogram(lx, bins=self.edges)
             self.counts += c.astype(np.int64)
 
 
 class LinSpaceHistogram:
-    """Histogram on [0, upper] with fixed upper (default 1.0 for normalized gaps)."""
-
     def __init__(self, num_bins: int, upper: float = 1.0):
         self.num_bins = num_bins
         self.upper = upper
@@ -162,15 +161,15 @@ class LinSpaceHistogram:
             self.counts += c.astype(np.int64)
 
 
-def _quantiles_from_hist_counts(counts: np.ndarray, edges: np.ndarray, qs: Sequence[float]) -> Dict[str, float]:
-    """Piecewise-uniform inverse-CDF inside each bin (linear bin edges)."""
+def _quantiles_from_hist_counts(
+    counts: np.ndarray, edges: np.ndarray, qs: Sequence[float]
+) -> Dict[str, float]:
     total = float(counts.sum())
     out: Dict[str, float] = {}
     if total <= 0:
         for q in qs:
             out[f"p{int(round(q * 100)):02d}"] = float("nan")
         return out
-
     cum = np.concatenate([[0.0], np.cumsum(counts.astype(np.float64))])
     for q in qs:
         target = q * total
@@ -181,24 +180,20 @@ def _quantiles_from_hist_counts(counts: np.ndarray, edges: np.ndarray, qs: Seque
         if bin_mass <= 0:
             val = float(edges[idx])
         else:
-            frac = (target - cum_before) / bin_mass
-            frac = float(np.clip(frac, 0.0, 1.0))
+            frac = float(np.clip((target - cum_before) / bin_mass, 0.0, 1.0))
             lo, hi = float(edges[idx]), float(edges[idx + 1])
             val = lo + frac * (hi - lo)
         out[f"p{int(round(q * 100)):02d}"] = val
-
     return out
 
 
 def _quantiles_log_hist(counts: np.ndarray, log_edges: np.ndarray, qs: Sequence[float]) -> Dict[str, float]:
-    """Quantiles on linear scale when histogram counts are over log10(values)."""
     total = float(counts.sum())
     out: Dict[str, float] = {}
     if total <= 0:
         for q in qs:
             out[f"p{int(round(q * 100)):02d}"] = float("nan")
         return out
-
     cum = np.concatenate([[0.0], np.cumsum(counts.astype(np.float64))])
     for q in qs:
         target = q * total
@@ -209,38 +204,45 @@ def _quantiles_log_hist(counts: np.ndarray, log_edges: np.ndarray, qs: Sequence[
         if bin_mass <= 0:
             log_val = float(log_edges[idx])
         else:
-            frac = (target - cum_before) / bin_mass
-            frac = float(np.clip(frac, 0.0, 1.0))
+            frac = float(np.clip((target - cum_before) / bin_mass, 0.0, 1.0))
             lo_l, hi_l = float(log_edges[idx]), float(log_edges[idx + 1])
             log_val = lo_l + frac * (hi_l - lo_l)
         out[f"p{int(round(q * 100)):02d}"] = float(10**log_val)
-
     return out
 
 
-def compute_magnitude_scores(
+def build_magnitude_milestone_caches(
     delta_log_dir: str,
-    target_step: Optional[int],
-    param_names_filter: Optional[Sequence[str]],
+    milestones: Sequence[int],
+    param_names_filter: Sequence[str],
     mlp_only: bool,
-) -> Dict[str, torch.Tensor]:
-    steps_and_paths = load_deltas_streaming(delta_log_dir, target_step)
+    cache_dir: Path,
+    force_rebuild: bool,
+) -> Dict[int, Path]:
+    milestones = sorted({int(x) for x in milestones})
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    paths = {s: cache_dir / f"mag_aggregate_step_{s}.pt" for s in milestones}
+    if not force_rebuild and all(p.is_file() for p in paths.values()):
+        print(f"Magnitude caches present under {cache_dir}; use --force_magnitude_cache_rebuild to re-stream.")
+        return paths
+
+    max_step = max(milestones)
+    steps_and_paths = load_deltas_streaming(delta_log_dir, max_step)
     if not steps_and_paths:
-        raise FileNotFoundError(f"No delta snapshots under {delta_log_dir!r} for target_step={target_step!r}")
+        raise FileNotFoundError(f"No delta snapshots under {delta_log_dir!r} up to step {max_step}")
 
     aggregated: Dict[str, torch.Tensor] = {}
     param_names: Optional[List[str]] = None
+    milestones_set = set(milestones)
+    pending_save = milestones_set.copy()
 
     for step_idx, (step, delta_path) in enumerate(steps_and_paths):
-        print(f"  [{step_idx + 1}/{len(steps_and_paths)}] magnitude accumulate step {step} ← {delta_path}")
+        print(f"  [{step_idx + 1}/{len(steps_and_paths)}] stream step {step} ← {delta_path}")
         deltas = safe_torch_load(delta_path, map_location="cpu")
-
         if param_names is None:
-            if param_names_filter is not None:
-                param_names = [n for n in param_names_filter if n in deltas]
-            else:
+            param_names = [n for n in param_names_filter if n in deltas]
+            if not param_names:
                 param_names = [name for name in deltas.keys() if not mlp_only or is_mlp_param(name)]
-
             for name in param_names:
                 if name in deltas:
                     aggregated[name] = torch.zeros_like(deltas[name], dtype=torch.float32)
@@ -252,7 +254,24 @@ def compute_magnitude_scores(
         del deltas
         gc.collect()
 
-    return aggregated
+        if step in milestones_set and step in pending_save:
+            out_p = paths[step]
+            to_save = {k: aggregated[k].clone() for k in aggregated}
+            torch.save(to_save, out_p)
+            print(f"    saved milestone step {step} → {out_p}")
+            pending_save.discard(step)
+
+    if pending_save:
+        seen = [s for s, _ in steps_and_paths]
+        raise RuntimeError(
+            f"Did not persist milestones {sorted(pending_save)}; delta steps observed: {seen}. "
+            "Check --magnitude_milestones matches your deltas_step_*.pt schedule."
+        )
+    for m, pth in paths.items():
+        if not pth.is_file():
+            raise RuntimeError(f"Expected cache missing: {pth} (step {m})")
+
+    return paths
 
 
 def _minmax_norm(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -270,80 +289,57 @@ def process_keys(
     keys: List[str],
     initial_sd: Dict[str, torch.Tensor],
     final_sd: Dict[str, torch.Tensor],
-    mag_scores: Dict[str, torch.Tensor],
+    milestone_cache_paths: Dict[int, Path],
+    milestones: List[int],
     delta_verify: Optional[Dict[str, torch.Tensor]],
     random_seeds: List[int],
     histogram_bins: int,
     out_dir: Path,
 ) -> None:
     qs = (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
+    milestones = sorted(milestones)
 
-    mag_raw_hist = LogSpaceHistogram(histogram_bins)
-    mag_norm_hist = LinSpaceHistogram(histogram_bins, upper=1.0)
     rnd_raw_hists = {s: LogSpaceHistogram(histogram_bins) for s in random_seeds}
     rnd_norm_hists = {s: LinSpaceHistogram(histogram_bins, upper=1.0) for s in random_seeds}
-
-    mag_w_raw = MomentAccum()
-    mag_w_norm = MomentAccum()
     rnd_w_raw = {s: MomentAccum() for s in random_seeds}
     rnd_w_norm = {s: MomentAccum() for s in random_seeds}
 
-    layer_rows: List[Dict[str, object]] = []
+    mag_raw_hists = {step: LogSpaceHistogram(histogram_bins) for step in milestones}
+    mag_norm_hists = {step: LinSpaceHistogram(histogram_bins, upper=1.0) for step in milestones}
+    mag_w_raw = {step: MomentAccum() for step in milestones}
+    mag_w_norm = {step: MomentAccum() for step in milestones}
 
+    gap_diag: Dict[str, object] = {
+        "_note": (
+            "frac_zero_exact counts exact v=0 floats (oracle match at that coordinate). "
+            "Tiny-but-positive gaps are distinct; log histogram uses adaptive eps."
+        ),
+    }
+
+    layer_rows: List[Dict[str, object]] = []
     max_verify_diff = 0.0
     verify_key_worst = ""
 
+    # ---------- random vs oracle (one pass over keys)
+    print("Computing random-mask gaps vs oracle (one pass)...")
     for ki, name in enumerate(keys):
         if name not in initial_sd or name not in final_sd:
-            print(f"  skip {name} (missing in initial or final sd)")
             continue
-        if name not in mag_scores:
-            print(f"  skip {name} (missing in magnitude aggregate)")
-            continue
-
         w0 = initial_sd[name].to(torch.float32)
         w1 = final_sd[name].to(torch.float32)
         s_oracle = (w1 - w0).abs()
-
-        if delta_verify is not None and name in delta_verify:
-            dv = delta_verify[name].to(torch.float32).abs()
-            if dv.shape == s_oracle.shape:
-                diff = (s_oracle - dv).abs().max().item()
-                if diff > max_verify_diff:
-                    max_verify_diff = diff
-                    verify_key_worst = name
-
-        s_mag = mag_scores[name].to(torch.float32)
-        if s_mag.shape != s_oracle.shape:
-            print(f"  skip {name} (shape mismatch mag {s_mag.shape} vs oracle {s_oracle.shape})")
-            del w0, w1, s_oracle, s_mag
-            gc.collect()
-            continue
-
-        v_mag_raw = (s_mag - s_oracle).abs()
-        o_n = _minmax_norm(s_oracle)
-        m_n = _minmax_norm(s_mag)
-        v_mag_norm = (m_n - o_n).abs()
-
-        mag_raw_hist.update(v_mag_raw)
-        mag_norm_hist.update(v_mag_norm)
-        mag_w_raw.update(v_mag_raw)
-        mag_w_norm.update(v_mag_norm)
-
-        row_base = {
+        row_base: Dict[str, object] = {
             "param_name": name,
             "numel": int(s_oracle.numel()),
-            "mean_v_mag_raw": float(v_mag_raw.mean().item()),
-            "mean_v_mag_norm": float(v_mag_norm.mean().item()),
         }
-
+        o_n_r = _minmax_norm(s_oracle)
         for seed in random_seeds:
             g = torch.Generator(device="cpu")
             g.manual_seed(int(seed))
             s_rand = torch.rand(s_oracle.shape, generator=g, dtype=torch.float32)
             v_rr = (s_rand - s_oracle).abs()
             r_n = _minmax_norm(s_rand)
-            v_rn = (r_n - o_n).abs()
+            v_rn = (r_n - o_n_r).abs()
             rnd_raw_hists[seed].update(v_rr)
             rnd_norm_hists[seed].update(v_rn)
             rnd_w_raw[seed].update(v_rr)
@@ -352,20 +348,101 @@ def process_keys(
             row_base[f"mean_v_rand_norm_seed{seed}"] = float(v_rn.mean().item())
 
         layer_rows.append(row_base)
-
-        del w0, w1, s_oracle, s_mag, v_mag_raw, o_n, m_n, v_mag_norm
+        del w0, w1, s_oracle, o_n_r
         gc.collect()
 
-        if (ki + 1) % 20 == 0:
-            print(f"  processed {ki + 1}/{len(keys)} keys")
+    # ---------- per milestone magnitude caches
+    layer_by_name = {row["param_name"]: row for row in layer_rows}
+
+    for step in milestones:
+        path = milestone_cache_paths[step]
+        print(f"Magnitude @{step}: load cached aggregates from {path}")
+        mag_scores = safe_torch_load(str(path), map_location="cpu")
+        n_elems = 0
+        n_zero_raw = 0
+        vmin_pos_accum = torch.tensor(float("inf"))
+        vmax_accum = torch.tensor(float("-inf"))
+        oracle_match_sample: List[Dict[str, object]] = []
+
+        for ki, name in enumerate(keys):
+            if name not in initial_sd or name not in final_sd or name not in mag_scores:
+                continue
+            w0 = initial_sd[name].to(torch.float32)
+            w1 = final_sd[name].to(torch.float32)
+            s_oracle = (w1 - w0).abs()
+            s_mag = mag_scores[name].to(torch.float32)
+            if s_mag.shape != s_oracle.shape:
+                del w0, w1, s_oracle, s_mag
+                continue
+
+            if delta_verify is not None and name in delta_verify:
+                dv = delta_verify[name].to(torch.float32).abs()
+                if dv.shape == s_oracle.shape:
+                    diff = (s_oracle - dv).abs().max().item()
+                    if diff > max_verify_diff:
+                        max_verify_diff = diff
+                        verify_key_worst = name
+
+            v_mag_raw = (s_mag - s_oracle).abs()
+            v_zero = v_mag_raw == 0
+            ne = int(v_mag_raw.numel())
+            nz = int(v_zero.sum().item())
+            n_elems += ne
+            n_zero_raw += nz
+
+            vp = v_mag_raw[v_mag_raw > 0]
+            if vp.numel():
+                vmin_pos_accum = torch.minimum(vmin_pos_accum, vp.min())
+                vmax_accum = torch.maximum(vmax_accum, v_mag_raw.max())
+
+            o_n = _minmax_norm(s_oracle)
+            m_n = _minmax_norm(s_mag)
+            v_mag_norm = (m_n - o_n).abs()
+
+            mag_raw_hists[step].update(v_mag_raw)
+            mag_norm_hists[step].update(v_mag_norm)
+            mag_w_raw[step].update(v_mag_raw)
+            mag_w_norm[step].update(v_mag_norm)
+
+            ln = layer_by_name.get(name)
+            if ln is None:
+                ln = {"param_name": name, "numel": int(s_oracle.numel())}
+                layer_by_name[name] = ln
+                layer_rows.append(ln)
+            ln[f"mean_v_mag_raw_step{step}"] = float(v_mag_raw.mean().item())
+            ln[f"mean_v_mag_norm_step{step}"] = float(v_mag_norm.mean().item())
+
+            if len(oracle_match_sample) < 2:
+                oracle_match_sample.append(
+                    {"key": name, "frac_zero": nz / max(ne, 1), "mean_v_raw": float(v_mag_raw.mean().item())}
+                )
+
+            del w0, w1, s_oracle, s_mag, v_mag_raw, o_n, m_n, v_mag_norm
+            gc.collect()
+
+            if (ki + 1) % 60 == 0:
+                print(f"  @{step}: processed key {ki + 1}/{len(keys)}")
+
+        gap_diag[f"milestone_{step}_raw_frac_zero_exact"] = (n_zero_raw / n_elems) if n_elems else 0.0
+        _mn = float(vmin_pos_accum.item()) if n_elems else float("nan")
+        gap_diag[f"milestone_{step}_raw_min_positive"] = (
+            _mn if math.isfinite(_mn) else float("nan")
+        )
+        _mx = float(vmax_accum.item()) if n_elems else float("nan")
+        gap_diag[f"milestone_{step}_raw_global_max"] = _mx if math.isfinite(_mx) else float("nan")
+        gap_diag[f"milestone_{step}_sample_tensors"] = oracle_match_sample[:2]
+
+        del mag_scores
+        gc.collect()
 
     if delta_verify is not None:
         print(f"verify deltas max |oracle - |delta500||: {max_verify_diff:.6e} (worst key: {verify_key_worst!r})")
 
-    # Summary CSV + NPZ
+    with (out_dir / "mask_score_gap_gap_diagnostics.json").open("w", encoding="utf-8") as f:
+        json.dump(gap_diag, f, indent=2)
+
     summary_path = out_dir / "mask_score_gap_summary.csv"
     by_layer_path = out_dir / "mask_score_gap_by_layer.csv"
-
     summary_rows: List[Dict[str, object]] = []
 
     def pack_row(
@@ -380,82 +457,75 @@ def process_keys(
             qdict = _quantiles_from_hist_counts(h_lin.counts, h_lin.edges, qs)
         else:
             raise ValueError("pack_row requires h_log or h_lin")
-        return {
-            "case": case,
-            "total_numel": acc.n,
-            "mean": acc.mean_value(),
-            "std": acc.std_value(),
-            **qdict,
-        }
+        return {"case": case, "total_numel": acc.n, "mean": acc.mean_value(), "std": acc.std_value(), **qdict}
 
-    summary_rows.append(pack_row("magnitude_raw", mag_w_raw, mag_raw_hist, None))
-    summary_rows.append(pack_row("magnitude_norm", mag_w_norm, None, mag_norm_hist))
-
+    for step in milestones:
+        summary_rows.append(pack_row(f"magnitude_raw_step{step}", mag_w_raw[step], mag_raw_hists[step], None))
+        summary_rows.append(pack_row(f"magnitude_norm_step{step}", mag_w_norm[step], None, mag_norm_hists[step]))
     for seed in random_seeds:
         summary_rows.append(pack_row(f"random_raw_seed{seed}", rnd_w_raw[seed], rnd_raw_hists[seed], None))
         summary_rows.append(pack_row(f"random_norm_seed{seed}", rnd_w_norm[seed], None, rnd_norm_hists[seed]))
 
-    fieldnames = list(summary_rows[0].keys()) if summary_rows else []
+    normalized_rows = sorted(layer_rows, key=lambda r: str(r.get("param_name", "")))
+
+    fn = sorted(summary_rows[0].keys()) if summary_rows else []
     with summary_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
+        wcsv = csv.DictWriter(f, fieldnames=fn)
+        wcsv.writeheader()
         for row in summary_rows:
-            writer.writerow(row)
+            wcsv.writerow(row)
 
-    if layer_rows:
-        lf = list(layer_rows[0].keys())
+    if normalized_rows:
+        lf = sorted(set().union(*(r.keys() for r in normalized_rows)))
         with by_layer_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=lf)
-            writer.writeheader()
-            for row in layer_rows:
-                writer.writerow(row)
+            wcsv = csv.DictWriter(f, fieldnames=lf)
+            wcsv.writeheader()
+            for row in normalized_rows:
+                wcsv.writerow(row)
 
-    npz_path = out_dir / "mask_score_gap_histograms.npz"
-    npz_payload: Dict[str, np.ndarray] = {
-        "hist_bins": np.array([histogram_bins], dtype=np.int64),
-        "magnitude_raw_counts": mag_raw_hist.counts,
-        "magnitude_raw_log_edges": mag_raw_hist.edges,
-        "magnitude_norm_counts": mag_norm_hist.counts,
-        "magnitude_norm_edges": mag_norm_hist.edges,
-    }
+    npz_payload: Dict[str, np.ndarray] = {"hist_bins": np.array([histogram_bins], dtype=np.int64)}
+    for step in milestones:
+        npz_payload[f"magnitude_raw_step{step}_counts"] = mag_raw_hists[step].counts
+        npz_payload[f"magnitude_raw_step{step}_log_edges"] = mag_raw_hists[step].edges
+        npz_payload[f"magnitude_norm_step{step}_counts"] = mag_norm_hists[step].counts
+        npz_payload[f"magnitude_norm_step{step}_edges"] = mag_norm_hists[step].edges
     for seed in random_seeds:
         npz_payload[f"random_raw_seed{seed}_counts"] = rnd_raw_hists[seed].counts
         npz_payload[f"random_raw_seed{seed}_log_edges"] = rnd_raw_hists[seed].edges
         npz_payload[f"random_norm_seed{seed}_counts"] = rnd_norm_hists[seed].counts
         npz_payload[f"random_norm_seed{seed}_edges"] = rnd_norm_hists[seed].edges
 
-    np.savez(npz_path, **npz_payload)
-    print(f"Wrote {summary_path}, {by_layer_path}, {npz_path}")
+    np.savez(out_dir / "mask_score_gap_histograms.npz", **npz_payload)
+    print(f"Wrote {summary_path}, {by_layer_path}, mask_score_gap_histograms.npz, mask_score_gap_gap_diagnostics.json")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Mask score gaps vs oracle (magnitude @T, random).")
+    p = argparse.ArgumentParser(description="Mask score gaps vs oracle (warm magnitude milestones, random).")
     p.add_argument("--initial_model", type=str, required=True)
     p.add_argument("--final_model", type=str, required=True)
     p.add_argument("--delta_log_dir", type=str, required=True)
-    p.add_argument("--magnitude_target_step", type=int, default=200)
+    p.add_argument(
+        "--magnitude_milestones",
+        type=str,
+        default="50,100,150,200",
+        help="Comma-separated snapshot endpoints for partial warm magnitude scores (sums |Δ_w| through each).",
+    )
     p.add_argument("--mlp_only", action="store_true")
     p.add_argument("--random_seed", type=int, default=42)
     p.add_argument(
         "--random_seeds",
         type=str,
         default=None,
-        help="Comma-separated extra seeds (includes --random_seed by default). Example: 42,43,44",
+        help="Comma-separated extra seeds (always includes --random_seed).",
     )
     p.add_argument("--out_dir", type=str, required=True)
     p.add_argument("--histogram_bins", type=int, default=2048)
-    p.add_argument("--max_keys", type=int, default=None, help="Debug: only process first N intersecting keys")
+    p.add_argument("--max_keys", type=int, default=None)
+    p.add_argument("--verify_deltas_dir", type=str, default=None)
     p.add_argument(
-        "--verify_deltas_dir",
-        type=str,
-        default=None,
-        help="If set, load deltas_step_500.pt from this dir and print max |oracle-|delta500||.",
-    )
-    p.add_argument(
-        "--magnitude_scores_cache",
-        type=str,
-        default=None,
-        help="Optional path to read/write aggregated magnitude scores .pt to skip recomputation.",
+        "--force_magnitude_cache_rebuild",
+        action="store_true",
+        help="Re-stream deltas and overwrite milestone caches under magnitude_caches/",
     )
     return p.parse_args()
 
@@ -465,6 +535,9 @@ def main() -> None:
     ensure_hf_hub_token()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = out_dir / "magnitude_caches"
+
+    milestones = sorted({int(x.strip()) for x in args.magnitude_milestones.split(",") if x.strip()})
 
     seeds: List[int] = [int(args.random_seed)]
     if args.random_seeds:
@@ -482,22 +555,16 @@ def main() -> None:
     if args.mlp_only:
         keys_all = [n for n in keys_all if is_mlp_param(n)]
 
-    mag_cache_path = Path(args.magnitude_scores_cache) if args.magnitude_scores_cache else None
-    if mag_cache_path and mag_cache_path.is_file():
-        print(f"Loading magnitude aggregates from cache {mag_cache_path}")
-        mag_scores = safe_torch_load(str(mag_cache_path), map_location="cpu")
-    else:
-        mag_scores = compute_magnitude_scores(
-            args.delta_log_dir,
-            args.magnitude_target_step,
-            param_names_filter=keys_all,
-            mlp_only=args.mlp_only,
-        )
-        if mag_cache_path:
-            torch.save(mag_scores, mag_cache_path)
-            print(f"Saved magnitude aggregates to {mag_cache_path}")
+    milestone_paths = build_magnitude_milestone_caches(
+        args.delta_log_dir,
+        milestones,
+        keys_all,
+        args.mlp_only,
+        cache_dir,
+        force_rebuild=args.force_magnitude_cache_rebuild,
+    )
 
-    keys = [k for k in keys_all if k in mag_scores]
+    keys = list(keys_all)
     if args.max_keys is not None:
         keys = keys[: max(0, args.max_keys)]
 
@@ -513,7 +580,8 @@ def main() -> None:
         "initial_model": args.initial_model,
         "final_model": args.final_model,
         "delta_log_dir": args.delta_log_dir,
-        "magnitude_target_step": args.magnitude_target_step,
+        "magnitude_milestones": milestones,
+        "magnitude_cache_dir": str(cache_dir),
         "mlp_only": args.mlp_only,
         "random_seeds": seeds,
         "histogram_bins": args.histogram_bins,
@@ -524,12 +592,13 @@ def main() -> None:
     with (out_dir / "mask_score_gap_run.json").open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
-    print(f"Intersecting keys to process: {len(keys)}")
+    print(f"Milestones {milestones}; intersecting keys: {len(keys)}")
     process_keys(
         keys=keys,
         initial_sd=initial_sd,
         final_sd=final_sd,
-        mag_scores=mag_scores,
+        milestone_cache_paths=milestone_paths,
+        milestones=milestones,
         delta_verify=delta_verify,
         random_seeds=seeds,
         histogram_bins=args.histogram_bins,
