@@ -350,21 +350,6 @@ def process_keys(
     max_verify_diff = 0.0
     verify_key_worst = ""
 
-    # ---------- oracle scores: global τ and margins m_i(s*) (symmetry diagnostic)
-    oracle_scores_dict = {
-        k: (final_sd[k] - initial_sd[k]).abs().float() for k in keys if k in initial_sd and k in final_sd
-    }
-    oracle_flat = flatten_scores_in_order(oracle_scores_dict, keys)
-    if oracle_flat.numel() > 0:
-        o_sel = scores_for_cert_selection(oracle_flat, match_tie_break=cert_match_tie_break)
-        tau_o, k_o, N_o = global_topk_threshold(o_sel, sparsity_percent)
-        margin_o = (o_sel - tau_o).abs()
-        oracle_margin_hist.update(margin_o)
-        oracle_margin_w.update(margin_o)
-        gap_diag["cert_oracle_tau"] = tau_o
-        gap_diag["cert_oracle_k_keep"] = k_o
-        gap_diag["cert_oracle_N"] = N_o
-
     rnd_flat_parts: Dict[int, List[torch.Tensor]] = {s: [] for s in random_seeds}
     oracle_flat_parts_rand: List[torch.Tensor] = []
 
@@ -402,6 +387,15 @@ def process_keys(
         gc.collect()
 
     oracle_flat_vec = torch.cat(oracle_flat_parts_rand) if oracle_flat_parts_rand else torch.empty(0)
+    if oracle_flat_vec.numel() > 0:
+        o_sel = scores_for_cert_selection(oracle_flat_vec, match_tie_break=cert_match_tie_break)
+        tau_o, k_o, N_o = global_topk_threshold(o_sel, sparsity_percent)
+        margin_o = (o_sel - tau_o).abs()
+        oracle_margin_hist.update(margin_o)
+        oracle_margin_w.update(margin_o)
+        gap_diag["cert_oracle_tau"] = tau_o
+        gap_diag["cert_oracle_k_keep"] = k_o
+        gap_diag["cert_oracle_N"] = N_o
     for seed in random_seeds:
         parts = rnd_flat_parts.get(seed, [])
         if not parts or oracle_flat_vec.numel() == 0:
