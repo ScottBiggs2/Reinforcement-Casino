@@ -16,6 +16,10 @@
 # Optional overrides (still one line, comma-separated after ALL):
 #   ...,CKPT500_DIR=/scratch/$USER/.../checkpoint-500,DELTA_LOG_DIR=/scratch/$USER/.../deltas/...,OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_gap1,VERIFY_DELTAS_DIR=/path/with/deltas_step_500.pt
 #
+# If TRAIN_PY errors with /conda_envs/... (no /scratch/$USER): your shell exported TRAIN_ENV wrong.
+#   unset TRAIN_ENV
+#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+#
 # If the shell "hangs" before any Slurm message: check for an unclosed quote in --export=, or run
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 # alone first (uses HF_TOKEN already exported in your shell: export HF_TOKEN=...).
@@ -55,10 +59,18 @@ cd "$REPO_ROOT"
 mkdir -p logs
 
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
-TRAIN_ENV="${TRAIN_ENV:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
+_DEFAULT_TRAIN_ENV="${SCRATCH_USER_ROOT}/conda_envs/rl_casino"
+# --export=ALL can inherit a broken TRAIN_ENV from the shell (e.g. /conda_envs/...); prefer default if invalid.
+TRAIN_ENV="${TRAIN_ENV:-${_DEFAULT_TRAIN_ENV}}"
 TRAIN_PY="${TRAIN_ENV}/bin/python"
 if [ ! -x "$TRAIN_PY" ]; then
+  echo "WARN: TRAIN_PY missing at ${TRAIN_PY}; overriding TRAIN_ENV → ${_DEFAULT_TRAIN_ENV}" >&2
+  TRAIN_ENV="${_DEFAULT_TRAIN_ENV}"
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+fi
+if [ ! -x "$TRAIN_PY" ]; then
   echo "ERROR: TRAIN_PY not found: ${TRAIN_PY}" >&2
+  echo "  Fix: export TRAIN_ENV=/scratch/\${USER}/conda_envs/rl_casino or unset TRAIN_ENV before sbatch." >&2
   exit 1
 fi
 export PATH="${TRAIN_ENV}/bin:${PATH}"
@@ -101,6 +113,8 @@ VERIFY_DELTAS_DIR="${VERIFY_DELTAS_DIR:-}"
 mkdir -p "${OUT_DIR}"
 
 echo "REPO_ROOT=${REPO_ROOT}"
+echo "SCRATCH_USER_ROOT=${SCRATCH_USER_ROOT}"
+echo "TRAIN_ENV=${TRAIN_ENV}"
 echo "TRAIN_PY=${TRAIN_PY}"
 echo "BASE_MODEL=${BASE_MODEL}"
 echo "CKPT500_DIR=${CKPT500_DIR}"
