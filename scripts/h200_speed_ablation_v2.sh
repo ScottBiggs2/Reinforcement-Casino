@@ -93,7 +93,7 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
 export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
 
 export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
-export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
+export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-1}"
 export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-dense}"
 
 export RL_CASINO_BSR_DETAILED_TIMING="${RL_CASINO_BSR_DETAILED_TIMING:-0}"
@@ -101,6 +101,12 @@ export RL_CASINO_LOGGING_STEPS="${RL_CASINO_LOGGING_STEPS:-1}"
 if [ "${RL_CASINO_LOGGING_STEPS}" -gt "${H200_BSR_STEPS_PER_PHASE}" ]; then
   echo "WARNING: RL_CASINO_LOGGING_STEPS=${RL_CASINO_LOGGING_STEPS} > H200_BSR_STEPS_PER_PHASE=${H200_BSR_STEPS_PER_PHASE}; clamping to 1." >&2
   export RL_CASINO_LOGGING_STEPS=1
+fi
+
+export H200_ABLATION_MODE="${H200_ABLATION_MODE:-optimizer}"
+if [ "${H200_ABLATION_MODE}" != "optimizer" ]; then
+  echo "WARNING: H200_ABLATION_MODE=${H200_ABLATION_MODE} unsupported in this deadline-safe mode; forcing optimizer-only benchmark." >&2
+  export H200_ABLATION_MODE="optimizer"
 fi
 
 if [ "${H200_BSR_FULL_GRID:-0}" = "1" ]; then
@@ -144,7 +150,8 @@ if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
 fi
 
 set +e
-"$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
+BENCH_SCRIPT="src/full_training/h200_sparse_dpo_optimizer_benchmark.py"
+"$TRAIN_PY" "${BENCH_SCRIPT}" \
   --model_name "$MODEL" \
   --dataset tulu3 \
   --n_steps "$H200_BSR_STEPS_PER_PHASE" \
@@ -156,10 +163,8 @@ set +e
   --max_prompt_length "$DPO_MAX_PROMPT_LENGTH" \
   --output_dir "$OUT_BASE" \
   --dataset_cache_dir "$HF_DATASETS_CACHE" \
-  --device_map none \
   --run_label "h200_ablat_${SLURM_JOB_ID:-local}" \
   --benchmark_sparsities "$BENCHMARK_SPARSITIES" \
-  --phase_grad_input_modes "dense" \
   "${PY_GRID_ARGS[@]}" \
   "${PHASE_SLICE_ARGS[@]}" \
   "${SKIP_DENSE_ARGS[@]}" \

@@ -118,7 +118,7 @@ export DPO_OPTIM="${DPO_OPTIM:-adamw_8bit}"
 # - BSR_BATCH_CHUNKS: minimum batch-axis launch tiles for grad_weight Triton; the kernel also
 #   autoscales to ~1024 total programs (active_blocks × chunks). Env is a floor, not a cap.
 export BSR_USE_ATOMIC="${BSR_USE_ATOMIC:-0}"
-export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-8}"
+export BSR_BATCH_CHUNKS="${BSR_BATCH_CHUNKS:-1}"
 
 # Grad_input for BSR backward: **dense** only for this job (no Triton sparse grad_i path).
 # The driver passes --phase_grad_input_modes dense; this export is the fallback if anything reads env early.

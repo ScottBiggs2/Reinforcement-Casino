@@ -25,16 +25,23 @@ os.environ.pop("WANDB_SILENT", None)
 os.environ.setdefault("WANDB_CONSOLE", "off")
 
 import argparse
+import json
+import time
 import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
+from typing import Any, Dict, Optional
 
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
 from src.utils.data_utils import dpo_collator_fn
 from src.utils.dataset_registry import get_dataset_config, load_dpo_dataset as registry_load_dpo
-from src.utils.logging_utils import FlexibleCheckpointCallback, CSVLoggerCallback
+from src.utils.logging_utils import (
+    FlexibleCheckpointCallback,
+    CSVLoggerCallback,
+    BenchmarkThroughputCallback,
+)
 from src.utils.grpo_checkpoint_utils import (
     maybe_load_wandb_resume_env,
     resolve_resume_checkpoint,
@@ -75,6 +82,11 @@ def train(
     save_steps=None,
     save_total_limit=None,
     resume_from_checkpoint=None,
+    benchmark_log_sink=None,
+    benchmark_phase: str = None,
+    benchmark_sparsity_pct: float = None,
+    benchmark_optimizer_label: str = None,
+    benchmark_extra_log_fields: Optional[Dict[str, Any]] = None,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -97,6 +109,8 @@ def train(
     os.makedirs(run_dir, exist_ok=True)
     output_dir = os.path.join(run_dir, "checkpoints")
     os.makedirs(output_dir, exist_ok=True)
+
+    _prepare_t0 = time.perf_counter()
 
     resume_ckpt = resolve_resume_checkpoint(output_dir, resume_from_checkpoint)
     maybe_load_wandb_resume_env(run_dir, resume_ckpt)
@@ -205,6 +219,21 @@ def train(
     if save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
 
+    if benchmark_log_sink is not None and benchmark_phase:
+        label = benchmark_optimizer_label or optimizer_type
+        _te = os.environ.get("RL_CASINO_THROUGHPUT_PRINT_EVERY", "").strip()
+        _print_every = int(_te) if _te else 25
+        callbacks.append(
+            BenchmarkThroughputCallback(
+                benchmark_log_sink,
+                phase=str(benchmark_phase),
+                sparsity_target_pct=benchmark_sparsity_pct,
+                optimizer_label=str(label),
+                print_every=_print_every,
+                extra_log_fields=benchmark_extra_log_fields,
+            )
+        )
+
     if use_hf_rolling:
         save_strategy = "steps"
         cfg_save_steps = save_steps
@@ -248,7 +277,23 @@ def train(
         callbacks=callbacks,
     )
 
+    _prepare_s = time.perf_counter() - _prepare_t0
+    _train_t0 = time.perf_counter()
     trainer.train(resume_from_checkpoint=resume_ckpt)
+    _trainer_s = time.perf_counter() - _train_t0
+
+    if benchmark_log_sink is not None and benchmark_phase:
+        try:
+            payload = {
+                "kind": "train_wall",
+                "phase": str(benchmark_phase),
+                "run_name": str(run_name),
+                "prepare_s": round(_prepare_s, 6),
+                "trainer_s": round(_trainer_s, 6),
+            }
+            print("BENCH_JSON " + json.dumps(payload, separators=(",", ":")), flush=True)
+        except Exception:
+            pass
 
     # Final Saving
     if save_model:
