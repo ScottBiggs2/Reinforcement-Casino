@@ -31,7 +31,7 @@ import torch
 import wandb
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import DPOTrainer, DPOConfig
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
@@ -87,10 +87,18 @@ def train(
     benchmark_sparsity_pct: float = None,
     benchmark_optimizer_label: str = None,
     benchmark_extra_log_fields: Optional[Dict[str, Any]] = None,
+    use_wandb: bool = True,
+    train_dataset=None,
+    tokenizer_obj=None,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
+
+    if not use_wandb:
+        os.environ["WANDB_MODE"] = "disabled"
+        os.environ["WANDB_DISABLED"] = "true"
+        os.environ.setdefault("WANDB_SILENT", "true")
     
     # Set dataset cache directory
     os.environ["HF_DATASETS_CACHE"] = dataset_cache_dir
@@ -113,7 +121,8 @@ def train(
     _prepare_t0 = time.perf_counter()
 
     resume_ckpt = resolve_resume_checkpoint(output_dir, resume_from_checkpoint)
-    maybe_load_wandb_resume_env(run_dir, resume_ckpt)
+    if use_wandb:
+        maybe_load_wandb_resume_env(run_dir, resume_ckpt)
 
     use_hf_rolling = save_steps is not None and save_steps > 0 and save_steps < 10**9
     hf_save_total_limit = save_total_limit if save_total_limit is not None else 3
@@ -124,7 +133,7 @@ def train(
     print(f"Run Directory: {run_dir}")
     print(f"Dataset: {dataset_key} ({dataset_name})")
     print(f"Optimizer: {optimizer_type}")
-    print(f"WandB: on (always), CSV: {save_csv}")
+    print(f"WandB: {'on' if use_wandb else 'off'}, CSV: {save_csv}")
     print(
         f"DPO training: max_steps={n_steps}, num_train_epochs=1, peak_lr={learning_rate}, "
         f"warmup_ratio={warmup_ratio}, lr_scheduler=linear (Trainer; align with DPO_train.py / pipeline NUM_STEPS_DPO)"
@@ -134,21 +143,33 @@ def train(
     # Callback only uses this for optional full-delta dumps; not tied to dense delta_logs.
     checkpoint_schedule = [n_steps] if n_steps > 0 else []
 
-    # Load Components
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None: tokenizer.pad_token = tokenizer.eos_token
-    
-    dpo_dataset = registry_load_dpo(dataset_key, subset_size=subset_size)
+    # Load Components (optional reuse for multi-phase drivers that preload once)
+    if tokenizer_obj is not None and train_dataset is not None:
+        tokenizer = tokenizer_obj
+        dpo_dataset = train_dataset
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        dpo_dataset = registry_load_dpo(dataset_key, subset_size=subset_size)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
-        device_map=None
+        checkpoint_path,
+        dtype=torch.bfloat16,
+        low_cpu_mem_usage=True,
+        device_map=None,
     )
     model.config.use_cache = False
     
-    # Mask Manager
-    mask_manager = SparseMaskManager(mask_path, device=device)
+    mask_manager: Optional[SparseMaskManager] = None
+    if optimizer_type == "sparse_adamw":
+        if mask_path is None or not str(mask_path).strip():
+            raise ValueError("sparse_adamw requires a non-empty mask_path")
+        mask_path_resolved: Union[str, os.PathLike] = mask_path
+        if not os.path.isfile(mask_path_resolved):
+            raise FileNotFoundError(f"Mask file not found: {mask_path_resolved}")
+        mask_manager = SparseMaskManager(mask_path_resolved, device=device)
     
     # Optimizer Logic
     print(f"Initializing {optimizer_type}...")
@@ -186,7 +207,8 @@ def train(
         "hf_save_total_limit": hf_save_total_limit if use_hf_rolling else None,
     }
     callbacks.append(RunManifestCallback(run_dir, manifest))
-    callbacks.append(WandbRunIdCallback(run_dir))
+    if use_wandb:
+        callbacks.append(WandbRunIdCallback(run_dir))
 
     if not resume_ckpt:
         base_state = {}
@@ -206,7 +228,7 @@ def train(
                 batch_size=batch_size,
                 grad_accum=grad_accum,
                 run_name=run_name,
-                use_wandb=True,
+                use_wandb=use_wandb,
                 wandb_project=wandb_project,
             )
         )
@@ -258,7 +280,7 @@ def train(
         save_strategy=save_strategy,
         save_steps=cfg_save_steps,
         save_total_limit=cfg_save_total,
-        report_to="wandb",
+        report_to="wandb" if use_wandb else "none",
         run_name=run_name,
         remove_unused_columns=False,
         bf16=True,

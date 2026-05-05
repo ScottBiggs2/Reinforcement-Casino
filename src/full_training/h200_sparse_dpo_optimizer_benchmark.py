@@ -418,6 +418,9 @@ def main() -> None:
             benchmark_sparsity_pct=sparsity_pct,
             benchmark_optimizer_label=("adamw" if sparsity_pct is None else "sparse_adamw"),
             benchmark_extra_log_fields=extra_log,
+            use_wandb=False,
+            train_dataset=dpo_ds,
+            tokenizer_obj=tokenizer,
         )
         try:
             sink.flush()

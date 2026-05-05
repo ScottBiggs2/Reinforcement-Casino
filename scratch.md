@@ -157,3 +157,7 @@ export MASK_RUN_ID="tulu3_mag_oracle_rand_${PIPELINE_RUN_ID}"
 sbatch scripts/sbatch_make_mag_oracle_random_masks_from_run.sh
 Submitted batch job 6573918
 
+# relaunching speed ablation yet again... 
+(base) [biggs.s@explorer-01 rl_casino]$ sbatch scripts/h200_speed_ablation_v2.sh
+Submitted batch job 6573973
+(base) [biggs.s@explorer-01 rl_casino]$ 
