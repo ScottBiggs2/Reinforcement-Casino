@@ -40,6 +40,8 @@
 #SBATCH --job-name=mask_score_gap
 #SBATCH --output=logs/mask_score_gap_%j.out
 #SBATCH --error=logs/mask_score_gap_%j.err
+# Propagate your login-shell env (incl. HF_TOKEN) into the job when you export before sbatch:
+#SBATCH --export=ALL
 
 set -euo pipefail
 
@@ -65,6 +67,24 @@ export PYTHONUNBUFFERED=1
 
 export HF_TOKEN="${HF_TOKEN:-}"
 export HF_HOME="${HF_HOME:-${SCRATCH_USER_ROOT}/hf_cache/hub}"
+
+# Slurm clears env unless --export=ALL; hf auth login stores token on shared $HOME:
+_HF_DEFAULT_TOKEN_FILE="${HOME}/.cache/huggingface/token"
+if [ -z "${HF_TOKEN:-}" ] && [ -z "${HUGGING_FACE_HUB_TOKEN:-}" ]; then
+  if [ -n "${HF_TOKEN_FILE:-}" ] && [ -f "${HF_TOKEN_FILE}" ]; then
+    export HF_TOKEN="$(tr -d '\n\r' < "${HF_TOKEN_FILE}")"
+  elif [ -f "${_HF_DEFAULT_TOKEN_FILE}" ]; then
+    export HF_TOKEN="$(tr -d '\n\r' < "${_HF_DEFAULT_TOKEN_FILE}")"
+  fi
+fi
+if [ -n "${HF_TOKEN:-}" ]; then
+  export HUGGING_FACE_HUB_TOKEN="${HUGGING_FACE_HUB_TOKEN:-${HF_TOKEN}}"
+fi
+if [ -n "${HF_TOKEN:-}" ]; then
+  echo "HF_TOKEN is set (length ${#HF_TOKEN})"
+else
+  echo "WARN: HF_TOKEN unset and no readable token at HF_TOKEN_FILE or ${_HF_DEFAULT_TOKEN_FILE}" >&2
+fi
 
 BASE_MODEL="${BASE_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
 CKPT500_DIR="${CKPT500_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"

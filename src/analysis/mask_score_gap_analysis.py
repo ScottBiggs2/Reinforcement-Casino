@@ -30,7 +30,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -46,6 +46,30 @@ from src.warm_start.checkpoint_diff_mask_finder import (  # noqa: E402
     load_state_dict,
 )
 from src.warm_start.even_better_mask_finder import load_deltas_streaming  # noqa: E402
+
+
+def ensure_hf_hub_token() -> None:
+    """
+    Slurm/batch jobs often do not inherit the login environment, so HF_TOKEN is empty even
+    after `hf auth login`. The CLI stores a token in ~/.cache/huggingface/token on shared $HOME.
+    """
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return
+    candidates: List[Path] = []
+    tfile = os.environ.get("HF_TOKEN_FILE")
+    if tfile:
+        candidates.append(Path(tfile).expanduser())
+    candidates.append(Path.home() / ".cache" / "huggingface" / "token")
+    for p in candidates:
+        try:
+            if p.is_file():
+                tok = p.read_text(encoding="utf-8").strip()
+                if tok:
+                    os.environ["HF_TOKEN"] = tok
+                    os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", tok)
+                    return
+        except OSError:
+            continue
 
 
 def _git_rev() -> Optional[str]:
@@ -438,6 +462,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    ensure_hf_hub_token()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
