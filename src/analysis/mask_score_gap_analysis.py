@@ -44,7 +44,6 @@ from src.warm_start.even_better_mask_finder import load_deltas_streaming  # noqa
 
 from src.analysis.certifiability_margin import (  # noqa: E402
     certifiability_strict_fraction,
-    flatten_scores_in_order,
     global_topk_threshold,
     scores_for_cert_selection,
 )
@@ -86,6 +85,39 @@ def safe_torch_load(path: str, map_location: str = "cpu"):
         return torch.load(path, map_location=map_location, weights_only=True)
     except TypeError:
         return torch.load(path, map_location=map_location)
+
+
+def checkpoint_dtype_arg(s: str) -> torch.dtype:
+    t = s.strip().lower()
+    aliases = {
+        "fp32": torch.float32,
+        "float32": torch.float32,
+        "f32": torch.float32,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "f16": torch.float16,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+    }
+    if t not in aliases:
+        raise argparse.ArgumentTypeError(
+            f"Unknown checkpoint dtype {s!r}; use one of: {', '.join(sorted(aliases))}"
+        )
+    return aliases[t]
+
+
+def _checkpoint_dtype_cli_default() -> str:
+    env = os.environ.get("CHECKPOINT_DTYPE") or os.environ.get("MASK_GAP_CHECKPOINT_DTYPE")
+    return env.strip().lower() if env else "bfloat16"
+
+
+def _explain_dtype(dt: torch.dtype) -> str:
+    if dt == torch.bfloat16:
+        return "bfloat16 (lower RAM; small numerical deltas vs fp32)"
+    if dt == torch.float16:
+        return "float16 (lower RAM; may be numerically brittle on CPU)"
+    return "float32"
+
 
 
 @dataclass
@@ -302,6 +334,7 @@ def process_keys(
     random_seeds: List[int],
     histogram_bins: int,
     out_dir: Path,
+    flatten_dtype: torch.dtype,
     sparsity_percent: float,
     cert_match_tie_break: bool,
     cert_min_layer_keep_ratio: float,
@@ -339,6 +372,7 @@ def process_keys(
         "cert_sparsity_percent": float(sparsity_percent),
         "cert_match_tie_break": bool(cert_match_tie_break),
         "cert_min_layer_keep_ratio": float(cert_min_layer_keep_ratio),
+        "flatten_dtype_for_globals": str(flatten_dtype).replace("torch.", ""),
     }
     if cert_min_layer_keep_ratio > 0:
         gap_diag["cert_hybrid_warning"] = (
@@ -350,18 +384,32 @@ def process_keys(
     max_verify_diff = 0.0
     verify_key_worst = ""
 
-    rnd_flat_parts: Dict[int, List[torch.Tensor]] = {s: [] for s in random_seeds}
-    oracle_flat_parts_rand: List[torch.Tensor] = []
+    flat_oracle_n = 0
+    for _name in keys:
+        if _name not in initial_sd or _name not in final_sd:
+            continue
+        flat_oracle_n += int(initial_sd[_name].numel())
+
+    oracle_flat_vec = torch.empty((flat_oracle_n,), dtype=flatten_dtype) if flat_oracle_n else torch.empty(0)
+    rnd_flat_bufs: Dict[int, torch.Tensor] = {
+        s: torch.empty((flat_oracle_n,), dtype=flatten_dtype) for s in random_seeds
+    }
+    oracle_write_off = 0
 
     # ---------- random vs oracle (one pass over keys)
     print("Computing random-mask gaps vs oracle (one pass)...")
     for ki, name in enumerate(keys):
         if name not in initial_sd or name not in final_sd:
             continue
-        w0 = initial_sd[name].to(torch.float32)
-        w1 = final_sd[name].to(torch.float32)
-        s_oracle = (w1 - w0).abs()
-        oracle_flat_parts_rand.append(s_oracle.reshape(-1))
+        w0 = initial_sd[name]
+        w1 = final_sd[name]
+        if not w0.is_floating_point() or not w1.is_floating_point():
+            oracle_write_off += int(w0.numel())
+            del w0, w1
+            continue
+        s_oracle = (w1 - w0).abs().to(dtype=flatten_dtype)
+        nloc = int(s_oracle.numel())
+        oracle_flat_vec[oracle_write_off : oracle_write_off + nloc].copy_(s_oracle.reshape(-1))
         row_base: Dict[str, object] = {
             "param_name": name,
             "numel": int(s_oracle.numel()),
@@ -370,9 +418,9 @@ def process_keys(
         for seed in random_seeds:
             g = torch.Generator(device="cpu")
             g.manual_seed(int(seed))
-            s_rand = torch.rand(s_oracle.shape, generator=g, dtype=torch.float32)
-            rnd_flat_parts[seed].append(s_rand.reshape(-1))
-            v_rr = (s_rand - s_oracle).abs()
+            s_rand = torch.rand(s_oracle.shape, generator=g, dtype=flatten_dtype)
+            rnd_flat_bufs[seed][oracle_write_off : oracle_write_off + nloc].copy_(s_rand.reshape(-1))
+            v_rr = (s_rand.to(torch.float32) - s_oracle.to(torch.float32)).abs()
             r_n = _minmax_norm(s_rand)
             v_rn = (r_n - o_n_r).abs()
             rnd_raw_hists[seed].update(v_rr)
@@ -383,10 +431,15 @@ def process_keys(
             row_base[f"mean_v_rand_norm_seed{seed}"] = float(v_rn.mean().item())
 
         layer_rows.append(row_base)
+        oracle_write_off += nloc
         del w0, w1, s_oracle, o_n_r
         gc.collect()
 
-    oracle_flat_vec = torch.cat(oracle_flat_parts_rand) if oracle_flat_parts_rand else torch.empty(0)
+    if oracle_write_off != flat_oracle_n:
+        raise RuntimeError(
+            f"Oracle flatten size mismatch ({oracle_write_off} vs expected {flat_oracle_n}); key order/filtering bug."
+        )
+
     if oracle_flat_vec.numel() > 0:
         o_sel = scores_for_cert_selection(oracle_flat_vec, match_tie_break=cert_match_tie_break)
         tau_o, k_o, N_o = global_topk_threshold(o_sel, sparsity_percent)
@@ -397,11 +450,10 @@ def process_keys(
         gap_diag["cert_oracle_k_keep"] = k_o
         gap_diag["cert_oracle_N"] = N_o
     for seed in random_seeds:
-        parts = rnd_flat_parts.get(seed, [])
-        if not parts or oracle_flat_vec.numel() == 0:
+        if oracle_flat_vec.numel() == 0:
             continue
-        flat_r = torch.cat(parts)
-        if flat_r.numel() != oracle_flat_vec.numel():
+        flat_r = rnd_flat_bufs.get(seed)
+        if flat_r is None or flat_r.numel() != oracle_flat_vec.numel():
             continue
         r_sel = scores_for_cert_selection(flat_r, match_tie_break=cert_match_tie_break)
         tau_r, k_r, N_r = global_topk_threshold(r_sel, sparsity_percent)
@@ -417,6 +469,9 @@ def process_keys(
         gap_diag[f"cert_strict_numer_random_seed{seed}"] = c_ok
         gap_diag[f"cert_strict_denom_random_seed{seed}"] = c_den
 
+    del rnd_flat_bufs
+    gc.collect()
+
     # ---------- per milestone magnitude caches
     layer_by_name = {row["param_name"]: row for row in layer_rows}
 
@@ -429,22 +484,42 @@ def process_keys(
         vmin_pos_accum = torch.tensor(float("inf"))
         vmax_accum = torch.tensor(float("-inf"))
         oracle_match_sample: List[Dict[str, object]] = []
-        flat_mag_chunks: List[torch.Tensor] = []
-        flat_oracle_chunks: List[torch.Tensor] = []
+
+        mag_cert_n = 0
+        for nm in keys:
+            if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                continue
+            om = mag_scores[nm].shape
+            oo = initial_sd[nm].shape
+            of = final_sd[nm].shape
+            if om == oo == of:
+                mag_cert_n += int(math.prod(tuple(int(x) for x in om)))
+        flat_mag_flat = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
+        flat_oracle_flat_m = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
+        mag_cert_off = 0
 
         for ki, name in enumerate(keys):
             if name not in initial_sd or name not in final_sd or name not in mag_scores:
                 continue
-            w0 = initial_sd[name].to(torch.float32)
-            w1 = final_sd[name].to(torch.float32)
+            w0 = initial_sd[name]
+            w1 = final_sd[name]
+            if not w0.is_floating_point() or not w1.is_floating_point():
+                del w0, w1
+                continue
             s_oracle = (w1 - w0).abs()
-            s_mag = mag_scores[name].to(torch.float32)
+            if s_oracle.is_floating_point():
+                s_oracle = s_oracle.to(dtype=flatten_dtype)
+            s_mag = mag_scores[name]
+            if s_mag.is_floating_point():
+                s_mag = s_mag.to(dtype=flatten_dtype)
             if s_mag.shape != s_oracle.shape:
                 del w0, w1, s_oracle, s_mag
                 continue
 
-            flat_mag_chunks.append(s_mag.reshape(-1).clone())
-            flat_oracle_chunks.append(s_oracle.reshape(-1).clone())
+            nloc_mag = int(s_mag.numel())
+            flat_mag_flat[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_mag.reshape(-1))
+            flat_oracle_flat_m[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_oracle.reshape(-1))
+            mag_cert_off += nloc_mag
 
             if delta_verify is not None and name in delta_verify:
                 dv = delta_verify[name].to(torch.float32).abs()
@@ -503,9 +578,14 @@ def process_keys(
         gap_diag[f"milestone_{step}_raw_global_max"] = _mx if math.isfinite(_mx) else float("nan")
         gap_diag[f"milestone_{step}_sample_tensors"] = oracle_match_sample[:2]
 
-        if flat_mag_chunks:
-            flat_mag = torch.cat(flat_mag_chunks)
-            flat_oracle_m = torch.cat(flat_oracle_chunks)
+        if mag_cert_off != mag_cert_n:
+            raise RuntimeError(
+                f"Magnitude cert flatten mismatch at step {step}: wrote {mag_cert_off} vs expected {mag_cert_n}"
+            )
+
+        if mag_cert_n > 0 and flat_mag_flat.numel() > 0:
+            flat_mag = flat_mag_flat
+            flat_oracle_m = flat_oracle_flat_m
             m_sel = scores_for_cert_selection(flat_mag, match_tie_break=cert_match_tie_break)
             tau_m, k_m, N_m = global_topk_threshold(m_sel, sparsity_percent)
             margin_m = (m_sel - tau_m).abs()
@@ -664,6 +744,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use raw scores for τ and margins (no tie-break noise). Default matches mask_utils tie-break.",
     )
+    p.add_argument(
+        "--checkpoint_dtype",
+        type=checkpoint_dtype_arg,
+        default=checkpoint_dtype_arg(_checkpoint_dtype_cli_default()),
+        help=(
+            "Storage dtype for checkpoint weights loaded into RAM (hub + local shards). "
+            "Default: MASK_GAP_CHECKPOINT_DTYPE or CHECKPOINT_DTYPE env, else bfloat16. "
+            "fp16/bf16 cut memory (~2×) versus fp32; intermediate ops still promote as needed."
+        ),
+    )
     return p.parse_args()
 
 
@@ -684,9 +774,10 @@ def main() -> None:
                 seeds.append(int(s))
     seeds = sorted(set(seeds))
 
-    print("Loading initial / final state dicts (CPU fp32, high RAM)...")
-    initial_sd = load_state_dict(args.initial_model, device="cpu")
-    final_sd = load_state_dict(args.final_model, device="cpu")
+    ckpt_dt = getattr(args, "checkpoint_dtype", torch.bfloat16)
+    print(f"Loading initial / final state dicts on CPU ({_explain_dtype(ckpt_dt)})...")
+    initial_sd = load_state_dict(args.initial_model, device="cpu", torch_dtype=ckpt_dt)
+    final_sd = load_state_dict(args.final_model, device="cpu", torch_dtype=ckpt_dt)
 
     keys_all = [n for n in final_sd if n in initial_sd]
     if args.mlp_only:
@@ -731,6 +822,7 @@ def main() -> None:
         "num_keys": len(keys),
         "verify_deltas_dir": args.verify_deltas_dir,
         "git_rev": _git_rev(),
+        "checkpoint_dtype": str(ckpt_dt).replace("torch.", ""),
         "sparsity_percent": float(args.sparsity_percent),
         "cert_match_tie_break": cert_match_tie_break,
         "cert_min_layer_keep_ratio": float(args.cert_min_layer_keep_ratio),
@@ -753,6 +845,7 @@ def main() -> None:
         random_seeds=seeds,
         histogram_bins=args.histogram_bins,
         out_dir=out_dir,
+        flatten_dtype=ckpt_dt,
         sparsity_percent=float(args.sparsity_percent),
         cert_match_tie_break=cert_match_tie_break,
         cert_min_layer_keep_ratio=float(args.cert_min_layer_keep_ratio),

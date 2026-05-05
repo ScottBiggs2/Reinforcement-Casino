@@ -9,6 +9,7 @@
 #   export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"               # cert tau / margins (alias: CERT_SPARSITY_PERCENT)
 #   export CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
 #   export CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"         # set 0 to pass --cert_no_match_tie_break
+#   export CHECKPOINT_DTYPE=bfloat16   # bf16 halves RAM vs fp32; use float32 if you need bit-identical baselines
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 #
 # Copy out (after job):
@@ -131,6 +132,7 @@ VERIFY_DELTAS_DIR="${VERIFY_DELTAS_DIR:-}"
 SPARSITY_PERCENT="${CERT_SPARSITY_PERCENT:-${SPARSITY_PERCENT:-97.5}}"
 CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
 CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"
+CHECKPOINT_DTYPE="${MASK_GAP_CHECKPOINT_DTYPE:-${CHECKPOINT_DTYPE:-bfloat16}}"
 
 mkdir -p "${OUT_DIR}"
 
@@ -146,6 +148,7 @@ echo "MAGNITUDE_MILESTONES=${MAGNITUDE_MILESTONES}"
 echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}"
 echo "CERT_MIN_LAYER_KEEP_RATIO=${CERT_MIN_LAYER_KEEP_RATIO}"
 echo "CERT_MATCH_TIE_BREAK=${CERT_MATCH_TIE_BREAK}"
+echo "CHECKPOINT_DTYPE=${CHECKPOINT_DTYPE}"
 
 ARGS=(
   src/analysis/mask_score_gap_analysis.py
@@ -157,6 +160,7 @@ ARGS=(
   --histogram_bins "${HISTOGRAM_BINS}"
   --sparsity_percent "${SPARSITY_PERCENT}"
   --cert_min_layer_keep_ratio "${CERT_MIN_LAYER_KEEP_RATIO}"
+  --checkpoint_dtype "${CHECKPOINT_DTYPE}"
 )
 if [ "${CERT_MATCH_TIE_BREAK}" = "0" ] || [ "${CERT_MATCH_TIE_BREAK}" = "false" ]; then
   ARGS+=( --cert_no_match_tie_break )

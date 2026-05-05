@@ -4,7 +4,7 @@ import sys
 import argparse
 import json
 import gc
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 # Ensure we can import from src
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -17,26 +17,66 @@ from src.utils.mask_utils import (
     pooling_metadata,
 )
 
-def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
+def _normalize_torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    s = str(dtype).strip().lower()
+    aliases = {
+        "fp32": torch.float32,
+        "float32": torch.float32,
+        "f32": torch.float32,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "f16": torch.float16,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+    }
+    if s not in aliases:
+        raise ValueError(f"Unknown dtype {dtype!r}; expected one of {sorted(aliases)}")
+    return aliases[s]
+
+
+def _cast_loaded_state_dict(sd: Dict[str, torch.Tensor], dtype: torch.dtype) -> Dict[str, torch.Tensor]:
+    if dtype == torch.float32:
+        return sd
+    out: Dict[str, torch.Tensor] = {}
+    for k, v in sd.items():
+        if isinstance(v, torch.Tensor) and v.is_floating_point():
+            out[k] = v.to(dtype=dtype)
+        else:
+            out[k] = v
+    return out
+
+
+def load_state_dict(
+    path: str,
+    device: str = "cpu",
+    torch_dtype: Union[str, torch.dtype] = torch.float32,
+) -> Dict[str, torch.Tensor]:
     """
     Loads a state dict from a .pt file, .safetensors file, or a HuggingFace model (local/remote).
+
+    Floating-point tensors are cast to ``torch_dtype`` for memory control (e.g. bfloat16 on CPU).
     """
+    dt = _normalize_torch_dtype(torch_dtype)
     # 1. Check if it's a local file or directory that exists
     if os.path.exists(path):
         if os.path.isfile(path) and path.endswith((".pt", ".safetensors")):
             print(f"Loading state dict from local file: {path}")
             if path.endswith(".safetensors"):
                 from safetensors.torch import load_file
-                return load_file(path, device=device)
+                sd = load_file(path, device=device)
+                return _cast_loaded_state_dict(sd, dt)
             else:
-                return torch.load(path, map_location=device, weights_only=True)
+                sd = torch.load(path, map_location=device, weights_only=True)
+                return _cast_loaded_state_dict(sd, dt)
         else:
             # Treat as local HuggingFace directory
             print(f"Loading local HuggingFace model directory: {path}")
             from transformers import AutoModelForCausalLM
             model = AutoModelForCausalLM.from_pretrained(
                 path, 
-                torch_dtype=torch.float32,
+                torch_dtype=dt,
                 device_map=None,
                 low_cpu_mem_usage=True
             )
@@ -44,7 +84,7 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
             state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
             del model
             gc.collect()
-            return state_dict
+            return _cast_loaded_state_dict(state_dict, dt)
 
     # 2. If path doesn't exist locally, check if it might be a HuggingFace Hub ID
     # Hub IDs usually have 0 or 1 slashes (e.g., 'gpt2' or 'meta-llama/Llama-2-7b')
@@ -60,7 +100,7 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
     try:
         model = AutoModelForCausalLM.from_pretrained(
             path, 
-            torch_dtype=torch.float32,
+            torch_dtype=dt,
             device_map=None,
             low_cpu_mem_usage=True
         )
@@ -68,7 +108,7 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
         state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
         del model
         gc.collect()
-        return state_dict
+        return _cast_loaded_state_dict(state_dict, dt)
     except Exception as e:
         raise ValueError(f"Could not load HuggingFace model or file from '{path}': {e}")
 

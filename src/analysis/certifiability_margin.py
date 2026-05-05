@@ -17,13 +17,16 @@ import torch
 
 def flatten_scores_in_order(scores: Dict[str, torch.Tensor], keys: Sequence[str]) -> torch.Tensor:
     parts: List[torch.Tensor] = []
+    ref_dt = torch.float32
     for k in keys:
         if k not in scores:
             continue
-        parts.append(scores[k].reshape(-1).float())
+        t = scores[k].reshape(-1)
+        ref_dt = t.dtype
+        parts.append(t)
     if not parts:
         return torch.empty(0, dtype=torch.float32)
-    return torch.cat(parts, dim=0)
+    return torch.cat(parts, dim=0).to(dtype=ref_dt)
 
 
 def apply_tie_break_noise_flat(
@@ -35,11 +38,15 @@ def apply_tie_break_noise_flat(
     """Match create_mask_from_scores_gpu_efficient defaults (seed 42, scale from max abs)."""
     x = flat.clone()
     torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
-    scale = max(float(x.abs().max().item()) * tie_break_noise_scale, 1e-12)
+    xf = x.float()
+    scale = max(float(xf.abs().max().item()) * tie_break_noise_scale, 1e-12)
     g = torch.Generator(device=flat.device)
     g.manual_seed(int(seed))
-    noise = torch.randn(x.shape, generator=g, device=flat.device, dtype=x.dtype)
-    return x + noise * scale
+    noise = torch.randn(x.shape, generator=g, device=flat.device, dtype=torch.float32)
+    y = xf + noise * scale
+    if x.dtype != torch.float32:
+        return y.to(dtype=x.dtype)
+    return y
 
 
 def global_keep_count(total_params: int, sparsity_percent: float) -> int:
@@ -74,7 +81,12 @@ def scores_for_cert_selection(
     tie_break_noise_scale: float = 1e-6,
     tie_break_seed: int = 42,
 ) -> torch.Tensor:
-    x = flat_raw.float().clone()
+    if flat_raw.dtype in (torch.bfloat16, torch.float16, torch.float32, torch.float64):
+        dt = flat_raw.dtype
+        x = flat_raw.clone().to(dtype=dt)
+    else:
+        dt = torch.float32
+        x = flat_raw.float().clone()
     torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
     if match_tie_break:
         return apply_tie_break_noise_flat(x, tie_break_noise_scale=tie_break_noise_scale, seed=tie_break_seed)
