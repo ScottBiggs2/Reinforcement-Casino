@@ -5,14 +5,17 @@
 # Submit from repo root:
 #   sbatch scripts/h200_speed_ablation_v2.sh
 #
-# Full legacy-style grid (may require multiple 8h jobs or ``H200_BSR_ARRAY_PHASE=1``):
+# Default sparsity sweep: **99.75, 97.5, 95, 90** (element masks, block_1d Adam, dense grad-input)
+# → 1 dense + 4 sparse = **5 phases** unless you override ``BENCHMARK_SPARSITIES``.
+#
+# Full legacy-style grid (element+block masks × block_1d+block_2d; may need ``H200_BSR_ARRAY_PHASE=1``):
 #   export H200_BSR_FULL_GRID=1
 #   export BENCHMARK_SPARSITIES=99.75,97.5,95,90   # optional explicit list
 #   sbatch scripts/h200_speed_ablation_v2.sh
 #
-# One phase per array task (set ``#SBATCH --array=0-N`` manually to match expanded phase count):
+# One phase per array task (match ``--array`` upper bound to expanded phase count minus one):
 #   export H200_BSR_ARRAY_PHASE=1
-#   sbatch --array=0-16 scripts/h200_speed_ablation_v2.sh
+#   sbatch --array=0-16 scripts/h200_speed_ablation_v2.sh   # example for 17-phase full grid
 #
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
@@ -107,7 +110,7 @@ if [ "${H200_BSR_FULL_GRID:-0}" = "1" ]; then
     --phase_adam_kernels "${H200_BSR_ADAM_KERNELS:-block_1d,block_2d}"
   )
 else
-  export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75}"
+  export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
   PY_GRID_ARGS=(
     --phase_mask_types "${H200_BSR_MASK_TYPES:-element}"
     --phase_adam_kernels "${H200_BSR_ADAM_KERNELS:-block_1d}"

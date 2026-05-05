@@ -31,6 +31,9 @@
 #   MASK_SUITE_CKA_MAX_LENGTH=384          # shorter CKA forwards (speed)
 #   MASK_SUITE_SUITE_FAST=1               # cap CKA/probe samples at 32 + skip effective rank
 #   MASK_SUITE_NO_PROBE_PLOTS=1           # skip probe_plots/*.png (default: probe plots on with probes)
+#   MASK_SUITE_PROBE_BUILTIN=all        # Irene corpora: all|none|syntax,semantics,math
+#   MASK_SUITE_PROBE_BUILTIN_CV_FOLDS=3
+#   MASK_SUITE_PROBE_BUILTIN_LAYER_STRIDE=1   # >1 subsamples MLP layers for builtin pass (speed)
 #
 # Default resources are CPU-only (Jaccard + CSV). For MASK_SUITE_RUN_CKA=1, use a GPU partition,
 # e.g. sbatch --partition=gpu --gres=gpu:a100:1 --mem=128G --time=04:00:00 scripts/sbatch_mask_interpretation_suite.sh
@@ -167,6 +170,9 @@ if [ "$MASK_SUITE_PROBE_REPORTS" = "1" ]; then
   cmd+=( --probe-n-samples "${MASK_SUITE_PROBE_N_SAMPLES:-64}" )
   cmd+=( --probe-batch-size "${MASK_SUITE_PROBE_BATCH_SIZE:-4}" )
   cmd+=( --probe-max-length "${MASK_SUITE_PROBE_MAX_LENGTH:-512}" )
+  cmd+=( --probe-builtin-datasets "${MASK_SUITE_PROBE_BUILTIN:-all}" )
+  cmd+=( --probe-builtin-cv-folds "${MASK_SUITE_PROBE_BUILTIN_CV_FOLDS:-3}" )
+  cmd+=( --probe-builtin-layer-stride "${MASK_SUITE_PROBE_BUILTIN_LAYER_STRIDE:-1}" )
   if [ "${MASK_SUITE_NO_PROBE_PLOTS:-0}" = "1" ]; then
     cmd+=( --no-probe-plots )
   fi

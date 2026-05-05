@@ -2,12 +2,23 @@
 # Mask score-gap analysis: oracle (HF base vs checkpoint-500) vs warm magnitude @200 vs random.
 # Writes CSV + NPZ + JSON under OUT_DIR, then CPU matplotlib figures under OUT_DIR/figures.
 #
-# Submit from repo root (Explorer defaults match NEU scratch layout):
+# Submit ONLY with sbatch (this file is not chmod +x; do not run it as ./scripts/... or you get
+# "Permission denied"). Always: sbatch path/to/this/file.slurm
+#
+# cd to the GIT REPO ROOT (the directory that contains scripts/ and src/), then:
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 #
-# With HF gated model:
-#   sbatch --export=ALL,HF_TOKEN=...,TRAIN_ENV=/scratch/$USER/conda_envs/rl_casino \\
-#     scripts/slurm_mask_score_gap_light_r1.slurm
+# Gated Llama: pass HF token on ONE line (multi-line backslash pastes often break and the next
+# line runs alone as a command). Example — replace YOUR_TOKEN, use real paths if not defaults:
+#
+#   cd /scratch/$USER/path/to/RL_Casino_Working_Branch && sbatch --export=ALL,HF_TOKEN=YOUR_TOKEN,TRAIN_ENV=/scratch/$USER/conda_envs/rl_casino scripts/slurm_mask_score_gap_light_r1.slurm
+#
+# Optional overrides (still one line, comma-separated after ALL):
+#   ...,CKPT500_DIR=/scratch/$USER/.../checkpoint-500,DELTA_LOG_DIR=/scratch/$USER/.../deltas/...,OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_gap1,VERIFY_DELTAS_DIR=/path/with/deltas_step_500.pt
+#
+# If the shell "hangs" before any Slurm message: check for an unclosed quote in --export=, or run
+#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+# alone first (uses HF_TOKEN already exported in your shell: export HF_TOKEN=...).
 #
 # Local smoke (tiny subset of layers; still loads full checkpoints — use HPC for real runs):
 #   mkdir -p /tmp/mask_gap_smoke && \\

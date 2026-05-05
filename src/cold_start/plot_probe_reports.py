@@ -26,6 +26,22 @@ def _load_probe_json(path: Path) -> Tuple[str, Dict[str, Any]]:
     return label, data
 
 
+def _scalar_for_dataset_block(block: Dict[str, Any]) -> Optional[float]:
+    """Pick a single 0–1 score for heatmap cells (prefer CV mean for builtins, train for calibration)."""
+    summ = block.get("summary") or {}
+    for key in ("mean_cv_accuracy", "mean_cv_accuracy_mean", "mean_train_accuracy"):
+        v = summ.get(key)
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv == fv:
+            return fv
+    return None
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Plot linear-probe summaries from mask interpretation suite probe_reports/*.json."
@@ -133,6 +149,34 @@ def main() -> None:
     fig2.savefig(line_path, dpi=150)
     plt.close(fig2)
     print(f"Wrote {line_path}")
+
+    # --- Heatmap: mask × dataset (calibration + Irene builtins) ---
+    breakdown_keys: Optional[List[str]] = None
+    for _lb, data in series:
+        bd = data.get("breakdown_by_dataset")
+        if isinstance(bd, dict) and bd:
+            breakdown_keys = sorted(bd.keys())
+            break
+    if breakdown_keys:
+        mat = []
+        for _lb, data in series:
+            bd = data.get("breakdown_by_dataset") or {}
+            row = [_scalar_for_dataset_block(bd.get(k) or {}) for k in breakdown_keys]
+            mat.append(row)
+        arr = [[(v if v is not None else float("nan")) for v in row] for row in mat]
+        fig3, ax3 = plt.subplots(figsize=(max(8, 1.2 * len(breakdown_keys)), max(4, 0.6 * len(labels))))
+        im = ax3.imshow(arr, vmin=0.5, vmax=1.0, cmap="RdYlGn", aspect="auto")
+        ax3.set_xticks(range(len(breakdown_keys)))
+        ax3.set_xticklabels(breakdown_keys, rotation=35, ha="right", fontsize=9)
+        ax3.set_yticks(range(len(labels)))
+        ax3.set_yticklabels(labels)
+        ax3.set_title("Probe score by dataset / property (row=mask)")
+        fig3.colorbar(im, ax=ax3, fraction=0.046, pad=0.04)
+        fig3.tight_layout()
+        hm_path = out / "probe_breakdown_by_dataset.png"
+        fig3.savefig(hm_path, dpi=150)
+        plt.close(fig3)
+        print(f"Wrote {hm_path}")
 
 
 if __name__ == "__main__":

@@ -384,6 +384,14 @@ def main() -> None:
     parser.add_argument("--probe-batch-size", type=int, default=4)
     parser.add_argument("--probe-max-length", type=int, default=512)
     parser.add_argument(
+        "--probe-builtin-datasets",
+        type=str,
+        default="all",
+        help="Irene builtin corpora for mask_probe_report: 'all'|'none'|comma keys (syntax,semantics,...).",
+    )
+    parser.add_argument("--probe-builtin-cv-folds", type=int, default=3)
+    parser.add_argument("--probe-builtin-layer-stride", type=int, default=1)
+    parser.add_argument(
         "--no-probe-plots",
         action="store_true",
         help="With --probe-reports, skip matplotlib charts under probe_plots/ (default: plots on).",
@@ -566,6 +574,9 @@ def main() -> None:
             n_samples=args.probe_n_samples,
             batch_size=args.probe_batch_size,
             max_length=args.probe_max_length,
+            probe_builtin_datasets=args.probe_builtin_datasets,
+            probe_builtin_cv_folds=args.probe_builtin_cv_folds,
+            probe_builtin_layer_stride=args.probe_builtin_layer_stride,
         )
         if not args.no_probe_plots:
             _run_plot_probe_reports(py, out_dir)
@@ -593,6 +604,9 @@ def _run_probe_reports_for_masks(
     n_samples: int,
     batch_size: int,
     max_length: int,
+    probe_builtin_datasets: str = "all",
+    probe_builtin_cv_folds: int = 3,
+    probe_builtin_layer_stride: int = 1,
 ) -> None:
     probe_dir = out_dir / "probe_reports"
     probe_dir.mkdir(parents=True, exist_ok=True)
@@ -622,6 +636,16 @@ def _run_probe_reports_for_masks(
         ]
         if dataset_name:
             cmd.extend(["--dataset-name", dataset_name])
+        cmd.extend(
+            [
+                "--probe-builtin-datasets",
+                probe_builtin_datasets,
+                "--probe-builtin-cv-folds",
+                str(probe_builtin_cv_folds),
+                "--probe-builtin-layer-stride",
+                str(probe_builtin_layer_stride),
+            ]
+        )
         print("RUN:", " ".join(cmd), flush=True)
         r = subprocess.run(cmd, cwd=str(_REPO_ROOT))
         if r.returncode != 0:
@@ -634,6 +658,9 @@ def _run_probe_reports_for_masks(
                 "path": mp,
                 "json": str(outj),
                 "summary": data.get("summary"),
+                "breakdown_dataset_keys": sorted(
+                    (data.get("breakdown_by_dataset") or {}).keys()
+                ),
             }
         except OSError as e:
             per_mask[lb] = {"path": mp, "error": repr(e)}

@@ -7,7 +7,7 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -16,8 +16,20 @@ _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
-from src.cold_start.inference_mask_finder import load_calibration_samples
+from src.cold_start.inference_mask_finder import (
+    DPO_DATASET_NAME,
+    GRPO_DATASET_NAME,
+    load_calibration_samples,
+)
 from src.cold_start.mask_to_cka import apply_mask, load_masks, restore_weights
+from src.cold_start.probe_builtin_datasets import (
+    PROBE_DATASETS,
+    build_concatenated_texts_and_slices,
+    layer_index_from_hook_name,
+    summarize_layer_scores,
+    train_linear_probes_cv,
+    validate_probe_datasets,
+)
 from src.cold_start.utils.activation_hooks import FeatureExtractor, infer_model_input_device
 from src.cold_start.utils.cav_probes import CAVProbeScorer
 
@@ -41,6 +53,60 @@ def _summarize_probe_report(report: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _filter_activation_layers(
+    acts: Dict[str, torch.Tensor], layer_stride: int
+) -> Dict[str, torch.Tensor]:
+    if layer_stride <= 1:
+        return acts
+    keys = list(acts.keys())
+    if not keys:
+        return acts
+    max_li = max(layer_index_from_hook_name(k) for k in keys)
+    keep_idx = set(range(0, max_li + 1, layer_stride))
+    keep_idx.add(max_li)
+    return {k: v for k, v in acts.items() if layer_index_from_hook_name(k) in keep_idx}
+
+
+def _builtin_linear_probes(
+    model,
+    tokenizer,
+    extractor: FeatureExtractor,
+    input_device: torch.device,
+    *,
+    property_names: Sequence[str],
+    batch_size: int,
+    max_length: int,
+    cv_folds: int,
+    layer_stride: int,
+) -> Dict[str, Any]:
+    """Irene-style builtin properties (syntax, semantics, …) on the **current** model weights."""
+    validate_probe_datasets()
+    all_texts, prop_slices, labels_by_prop = build_concatenated_texts_and_slices(property_names)
+    print(f"[probe-builtin] One forward over {len(all_texts)} texts across {len(property_names)} properties...")
+    full_acts = extractor.collect(
+        model,
+        tokenizer,
+        all_texts,
+        input_device,
+        max_length=max_length,
+        batch_size=batch_size,
+    )
+    out: Dict[str, Any] = {}
+    for prop in property_names:
+        slc = prop_slices[prop]
+        sliced = {name: acts[slc] for name, acts in full_acts.items()}
+        sliced = _filter_activation_layers(sliced, layer_stride)
+        labels = labels_by_prop[prop]
+        scores, diag = train_linear_probes_cv(sliced, labels, cv=cv_folds)
+        out[prop] = {
+            "description": PROBE_DATASETS[prop].get("description"),
+            "summary": summarize_layer_scores(scores),
+            "per_layer_cv_accuracy": scores,
+            "diagnostics": diag,
+        }
+    return out
+
+
 def run_probe_report(
     mask_path: str,
     model_name: str,
@@ -53,12 +119,18 @@ def run_probe_report(
     batch_size: int = 4,
     max_length: int = 512,
     seed: int = 42,
+    builtin_properties: Optional[Sequence[str]] = None,
+    builtin_cv_folds: int = 3,
+    builtin_layer_stride: int = 1,
 ) -> Dict[str, Any]:
     chosen_texts, rejected_texts = load_calibration_samples(
         n_samples=n_samples,
         seed=seed,
         mode=mode,
         dataset_name=dataset_name,
+    )
+    effective_cal_dataset = dataset_name or (
+        DPO_DATASET_NAME if mode == "dpo" else GRPO_DATASET_NAME
     )
     if len(chosen_texts) < 4 or len(rejected_texts) < 4:
         raise RuntimeError(
@@ -91,6 +163,7 @@ def run_probe_report(
     extractor = FeatureExtractor()
     extractor.register(model)
     snap = apply_mask(model, masks)
+    builtin_by_property: Optional[Dict[str, Any]] = None
     try:
         print("[probe] Collecting chosen activations...")
         pos_acts = extractor.collect(
@@ -110,6 +183,21 @@ def run_probe_report(
             max_length=max_length,
             batch_size=batch_size,
         )
+
+        if builtin_properties:
+            names = [x.strip() for x in builtin_properties if x and str(x).strip()]
+            if names:
+                builtin_by_property = _builtin_linear_probes(
+                    model,
+                    tokenizer,
+                    extractor,
+                    input_device,
+                    property_names=names,
+                    batch_size=batch_size,
+                    max_length=max_length,
+                    cv_folds=builtin_cv_folds,
+                    layer_stride=builtin_layer_stride,
+                )
     finally:
         extractor.remove()
         restore_weights(model, snap)
@@ -122,11 +210,30 @@ def run_probe_report(
         "model_name": model_name,
         "calibration_mode": mode,
         "calibration_dataset": dataset_name,
+        "calibration_dataset_effective": effective_cal_dataset,
         "n_samples_requested": n_samples,
         "mask_metadata_excerpt": mask_meta if isinstance(mask_meta, dict) else None,
         "summary": summary,
         "probe_report": probe_inner,
+        "breakdown_by_dataset": {
+            "calibration": {
+                "kind": "preference_contrast" if mode == "dpo" else "grpo_chosen_vs_prompt_only",
+                "dataset": effective_cal_dataset,
+                "summary": summary,
+                "per_layer": probe_inner.get("layers"),
+            },
+        },
     }
+    if builtin_by_property:
+        for prop, block in builtin_by_property.items():
+            out["breakdown_by_dataset"][f"builtin_{prop}"] = {
+                "kind": "builtin_binary_probe",
+                "property": prop,
+                "description": block.get("description"),
+                "summary": block.get("summary"),
+                "per_layer_cv_accuracy": block.get("per_layer_cv_accuracy"),
+                "diagnostics": block.get("diagnostics"),
+            }
     os.makedirs(os.path.dirname(os.path.abspath(out_json)) or ".", exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
@@ -157,11 +264,27 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--max-length", type=int, default=512)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--probe-builtin-datasets",
+        type=str,
+        default="all",
+        help="Builtin Irene corpora: 'all' | 'none' | comma keys (syntax,semantics,history,geography,math).",
+    )
+    p.add_argument("--probe-builtin-cv-folds", type=int, default=3)
+    p.add_argument("--probe-builtin-layer-stride", type=int, default=1)
     args = p.parse_args()
 
     if not os.path.isfile(args.mask):
         print(f"Mask not found: {args.mask}", file=sys.stderr)
         sys.exit(1)
+
+    raw_builtin = (args.probe_builtin_datasets or "none").strip().lower()
+    if raw_builtin in ("", "none", "off", "0"):
+        builtin_props = None
+    elif raw_builtin == "all":
+        builtin_props = list(PROBE_DATASETS.keys())
+    else:
+        builtin_props = [s.strip() for s in raw_builtin.split(",") if s.strip()]
 
     run_probe_report(
         args.mask,
@@ -174,6 +297,9 @@ def main() -> None:
         batch_size=args.batch_size,
         max_length=args.max_length,
         seed=args.seed,
+        builtin_properties=builtin_props,
+        builtin_cv_folds=args.probe_builtin_cv_folds,
+        builtin_layer_stride=args.probe_builtin_layer_stride,
     )
 
 
