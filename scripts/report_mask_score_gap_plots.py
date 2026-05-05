@@ -250,7 +250,13 @@ def main() -> None:
     npz_path = analysis_dir / "mask_score_gap_histograms.npz"
     summary_path = analysis_dir / "mask_score_gap_summary.csv"
     if not npz_path.is_file():
-        raise FileNotFoundError(npz_path)
+        raise FileNotFoundError(
+            f"{npz_path}\n"
+            "  Expected directory with mask_score_gap_histograms.npz from mask_score_gap_analysis. "
+            "Example: --analysis-dir ~/rl_casino/results/mask_score_gap_<jobid> "
+            "or scratch .../rl_casino_analysis/mask_score_gap_light_r1/<jobid>. "
+            "Use the full path (unset OUT_DIR is empty; /results/ is not your home results folder)."
+        )
 
     data = np.load(npz_path)
     cm = float(np.clip(args.cdf_mass, 0.5, 1.0))
