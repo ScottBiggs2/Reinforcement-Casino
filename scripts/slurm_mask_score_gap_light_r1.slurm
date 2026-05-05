@@ -8,6 +8,9 @@
 # cd to the GIT REPO ROOT (the directory that contains scripts/ and src/), then:
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 #
+# After the job, a copy is written to ${HOME}/rl_casino/results/mask_score_gap_<jobid>/ (override root
+# with RESULTS_MIRROR_ROOT, or set RESULTS_MIRROR_DISABLE=1 to skip).
+#
 # Gated Llama: pass HF token on ONE line (multi-line backslash pastes often break and the next
 # line runs alone as a command). Example — replace YOUR_TOKEN, use real paths if not defaults:
 #
@@ -148,3 +151,12 @@ fi
 "${TRAIN_PY}" scripts/report_mask_score_gap_plots.py --analysis-dir "${OUT_DIR}"
 
 echo "Done. Artifacts: ${OUT_DIR} (figures in ${OUT_DIR}/figures)"
+
+# Optional copy to $HOME for quick browsing (disable with RESULTS_MIRROR_DISABLE=1)
+if [ "${RESULTS_MIRROR_DISABLE:-0}" != "1" ]; then
+  _MIRROR_ROOT="${RESULTS_MIRROR_ROOT:-${HOME}/rl_casino/results}"
+  _MIRROR="${_MIRROR_ROOT}/mask_score_gap_${SLURM_JOB_ID}"
+  mkdir -p "${_MIRROR}"
+  cp -a "${OUT_DIR}/." "${_MIRROR}/"
+  echo "Mirrored to ${_MIRROR}"
+fi
