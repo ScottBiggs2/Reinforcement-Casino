@@ -6,6 +6,9 @@
 #
 #   cd /home/$USER/rl_casino
 #   export HF_TOKEN="$(tr -d '\n\r' < ~/.cache/huggingface/token)"   # optional if --export=ALL
+#   export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"               # cert tau / margins (alias: CERT_SPARSITY_PERCENT)
+#   export CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
+#   export CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"         # set 0 to pass --cert_no_match_tie_break
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 #
 # Copy out (after job):
@@ -29,6 +32,7 @@
 #
 # Optional overrides (still one line, comma-separated after ALL):
 #   ...,CKPT500_DIR=/scratch/$USER/.../checkpoint-500,DELTA_LOG_DIR=/scratch/$USER/.../deltas/...,OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_gap1,VERIFY_DELTAS_DIR=/path/with/deltas_step_500.pt
+#   ...,SPARSITY_PERCENT=97.5,CERT_MIN_LAYER_KEEP_RATIO=0,CERT_MATCH_TIE_BREAK=1
 #
 # If TRAIN_PY errors with /conda_envs/... (no /scratch/$USER): your shell exported TRAIN_ENV wrong.
 #   unset TRAIN_ENV
@@ -123,6 +127,10 @@ HISTOGRAM_BINS="${HISTOGRAM_BINS:-2048}"
 MAX_KEYS="${MAX_KEYS:-}"
 # Optional: directory containing deltas_step_500.pt (omit if that snapshot does not exist yet).
 VERIFY_DELTAS_DIR="${VERIFY_DELTAS_DIR:-}"
+# Certifiability margins (Theorem 3): global tau at sparsity rho; see mask_score_gap_gap_diagnostics.json
+SPARSITY_PERCENT="${CERT_SPARSITY_PERCENT:-${SPARSITY_PERCENT:-97.5}}"
+CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
+CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"
 
 mkdir -p "${OUT_DIR}"
 
@@ -135,6 +143,9 @@ echo "CKPT500_DIR=${CKPT500_DIR}"
 echo "DELTA_LOG_DIR=${DELTA_LOG_DIR}"
 echo "OUT_DIR=${OUT_DIR}"
 echo "MAGNITUDE_MILESTONES=${MAGNITUDE_MILESTONES}"
+echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}"
+echo "CERT_MIN_LAYER_KEEP_RATIO=${CERT_MIN_LAYER_KEEP_RATIO}"
+echo "CERT_MATCH_TIE_BREAK=${CERT_MATCH_TIE_BREAK}"
 
 ARGS=(
   src/analysis/mask_score_gap_analysis.py
@@ -144,7 +155,12 @@ ARGS=(
   --magnitude_milestones "${MAGNITUDE_MILESTONES}"
   --out_dir "${OUT_DIR}"
   --histogram_bins "${HISTOGRAM_BINS}"
+  --sparsity_percent "${SPARSITY_PERCENT}"
+  --cert_min_layer_keep_ratio "${CERT_MIN_LAYER_KEEP_RATIO}"
 )
+if [ "${CERT_MATCH_TIE_BREAK}" = "0" ] || [ "${CERT_MATCH_TIE_BREAK}" = "false" ]; then
+  ARGS+=( --cert_no_match_tie_break )
+fi
 if [ "${FORCE_MAG_CACHE_REBUILD}" = "1" ]; then
   ARGS+=( --force_magnitude_cache_rebuild )
 fi

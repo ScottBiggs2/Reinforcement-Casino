@@ -42,6 +42,13 @@ from src.warm_start.checkpoint_diff_mask_finder import (  # noqa: E402
 )
 from src.warm_start.even_better_mask_finder import load_deltas_streaming  # noqa: E402
 
+from src.analysis.certifiability_margin import (  # noqa: E402
+    certifiability_strict_fraction,
+    flatten_scores_in_order,
+    global_topk_threshold,
+    scores_for_cert_selection,
+)
+
 
 def ensure_hf_hub_token() -> None:
     if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
@@ -295,6 +302,9 @@ def process_keys(
     random_seeds: List[int],
     histogram_bins: int,
     out_dir: Path,
+    sparsity_percent: float,
+    cert_match_tie_break: bool,
+    cert_min_layer_keep_ratio: float,
 ) -> None:
     qs = (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
     milestones = sorted(milestones)
@@ -303,22 +313,60 @@ def process_keys(
     rnd_norm_hists = {s: LinSpaceHistogram(histogram_bins, upper=1.0) for s in random_seeds}
     rnd_w_raw = {s: MomentAccum() for s in random_seeds}
     rnd_w_norm = {s: MomentAccum() for s in random_seeds}
+    rnd_margin_raw_hists = {s: LogSpaceHistogram(histogram_bins) for s in random_seeds}
+    rnd_margin_w_raw = {s: MomentAccum() for s in random_seeds}
 
     mag_raw_hists = {step: LogSpaceHistogram(histogram_bins) for step in milestones}
     mag_norm_hists = {step: LinSpaceHistogram(histogram_bins, upper=1.0) for step in milestones}
     mag_w_raw = {step: MomentAccum() for step in milestones}
     mag_w_norm = {step: MomentAccum() for step in milestones}
+    mag_margin_raw_hists = {step: LogSpaceHistogram(histogram_bins) for step in milestones}
+    mag_margin_w_raw = {step: MomentAccum() for step in milestones}
+
+    oracle_margin_hist = LogSpaceHistogram(histogram_bins)
+    oracle_margin_w = MomentAccum()
 
     gap_diag: Dict[str, object] = {
         "_note": (
             "frac_zero_exact counts exact v=0 floats (oracle match at that coordinate). "
             "Tiny-but-positive gaps are distinct; log histogram uses adaptive eps."
         ),
+        "cert_mode": (
+            "global_topk_tau: flatten scores in analysis key order; τ = min(top-k values); "
+            "m_i = |s_i^(sel) − τ|; cert_strict = mean_i 1[|s_i^(sel) − s*_i| < m_i]. "
+            "Hybrid masks (min_layer_keep_ratio > 0 in mask_utils) are not equivalent to a single scalar τ."
+        ),
+        "cert_sparsity_percent": float(sparsity_percent),
+        "cert_match_tie_break": bool(cert_match_tie_break),
+        "cert_min_layer_keep_ratio": float(cert_min_layer_keep_ratio),
     }
+    if cert_min_layer_keep_ratio > 0:
+        gap_diag["cert_hybrid_warning"] = (
+            f"cert_min_layer_keep_ratio={cert_min_layer_keep_ratio} > 0 only affects this diagnostic metadata; "
+            "τ and m_i are still computed with pure global top-k (theorem-style). Training masks may use per-layer floors."
+        )
 
     layer_rows: List[Dict[str, object]] = []
     max_verify_diff = 0.0
     verify_key_worst = ""
+
+    # ---------- oracle scores: global τ and margins m_i(s*) (symmetry diagnostic)
+    oracle_scores_dict = {
+        k: (final_sd[k] - initial_sd[k]).abs().float() for k in keys if k in initial_sd and k in final_sd
+    }
+    oracle_flat = flatten_scores_in_order(oracle_scores_dict, keys)
+    if oracle_flat.numel() > 0:
+        o_sel = scores_for_cert_selection(oracle_flat, match_tie_break=cert_match_tie_break)
+        tau_o, k_o, N_o = global_topk_threshold(o_sel, sparsity_percent)
+        margin_o = (o_sel - tau_o).abs()
+        oracle_margin_hist.update(margin_o)
+        oracle_margin_w.update(margin_o)
+        gap_diag["cert_oracle_tau"] = tau_o
+        gap_diag["cert_oracle_k_keep"] = k_o
+        gap_diag["cert_oracle_N"] = N_o
+
+    rnd_flat_parts: Dict[int, List[torch.Tensor]] = {s: [] for s in random_seeds}
+    oracle_flat_parts_rand: List[torch.Tensor] = []
 
     # ---------- random vs oracle (one pass over keys)
     print("Computing random-mask gaps vs oracle (one pass)...")
@@ -328,6 +376,7 @@ def process_keys(
         w0 = initial_sd[name].to(torch.float32)
         w1 = final_sd[name].to(torch.float32)
         s_oracle = (w1 - w0).abs()
+        oracle_flat_parts_rand.append(s_oracle.reshape(-1))
         row_base: Dict[str, object] = {
             "param_name": name,
             "numel": int(s_oracle.numel()),
@@ -337,6 +386,7 @@ def process_keys(
             g = torch.Generator(device="cpu")
             g.manual_seed(int(seed))
             s_rand = torch.rand(s_oracle.shape, generator=g, dtype=torch.float32)
+            rnd_flat_parts[seed].append(s_rand.reshape(-1))
             v_rr = (s_rand - s_oracle).abs()
             r_n = _minmax_norm(s_rand)
             v_rn = (r_n - o_n_r).abs()
@@ -351,6 +401,28 @@ def process_keys(
         del w0, w1, s_oracle, o_n_r
         gc.collect()
 
+    oracle_flat_vec = torch.cat(oracle_flat_parts_rand) if oracle_flat_parts_rand else torch.empty(0)
+    for seed in random_seeds:
+        parts = rnd_flat_parts.get(seed, [])
+        if not parts or oracle_flat_vec.numel() == 0:
+            continue
+        flat_r = torch.cat(parts)
+        if flat_r.numel() != oracle_flat_vec.numel():
+            continue
+        r_sel = scores_for_cert_selection(flat_r, match_tie_break=cert_match_tie_break)
+        tau_r, k_r, N_r = global_topk_threshold(r_sel, sparsity_percent)
+        margin_r = (r_sel - tau_r).abs()
+        gap_cert_r = (r_sel - oracle_flat_vec).abs()
+        c_ok, c_den = certifiability_strict_fraction(gap_cert_r, margin_r)
+        rnd_margin_raw_hists[seed].update(margin_r)
+        rnd_margin_w_raw[seed].update(margin_r)
+        gap_diag[f"cert_random_seed{seed}_tau"] = tau_r
+        gap_diag[f"cert_random_seed{seed}_k_keep"] = k_r
+        gap_diag[f"cert_random_seed{seed}_N"] = N_r
+        gap_diag[f"cert_strict_frac_random_seed{seed}"] = (c_ok / c_den) if c_den else float("nan")
+        gap_diag[f"cert_strict_numer_random_seed{seed}"] = c_ok
+        gap_diag[f"cert_strict_denom_random_seed{seed}"] = c_den
+
     # ---------- per milestone magnitude caches
     layer_by_name = {row["param_name"]: row for row in layer_rows}
 
@@ -363,6 +435,8 @@ def process_keys(
         vmin_pos_accum = torch.tensor(float("inf"))
         vmax_accum = torch.tensor(float("-inf"))
         oracle_match_sample: List[Dict[str, object]] = []
+        flat_mag_chunks: List[torch.Tensor] = []
+        flat_oracle_chunks: List[torch.Tensor] = []
 
         for ki, name in enumerate(keys):
             if name not in initial_sd or name not in final_sd or name not in mag_scores:
@@ -374,6 +448,9 @@ def process_keys(
             if s_mag.shape != s_oracle.shape:
                 del w0, w1, s_oracle, s_mag
                 continue
+
+            flat_mag_chunks.append(s_mag.reshape(-1).clone())
+            flat_oracle_chunks.append(s_oracle.reshape(-1).clone())
 
             if delta_verify is not None and name in delta_verify:
                 dv = delta_verify[name].to(torch.float32).abs()
@@ -432,6 +509,23 @@ def process_keys(
         gap_diag[f"milestone_{step}_raw_global_max"] = _mx if math.isfinite(_mx) else float("nan")
         gap_diag[f"milestone_{step}_sample_tensors"] = oracle_match_sample[:2]
 
+        if flat_mag_chunks:
+            flat_mag = torch.cat(flat_mag_chunks)
+            flat_oracle_m = torch.cat(flat_oracle_chunks)
+            m_sel = scores_for_cert_selection(flat_mag, match_tie_break=cert_match_tie_break)
+            tau_m, k_m, N_m = global_topk_threshold(m_sel, sparsity_percent)
+            margin_m = (m_sel - tau_m).abs()
+            gap_cert_m = (m_sel - flat_oracle_m).abs()
+            c_ok, c_den = certifiability_strict_fraction(gap_cert_m, margin_m)
+            mag_margin_raw_hists[step].update(margin_m)
+            mag_margin_w_raw[step].update(margin_m)
+            gap_diag[f"cert_magnitude_step{step}_tau"] = tau_m
+            gap_diag[f"cert_magnitude_step{step}_k_keep"] = k_m
+            gap_diag[f"cert_magnitude_step{step}_N"] = N_m
+            gap_diag[f"cert_strict_frac_magnitude_step{step}"] = (c_ok / c_den) if c_den else float("nan")
+            gap_diag[f"cert_strict_numer_magnitude_step{step}"] = c_ok
+            gap_diag[f"cert_strict_denom_magnitude_step{step}"] = c_den
+
         del mag_scores
         gc.collect()
 
@@ -459,12 +553,33 @@ def process_keys(
             raise ValueError("pack_row requires h_log or h_lin")
         return {"case": case, "total_numel": acc.n, "mean": acc.mean_value(), "std": acc.std_value(), **qdict}
 
+    def pack_cert_row(case: str, numer: int, denom: int) -> Dict[str, object]:
+        frac = (numer / denom) if denom else float("nan")
+        qnan = {f"p{int(round(q * 100)):02d}": float("nan") for q in qs}
+        return {"case": case, "total_numel": denom, "mean": frac, "std": 0.0, **qnan}
+
     for step in milestones:
         summary_rows.append(pack_row(f"magnitude_raw_step{step}", mag_w_raw[step], mag_raw_hists[step], None))
         summary_rows.append(pack_row(f"magnitude_norm_step{step}", mag_w_norm[step], None, mag_norm_hists[step]))
+        summary_rows.append(
+            pack_row(f"magnitude_margin_raw_step{step}", mag_margin_w_raw[step], mag_margin_raw_hists[step], None)
+        )
+        dn = int(gap_diag.get(f"cert_strict_denom_magnitude_step{step}", 0) or 0)
+        nr = int(gap_diag.get(f"cert_strict_numer_magnitude_step{step}", 0) or 0)
+        if dn > 0:
+            summary_rows.append(pack_cert_row(f"cert_strict_magnitude_step{step}", nr, dn))
+    if oracle_margin_w.n > 0:
+        summary_rows.append(pack_row("oracle_margin_raw", oracle_margin_w, oracle_margin_hist, None))
     for seed in random_seeds:
         summary_rows.append(pack_row(f"random_raw_seed{seed}", rnd_w_raw[seed], rnd_raw_hists[seed], None))
         summary_rows.append(pack_row(f"random_norm_seed{seed}", rnd_w_norm[seed], None, rnd_norm_hists[seed]))
+        summary_rows.append(
+            pack_row(f"random_margin_raw_seed{seed}", rnd_margin_w_raw[seed], rnd_margin_raw_hists[seed], None)
+        )
+        dn = int(gap_diag.get(f"cert_strict_denom_random_seed{seed}", 0) or 0)
+        nr = int(gap_diag.get(f"cert_strict_numer_random_seed{seed}", 0) or 0)
+        if dn > 0:
+            summary_rows.append(pack_cert_row(f"cert_strict_random_seed{seed}", nr, dn))
 
     normalized_rows = sorted(layer_rows, key=lambda r: str(r.get("param_name", "")))
 
@@ -494,6 +609,14 @@ def process_keys(
         npz_payload[f"random_raw_seed{seed}_log_edges"] = rnd_raw_hists[seed].edges
         npz_payload[f"random_norm_seed{seed}_counts"] = rnd_norm_hists[seed].counts
         npz_payload[f"random_norm_seed{seed}_edges"] = rnd_norm_hists[seed].edges
+        npz_payload[f"random_margin_raw_seed{seed}_counts"] = rnd_margin_raw_hists[seed].counts
+        npz_payload[f"random_margin_raw_seed{seed}_log_edges"] = rnd_margin_raw_hists[seed].edges
+    for step in milestones:
+        npz_payload[f"magnitude_margin_raw_step{step}_counts"] = mag_margin_raw_hists[step].counts
+        npz_payload[f"magnitude_margin_raw_step{step}_log_edges"] = mag_margin_raw_hists[step].edges
+    if oracle_margin_hist.counts.sum() > 0:
+        npz_payload["oracle_margin_raw_counts"] = oracle_margin_hist.counts
+        npz_payload["oracle_margin_raw_log_edges"] = oracle_margin_hist.edges
 
     np.savez(out_dir / "mask_score_gap_histograms.npz", **npz_payload)
     print(f"Wrote {summary_path}, {by_layer_path}, mask_score_gap_histograms.npz, mask_score_gap_gap_diagnostics.json")
@@ -526,6 +649,26 @@ def parse_args() -> argparse.Namespace:
         "--force_magnitude_cache_rebuild",
         action="store_true",
         help="Re-stream deltas and overwrite milestone caches under magnitude_caches/",
+    )
+    _env_sp = os.environ.get("CERT_SPARSITY_PERCENT") or os.environ.get("SPARSITY_PERCENT")
+    _default_sparsity = float(_env_sp) if _env_sp else 97.5
+    p.add_argument(
+        "--sparsity_percent",
+        type=float,
+        default=_default_sparsity,
+        help="Global sparsity rho (percent pruned): keep k = floor((100-rho)/100*N); tau from top-k boundary. "
+        "Default from CERT_SPARSITY_PERCENT or SPARSITY_PERCENT env, else 97.5.",
+    )
+    p.add_argument(
+        "--cert_min_layer_keep_ratio",
+        type=float,
+        default=float(os.environ.get("CERT_MIN_LAYER_KEEP_RATIO", "0")),
+        help="Document-only for hybrid masks: τ/m_i stay pure-global; >0 logs a warning in gap diagnostics.",
+    )
+    p.add_argument(
+        "--cert_no_match_tie_break",
+        action="store_true",
+        help="Use raw scores for τ and margins (no tie-break noise). Default matches mask_utils tie-break.",
     )
     return p.parse_args()
 
@@ -576,6 +719,12 @@ def main() -> None:
         print(f"Loading verification snapshot {cand}")
         delta_verify = safe_torch_load(str(cand), map_location="cpu")
 
+    cert_match_tie_break = True
+    if getattr(args, "cert_no_match_tie_break", False):
+        cert_match_tie_break = False
+    elif os.environ.get("CERT_MATCH_TIE_BREAK", "").strip().lower() in ("0", "false", "no"):
+        cert_match_tie_break = False
+
     meta = {
         "initial_model": args.initial_model,
         "final_model": args.final_model,
@@ -588,6 +737,13 @@ def main() -> None:
         "num_keys": len(keys),
         "verify_deltas_dir": args.verify_deltas_dir,
         "git_rev": _git_rev(),
+        "sparsity_percent": float(args.sparsity_percent),
+        "cert_match_tie_break": cert_match_tie_break,
+        "cert_min_layer_keep_ratio": float(args.cert_min_layer_keep_ratio),
+        "cert_note": (
+            "Margins use pure global τ on flattened scores (key order = analysis iteration order). "
+            "Training hybrid masks with min_layer_keep_ratio>0 are not described by this single τ."
+        ),
     }
     with (out_dir / "mask_score_gap_run.json").open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
@@ -603,6 +759,9 @@ def main() -> None:
         random_seeds=seeds,
         histogram_bins=args.histogram_bins,
         out_dir=out_dir,
+        sparsity_percent=float(args.sparsity_percent),
+        cert_match_tie_break=cert_match_tie_break,
+        cert_min_layer_keep_ratio=float(args.cert_min_layer_keep_ratio),
     )
 
 

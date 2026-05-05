@@ -117,6 +117,15 @@ def _parse_milestone_steps(npz_keys: Sequence[str]) -> List[int]:
     return sorted(set(steps))
 
 
+def _margin_milestone_steps(npz_keys: Sequence[str], milestones: Sequence[int]) -> List[int]:
+    out: List[int] = []
+    for s in milestones:
+        k = f"magnitude_margin_raw_step{s}_counts"
+        if k in npz_keys:
+            out.append(int(s))
+    return out
+
+
 def _colors(milestones: List[int]) -> Dict[str, str]:
     base = plt.rcParams["axes.prop_cycle"].by_key().get("color", []) or []
     if not base:
@@ -337,6 +346,54 @@ def main() -> None:
                 fig.savefig(out_dir / f"random_raw_ecdf_multi_seed.{ext}", dpi=150)
             plt.close(fig)
 
+        # ---------------- margin ECDF overlays (Theorem 3): m_i(s) = |s_i - tau|
+        m_steps = _margin_milestone_steps(keys, milestones)
+        margin_series_lo: List[Tuple[np.ndarray, np.ndarray]] = []
+        for s in m_steps:
+            ck, ek = f"magnitude_margin_raw_step{s}_counts", f"magnitude_margin_raw_step{s}_log_edges"
+            if ck in data.files and float(data[ck].sum()) > 0:
+                margin_series_lo.append((data[ck], data[ek]))
+        if seed_primary:
+            cmr = f"random_margin_raw_seed{seed_primary}_counts"
+            emr = f"random_margin_raw_seed{seed_primary}_log_edges"
+            if cmr in data.files and float(data[cmr].sum()) > 0:
+                margin_series_lo.append((data[cmr], data[emr]))
+        if "oracle_margin_raw_counts" in data.files and float(data["oracle_margin_raw_counts"].sum()) > 0:
+            margin_series_lo.append((data["oracle_margin_raw_counts"], data["oracle_margin_raw_log_edges"]))
+
+        if margin_series_lo:
+            xlim_m = (
+                (1e-30, float(args.raw_xmax))
+                if args.raw_xmax is not None
+                else _tight_union_log_xlim(margin_series_lo, cdf_mass=cm)
+            )
+            fig, ax = plt.subplots(figsize=(10, 5.5))
+            for s in m_steps:
+                ck, ek = f"magnitude_margin_raw_step{s}_counts", f"magnitude_margin_raw_step{s}_log_edges"
+                if ck not in data.files or float(data[ck].sum()) <= 0:
+                    continue
+                x, y = _ecdf_log_edges(data[ck], data[ek])
+                ax.step(x, y, where="mid", label=f"|mag@<={s} - tau|", color=cols[f"step{s}"], lw=2)
+            if seed_primary:
+                cmr, emr = f"random_margin_raw_seed{seed_primary}_counts", f"random_margin_raw_seed{seed_primary}_log_edges"
+                if cmr in data.files and float(data[cmr].sum()) > 0:
+                    x, y = _ecdf_log_edges(data[cmr], data[emr])
+                    ax.step(x, y, where="mid", label=f"random margin (seed {seed_primary})", color=cols["random"], lw=2, ls="--")
+            if "oracle_margin_raw_counts" in data.files and float(data["oracle_margin_raw_counts"].sum()) > 0:
+                x, y = _ecdf_log_edges(data["oracle_margin_raw_counts"], data["oracle_margin_raw_log_edges"])
+                ax.step(x, y, where="mid", label="|oracle - tau*|", color="#2ca02c", lw=2, ls=":")
+            ax.set_xscale("log")
+            ax.set_xlim(xlim_m[0], xlim_m[1])
+            ax.set_ylim(0, 1)
+            ax.set_xlabel("margin (linear)")
+            ax.set_ylabel("fraction margin <= x")
+            ax.set_title("ECDF certifiability margins m_i(s) = |s_i - tau_rho(s)| (global top-k)")
+            ax.legend(loc="lower right", fontsize=8)
+            fig.tight_layout()
+            for ext in ("png", "pdf"):
+                fig.savefig(out_dir / f"combined_margin_ecdf_logx.{ext}", dpi=175)
+            plt.close(fig)
+
     if summary_path.is_file():
         rows = load_summary_csv(summary_path)
         fig, ax = plt.subplots(figsize=(10, max(4.0, len(rows) * 0.22)))
@@ -351,5 +408,21 @@ def main() -> None:
         for ext in ("png", "pdf"):
             fig.savefig(out_dir / f"summary_mean_bar.{ext}", dpi=150)
         plt.close(fig)
+
+        cert_rows = [r for r in rows if str(r.get("case", "")).startswith("cert_strict_")]
+        if cert_rows:
+            fig, ax = plt.subplots(figsize=(10, max(3.5, len(cert_rows) * 0.28)))
+            ccases = [r["case"] for r in cert_rows]
+            fracs = np.array(
+                [float(r["mean"]) if r.get("mean") else float("nan") for r in cert_rows], dtype=np.float64
+            )
+            ax.barh(ccases, np.clip(fracs, 0.0, 1.0))
+            ax.set_xlim(0, 1.05)
+            ax.set_xlabel("fraction weights with gap < margin (strict)")
+            ax.set_title("Certifiability rate P[g_i < m_i] at configured sparsity")
+            fig.tight_layout()
+            for ext in ("png", "pdf"):
+                fig.savefig(out_dir / f"certifiability_frac_bar.{ext}", dpi=150)
+            plt.close(fig)
 
     print(f"Wrote figures under {out_dir}")
