@@ -214,6 +214,20 @@ merge_shards job_id=6590161 (after milestone array 6590160)
 Final artifacts under OUT_DIR after job 6590161 completes.
 (base) [biggs.s@explorer-02 rl_casino]$ 
 
+# 11:30 Squeue status: 
+(base) [biggs.s@explorer-02 rl_casino]$ squeue -u $USER
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           6590319       gpu h200_opt  biggs.s PD       0:00      1 (Priority)
+           6589014     short mask_sco  biggs.s PD       0:00      1 (Priority)
+           6590158     short mgap_par  biggs.s PD       0:00      1 (Priority)
+           6590161     short mgap_par  biggs.s PD       0:00      1 (Dependency)
+     6590160_[0-3]     short mgap_par  biggs.s PD       0:00      1 (Dependency)
+           6590159     short mgap_par  biggs.s PD       0:00      1 (Dependency)
+           6590308     short tulu3_pl  biggs.s PD       0:00      1 (Priority)
+(base) [biggs.s@explorer-02 rl_casino]$ 
+
+
+
 ## SparseAdamW optimizer.step() microbench (H200)
 
 Goal: isolate optimizer kernel memory/speed savings (no forward/backward).
