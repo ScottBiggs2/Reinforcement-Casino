@@ -2,13 +2,10 @@
 """
 Microbenchmark: optimizer.step() cost only (no forward/backward).
 
-This isolates the part SparseAdamW accelerates and is useful when end-to-end DPO
-step time is dominated by dense forward/backward.
-
-It creates synthetic 2D weight tensors (matching typical model matrix shapes)
-and runs optimizer.step() repeatedly with fixed random gradients.
-
-Outputs a CSV and Markdown summary under --out-dir.
+Design goals:
+- Highlight SparseAdamW kernel memory/speed savings in isolation.
+- Use REAL mask shapes/keys to create parameters so SparseAdamW update patterns match reality.
+- Fixed step count (default 50) with trimmed stats excluding first/last 10% for fairness.
 """
 
 from __future__ import annotations
@@ -16,7 +13,6 @@ from __future__ import annotations
 import argparse
 import csv
 import math
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,52 +26,74 @@ from src.utils.mask_manager import SparseMaskManager
 
 
 @dataclass
-class Case:
-    name: str
-    optimizer: str  # adamw_torch, adamw_8bit, sparse_adamw
-    mask_path: Optional[str] = None
+class ResultRow:
+    case: str
+    optimizer: str
+    mask_label: str
+    mask_path: str
+    steps_total: int
+    trim_frac: float
+    mean_ms_mid: float
+    p50_ms_mid: float
+    mean_ms_all: float
+    p50_ms_all: float
+    note: str
 
 
 def _sync():
     if torch.cuda.is_available():
         torch.cuda.synchronize()
 
+def _percentile(xs: List[float], q: float) -> float:
+    if not xs:
+        return float("nan")
+    xs = sorted(xs)
+    i = int(round((len(xs) - 1) * q))
+    i = max(0, min(i, len(xs) - 1))
+    return float(xs[i])
 
-def _timed_steps(opt, n: int, warmup: int, sync_cuda: bool) -> Tuple[float, float]:
-    # returns (mean_ms, p50_ms) across measured steps
+def _trimmed(xs: List[float], trim_frac: float) -> List[float]:
+    if not xs:
+        return []
+    n = len(xs)
+    k = int(math.floor(n * float(trim_frac)))
+    if 2 * k >= n:
+        return xs
+    return xs[k : n - k]
+
+
+def _timed_steps(opt, steps: int, sync_cuda: bool) -> List[float]:
     times: List[float] = []
-    for i in range(warmup + n):
+    for _ in range(int(steps)):
         if sync_cuda:
             _sync()
         t0 = time.perf_counter()
         opt.step()
         if sync_cuda:
             _sync()
-        dt = (time.perf_counter() - t0) * 1e3
-        if i >= warmup:
-            times.append(dt)
-    times.sort()
-    mean = sum(times) / max(1, len(times))
-    p50 = times[len(times) // 2] if times else float("nan")
-    return mean, p50
+        times.append((time.perf_counter() - t0) * 1e3)
+    return times
 
 
-def _make_params(
+def _make_params_from_mask(
     *,
+    mask_path: str,
     device: torch.device,
     dtype: torch.dtype,
-    shapes: List[Tuple[int, int]],
 ) -> Tuple[List[Tuple[str, torch.nn.Parameter]], Dict[str, torch.Tensor]]:
     named: List[Tuple[str, torch.nn.Parameter]] = []
-    grads: Dict[str, torch.Tensor] = {}
-    for i, (m, n) in enumerate(shapes):
-        name = f"w{i}"
-        p = torch.nn.Parameter(torch.randn((m, n), device=device, dtype=dtype))
-        g = torch.randn_like(p)
-        p.grad = g
-        named.append((name, p))
-        grads[name] = g
-    return named, grads
+    bool_masks: Dict[str, torch.Tensor] = {}
+    mm = SparseMaskManager(mask_path, device=device)
+    for k, m in mm.masks.items():
+        if m.dim() != 2:
+            continue
+        p = torch.nn.Parameter(torch.randn(tuple(m.shape), device=device, dtype=dtype))
+        p.grad = torch.randn_like(p)
+        named.append((k, p))
+        bool_masks[k] = m.bool() if m.dtype != torch.bool else m
+    if not named:
+        raise RuntimeError(f"No 2D mask tensors found in {mask_path}")
+    return named, bool_masks
 
 
 def main() -> int:
@@ -108,87 +126,118 @@ def main() -> int:
         (14336, 4096),
     ]
 
-    named_params, _ = _make_params(device=dev, dtype=dtype, shapes=shapes)
+    # NOTE: the original script used fixed synthetic shapes. We now build params from the mask
+    # file to keep SparseAdamW's update pattern realistic.
+    rows: List[ResultRow] = []
 
-    cases: List[Case] = [
-        Case(name="adamw_torch", optimizer="adamw_torch"),
-        Case(name="adamw_8bit", optimizer="adamw_8bit"),
-        Case(name="sparse_adamw", optimizer="sparse_adamw", mask_path=args.mask_path),
-    ]
-
-    rows: List[dict] = []
-    for c in cases:
-        # fresh params per case so state sizes don't interfere
-        named_params, _ = _make_params(device=dev, dtype=dtype, shapes=shapes)
-        params = [p for _, p in named_params]
-
-        if c.optimizer == "adamw_torch":
-            opt = torch.optim.AdamW(params, lr=args.lr)
-        elif c.optimizer == "adamw_8bit":
-            try:
-                from bitsandbytes.optim import AdamW8bit
-            except ImportError:
-                rows.append(
-                    {
-                        "case": c.name,
-                        "optimizer": c.optimizer,
-                        "mean_step_ms": "",
-                        "p50_step_ms": "",
-                        "note": "bitsandbytes not importable",
-                    }
+    def _run_case(case: str, optimizer: str, build_opt_fn):
+        try:
+            named_params, _ = _make_params_from_mask(
+                mask_path=str(args.mask_path),
+                device=dev,
+                dtype=dtype,
+            )
+            params = [p for _, p in named_params]
+            opt = build_opt_fn(named_params, params)
+            times = _timed_steps(opt, steps=args.steps, sync_cuda=bool(args.sync_cuda))
+            mid = _trimmed(times, float(args.trim_frac))
+            rows.append(
+                ResultRow(
+                    case=f"{case}_{args.mask_label}",
+                    optimizer=optimizer,
+                    mask_label=str(args.mask_label),
+                    mask_path=str(args.mask_path),
+                    steps_total=int(args.steps),
+                    trim_frac=float(args.trim_frac),
+                    mean_ms_mid=float(sum(mid) / len(mid)) if mid else float("nan"),
+                    p50_ms_mid=_percentile(mid, 0.50),
+                    mean_ms_all=float(sum(times) / len(times)) if times else float("nan"),
+                    p50_ms_all=_percentile(times, 0.50),
+                    note="",
                 )
-                continue
-            opt = AdamW8bit(params, lr=args.lr)
-        elif c.optimizer == "sparse_adamw":
-            if not c.mask_path:
-                rows.append(
-                    {
-                        "case": c.name,
-                        "optimizer": c.optimizer,
-                        "mean_step_ms": "",
-                        "p50_step_ms": "",
-                        "note": "missing --mask_path",
-                    }
+            )
+        except Exception as e:
+            rows.append(
+                ResultRow(
+                    case=f"{case}_{args.mask_label}",
+                    optimizer=optimizer,
+                    mask_label=str(args.mask_label),
+                    mask_path=str(args.mask_path),
+                    steps_total=int(args.steps),
+                    trim_frac=float(args.trim_frac),
+                    mean_ms_mid=float("nan"),
+                    p50_ms_mid=float("nan"),
+                    mean_ms_all=float("nan"),
+                    p50_ms_all=float("nan"),
+                    note=str(e),
                 )
-                continue
-            mm = SparseMaskManager(c.mask_path, device=dev)
-            opt = SparseAdamW(named_params, mm, lr=args.lr, block_size=args.block_size, mlp_only=False)
+            )
+
+    if int(args.run_dense_torch) == 1:
+        _run_case("dense", "adamw_torch", lambda named, params: torch.optim.AdamW(params, lr=args.lr))
+
+    if int(args.run_dense_8bit) == 1:
+        try:
+            from bitsandbytes.optim import AdamW8bit
+        except Exception as e:
+            rows.append(
+                ResultRow(
+                    case=f"dense8bit_{args.mask_label}",
+                    optimizer="adamw_8bit",
+                    mask_label=str(args.mask_label),
+                    mask_path=str(args.mask_path),
+                    steps_total=int(args.steps),
+                    trim_frac=float(args.trim_frac),
+                    mean_ms_mid=float("nan"),
+                    p50_ms_mid=float("nan"),
+                    mean_ms_all=float("nan"),
+                    p50_ms_all=float("nan"),
+                    note=f"bitsandbytes import failed: {e}",
+                )
+            )
         else:
-            raise ValueError(c.optimizer)
+            _run_case("dense8bit", "adamw_8bit", lambda named, params: AdamW8bit(params, lr=args.lr))
 
-        mean_ms, p50_ms = _timed_steps(opt, n=args.steps, warmup=args.warmup, sync_cuda=bool(args.sync_cuda))
-        rows.append(
-            {
-                "case": c.name,
-                "optimizer": c.optimizer,
-                "mean_step_ms": round(mean_ms, 6),
-                "p50_step_ms": round(p50_ms, 6),
-                "note": "",
-            }
+    if int(args.run_sparse) == 1:
+        _run_case(
+            "sparse",
+            "sparse_adamw",
+            lambda named, params: SparseAdamW(
+                named,
+                SparseMaskManager(str(args.mask_path), device=dev),
+                lr=args.lr,
+                block_size=args.block_size,
+                mlp_only=False,
+            ),
         )
 
     csv_path = out_dir / "optimizer_step_microbench.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w = csv.DictWriter(f, fieldnames=list(ResultRow.__annotations__.keys()))
         w.writeheader()
-        w.writerows(rows)
+        for r in rows:
+            w.writerow(r.__dict__)
 
     md_path = out_dir / "optimizer_step_microbench.md"
-    lines = ["# Optimizer.step() microbenchmark", ""]
-    lines.append(f"- **device:** `{dev}`")
-    lines.append(f"- **dtype:** `{args.dtype}`")
-    lines.append(f"- **warmup:** {args.warmup}  **steps:** {args.steps}  **sync_cuda:** {bool(args.sync_cuda)}")
+    lines = ["# SparseAdamW optimizer.step() microbench", ""]
+    lines.append(f"- **mask_label:** `{args.mask_label}`")
+    lines.append(f"- **mask_path:** `{args.mask_path}`")
+    lines.append(f"- **device:** `{dev}`  **dtype:** `{args.dtype}`")
+    lines.append(f"- **lr:** `{args.lr}`  **block_size:** `{args.block_size}`")
+    lines.append(f"- **steps_total:** `{args.steps}`  **trim_frac:** `{args.trim_frac}` (excludes first/last 10%)")
+    lines.append(f"- **sync_cuda:** `{bool(args.sync_cuda)}`")
     lines.append("")
-    lines.append("| case | mean_step_ms | p50_step_ms | note |")
-    lines.append("|---|---:|---:|---|")
+    lines.append("| case | optimizer | mean_ms_mid | p50_ms_mid | mean_ms_all | p50_ms_all | note |")
+    lines.append("|---|---|---:|---:|---:|---:|---|")
     for r in rows:
         lines.append(
-            f"| `{r['case']}` | {r['mean_step_ms']} | {r['p50_step_ms']} | {r['note']} |"
+            f"| `{r.case}` | `{r.optimizer}` | {r.mean_ms_mid:.6g} | {r.p50_ms_mid:.6g} | "
+            f"{r.mean_ms_all:.6g} | {r.p50_ms_all:.6g} | {r.note} |"
         )
     md_path.write_text("\\n".join(lines), encoding="utf-8")
 
-    print(f"Wrote {csv_path}", file=sys.stderr)  # type: ignore[name-defined]
-    print(f"Wrote {md_path}", file=sys.stderr)  # type: ignore[name-defined]
+    print(f"Wrote {csv_path}", file=sys.stderr)
+    print(f"Wrote {md_path}", file=sys.stderr)
     return 0
 
 

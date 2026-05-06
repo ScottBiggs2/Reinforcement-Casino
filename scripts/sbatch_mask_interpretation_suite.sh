@@ -197,7 +197,7 @@ if [ "${MASK_SUITE_RUN_PLOTS:-0}" = "1" ]; then
     --input-dir "${MASK_SUITE_OUT_DIR}/pairwise" \
     --pattern "layer_metrics_*.csv" \
     --output-dir "$PDIR" \
-    --jaccard-mc-trials "${MASK_SUITE_PLOT_MC_TRIALS:-200}" \
+    --jaccard-mc-trials "${MASK_SUITE_PLOT_MC_TRIALS:-0}" \
     --jaccard-mc-seed 42 \
     --y-scale "${MASK_SUITE_PLOT_Y_SCALE:-linear}" \
     ${CKA_TOTAL_N:+--cka-total-n "${CKA_TOTAL_N}"} \

@@ -199,7 +199,38 @@ Submitted batch job 6575644
 
 # resubmitted hybrid tau with lighter hyperparams to finish faster while I develop/launch parallelized version
 
+# OG
 (base) [biggs.s@explorer-01 rl_casino]$ sbatch --time=08:00:00 --mem=256G --export=ALL,HISTOGRAM_BINS=512  scripts/slurm_mask_score_gap_light_r1.slurm
 Submitted batch job 6589014
 
+# Parallelized
+(base) [biggs.s@explorer-02 rl_casino]$ export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_parallel/run1
+# (export CKPT500_DIR / DELTA_LOG_DIR / TRAIN_ENV / HF_TOKEN if you don’t match defaults)
+bash scripts/submit_mask_score_gap_parallel_light_r1.sh
+cache_only job_id=6590158
+baseline_shard job_id=6590159 (after cache 6590158)
+milestone_shard array job_id=6590160 (tasks 0-3)
+merge_shards job_id=6590161 (after milestone array 6590160)
+Final artifacts under OUT_DIR after job 6590161 completes.
+(base) [biggs.s@explorer-02 rl_casino]$ 
+
+## SparseAdamW optimizer.step() microbench (H200)
+
+Goal: isolate optimizer kernel memory/speed savings (no forward/backward).
+
+- **Script**: `scripts/microbench_optimizer_step.py`
+- **Slurm**: `scripts/h200_sparse_adamw_optstep_microbench.slurm`
+- **Mask inputs**: element by default; optional block via `RUN_BLOCK=1` and `BLOCK_MASK=...`
+- **Element mask example**: `/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
+- **Block mask example**: `/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_block256_mean_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
+- **Device/dtype**: `cuda`, `bf16`
+- **Steps**: 50 `optimizer.step()` calls
+- **Fairness trimming**: exclude first/last 10% from stats (5 steps each) → report `*_mid` columns
+- **CUDA sync**: enabled (sync before/after step for honest timing)
+- **LR**: `5e-7` (kept consistent; step kernel cost mostly independent)
+- **SparseAdamW block_size**: 32
+- **Parameters**: synthetic tensors created to exactly match mask key names + mask shapes (realistic update geometry)
+- **Baselines**:
+  - `adamw_torch`
+  - `adamw_8bit` (when bitsandbytes is importable on the cluster)
 

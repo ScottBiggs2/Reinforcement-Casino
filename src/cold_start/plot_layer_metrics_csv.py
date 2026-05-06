@@ -92,10 +92,18 @@ def global_density_from_rows(rows: list, which: str) -> float:
 
 
 def theoretical_jaccard_variance(rho: float, n_indices: int) -> float:
-    """Var(J) = 2(1 − ρ) / ( N · (2 − ρ²)³ ) with ρ = keep density, N = tensor length."""
+    """Var(J) for iid random binary masks with keep rate ρ over n indices.
+
+    Matches the closed-form used in the writeup:
+
+        E[J] = ρ / (2 − ρ)
+        Var[J] = 2(1 − ρ) / ( n (2 − ρ)^3 )
+
+    where n is the number of compared indices (e.g. total parameter count).
+    """
     if n_indices < 1 or not (0.0 <= rho <= 1.0):
         return float("nan")
-    den = (2.0 - rho * rho) ** 3
+    den = (2.0 - rho) ** 3
     if den <= 0:
         return float("nan")
     return 2.0 * (1.0 - rho) / (float(n_indices) * den)
@@ -108,7 +116,25 @@ def mc_global_jaccard_quantiles(
     trials: int,
     seed: int,
 ) -> Optional[tuple]:
-    """Empirical 5th/95th percentile of global Jaccard under iid Bernoulli(ρ) masks (single draw per trial)."""
+    """Empirical 5th/95th percentile of global Jaccard under iid Bernoulli masks.
+
+    IMPORTANT: This must be fast for very large N (e.g. billions of parameters). We
+    therefore sample *counts* using a multinomial distribution instead of instantiating
+    boolean masks of length N.
+
+    For independent Bernoulli masks A~Bern(ρ_a), B~Bern(ρ_b), each index falls into
+    one of 4 categories:
+
+      (A=1,B=1) with p11 = ρ_a ρ_b     => contributes to intersection and union
+      (A=1,B=0) with p10 = ρ_a(1-ρ_b)  => contributes to union
+      (A=0,B=1) with p01 = (1-ρ_a)ρ_b  => contributes to union
+      (A=0,B=0) with p00 = (1-ρ_a)(1-ρ_b)
+
+    If we sample counts (c11,c10,c01,c00) ~ Multinomial(N, p), then:
+        inter = c11
+        union = c11 + c10 + c01
+        J = inter/union  (union>0 else 0)
+    """
     if trials <= 0 or n_indices < 1:
         return None
     if math.isnan(density_a) or math.isnan(density_b):
@@ -116,13 +142,24 @@ def mc_global_jaccard_quantiles(
     rng = np.random.default_rng(seed)
     da = float(density_a)
     db = float(density_b)
+    if not (0.0 <= da <= 1.0 and 0.0 <= db <= 1.0):
+        return None
+    # Probabilities for the 4 outcomes
+    p11 = da * db
+    p10 = da * (1.0 - db)
+    p01 = (1.0 - da) * db
+    p00 = (1.0 - da) * (1.0 - db)
+    ps = np.array([p11, p10, p01, p00], dtype=np.float64)
+    s = ps.sum()
+    if not np.isfinite(s) or s <= 0:
+        return None
+    ps = ps / s
+
     samples = np.empty(trials, dtype=np.float64)
     for t in range(trials):
-        a = rng.random(n_indices) < da
-        b = rng.random(n_indices) < db
-        inter = np.logical_and(a, b).sum()
-        union = np.logical_or(a, b).sum()
-        samples[t] = inter / union if union > 0 else 0.0
+        c11, c10, c01, _c00 = rng.multinomial(int(n_indices), ps)
+        union = c11 + c10 + c01
+        samples[t] = (c11 / union) if union > 0 else 0.0
     return float(np.percentile(samples, 5)), float(np.percentile(samples, 95))
 
 
@@ -183,8 +220,11 @@ def draw_jaccard_null_horizontal(
 ) -> None:
     """Horizontal E[J] and ±1σ band — same layout as CKA theory panel (axhline + axhspan).
 
-    Uses global E[J] from size-weighted ρ_a, ρ_b; Var(J) = 2(1−ρ̄)/(N(2−ρ̄²)³) with
-    ρ̄ = (ρ_a+ρ_b)/2 and N = sum of n_params (total indices), matching one scalar σ for the band.
+    Uses global E[J] from size-weighted ρ_a, ρ_b and the iid-mask variance:
+
+        Var[J] = 2(1 − ρ) / ( n (2 − ρ)^3 )
+
+    where we plug in ρ = average keep density ρ̄ = (ρ_a+ρ_b)/2 and n = total indices.
     """
     if math.isnan(em_g) or n_tot < 1:
         return
