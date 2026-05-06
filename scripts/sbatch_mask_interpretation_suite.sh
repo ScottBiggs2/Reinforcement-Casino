@@ -34,6 +34,8 @@
 #   MASK_SUITE_PROBE_BUILTIN=all        # Irene corpora: all|none|syntax,semantics,math
 #   MASK_SUITE_PROBE_BUILTIN_CV_FOLDS=3
 #   MASK_SUITE_PROBE_BUILTIN_LAYER_STRIDE=1   # >1 subsamples MLP layers for builtin pass (speed)
+#   MASK_SUITE_PROBE_DENSE_CHECKPOINT=/scratch/$USER/.../checkpoint-500
+#   MASK_SUITE_PROBE_DENSE_VS_MASK=1          # train builtin probes on dense; eval dense+masked
 #
 # Default resources are CPU-only (Jaccard + CSV). For MASK_SUITE_RUN_CKA=1, use a GPU partition,
 # e.g. sbatch --partition=gpu --gres=gpu:a100:1 --mem=128G --time=04:00:00 scripts/sbatch_mask_interpretation_suite.sh
@@ -175,6 +177,12 @@ if [ "$MASK_SUITE_PROBE_REPORTS" = "1" ]; then
   cmd+=( --probe-builtin-layer-stride "${MASK_SUITE_PROBE_BUILTIN_LAYER_STRIDE:-1}" )
   if [ "${MASK_SUITE_NO_PROBE_PLOTS:-0}" = "1" ]; then
     cmd+=( --no-probe-plots )
+  fi
+  if [ -n "${MASK_SUITE_PROBE_DENSE_CHECKPOINT:-}" ]; then
+    cmd+=( --probe-dense-checkpoint "${MASK_SUITE_PROBE_DENSE_CHECKPOINT}" )
+  fi
+  if [ "${MASK_SUITE_PROBE_DENSE_VS_MASK:-0}" = "1" ]; then
+    cmd+=( --probe-dense-vs-mask )
   fi
 fi
 

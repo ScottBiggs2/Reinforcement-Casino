@@ -163,6 +163,46 @@ def _maybe_heatmap(
     print(f"Wrote heatmap {out_png}", flush=True)
 
 
+def _maybe_cka_heatmap(
+    labels: Sequence[str],
+    matrix: List[List[Optional[float]]],
+    out_png: Path,
+) -> None:
+    """Mirror the Jaccard matrix heatmap but for aggregate CKA similarity.
+
+    Cells with ``None`` (no CKA JSON or no finite mean) are rendered as NaN and left
+    to the colormap's handling; the diagonal is forced to 1.0 for readability.
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+    except ImportError:
+        print("matplotlib not installed; skip CKA heatmap", file=sys.stderr)
+        return
+
+    arr = np.array(
+        [[(1.0 if i == j and (v is None or not isinstance(v, (int, float))) else (np.nan if v is None else float(v)))
+          for j, v in enumerate(row)]
+         for i, row in enumerate(matrix)],
+        dtype=float,
+    )
+    fig, ax = plt.subplots(
+        figsize=(max(6, len(labels) * 0.5), max(5, len(labels) * 0.5))
+    )
+    im = ax.imshow(arr, vmin=0.0, vmax=1.0, cmap="magma")
+    ax.set_xticks(range(len(labels)))
+    ax.set_yticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_yticklabels(labels)
+    ax.set_title("Aggregate CKA (pairwise)")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_png, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Wrote CKA heatmap {out_png}", flush=True)
+
+
 def _run_plot_layer_metrics(pair_dir: Path, plot_dir: Path, py: str) -> None:
     """2x2 diagnostic PNGs from layer_metrics CSVs (optional; smoke / full bells)."""
     plot_py = _REPO_ROOT / "src/cold_start/plot_layer_metrics_csv.py"
@@ -396,6 +436,25 @@ def main() -> None:
         action="store_true",
         help="With --probe-reports, skip matplotlib charts under probe_plots/ (default: plots on).",
     )
+    parser.add_argument(
+        "--probe-dense-checkpoint",
+        type=str,
+        default=None,
+        help=(
+            "Optional HF-style checkpoint directory for dense-vs-mask builtin probes. "
+            "If set together with --probe-reports, an extra pass trains builtin probes "
+            "on dense activations and evaluates on dense vs masked subnetworks."
+        ),
+    )
+    parser.add_argument(
+        "--probe-dense-vs-mask",
+        action="store_true",
+        help=(
+            "Enable dense-trained builtin probing evaluated on both dense and masked models. "
+            "Requires --probe-dense-checkpoint and uses the same builtin datasets as "
+            "--probe-builtin-datasets."
+        ),
+    )
     args = parser.parse_args()
 
     if args.suite_fast:
@@ -467,6 +526,12 @@ def main() -> None:
     rollup_rows: List[Dict[str, Any]] = []
     n = len(masks)
     jaccard_matrix = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+    # For CKA we mirror the Jaccard matrix layout but may have missing entries (no CKA JSON
+    # or degenerate activations). We store None in those cases so downstream consumers can
+    # distinguish "not computed" from a genuine low similarity value.
+    cka_matrix: List[List[Optional[float]]] = [
+        [1.0 if i == j else None for j in range(n)] for i in range(n)
+    ]
 
     for i, j in combinations(range(n), 2):
         la, lb = labels[i], labels[j]
@@ -483,6 +548,7 @@ def main() -> None:
         jaccard_matrix[i][j] = jaccard_matrix[j][i] = agg
 
         cka_path: Optional[Path] = None
+        cka_agg: Optional[float] = None
         if run_cka:
             cka_path = pair_dir / f"cka_{tag}.json"
             ok = _run_cka_pair(
@@ -500,6 +566,27 @@ def main() -> None:
             if not ok:
                 print(f"CKA failed for {tag}; continuing without CKA JSON", file=sys.stderr)
                 cka_path = None
+            else:
+                # Aggregate CKA for matrix: prefer the top-level mean; if missing, fall back
+                # to an explicit mean over finite per-layer values.
+                try:
+                    with open(cka_path, "r", encoding="utf-8") as f:
+                        cka_rep = json.load(f)
+                    cka_block = (cka_rep.get("cka") or {}) if isinstance(cka_rep, dict) else {}
+                    m = cka_block.get("mean")
+                    if isinstance(m, (int, float)) and m == m:
+                        cka_agg = float(m)
+                    else:
+                        per_layer = (cka_rep.get("per_layer_cka") or {}) if isinstance(cka_rep, dict) else {}
+                        vals = [
+                            float(v)
+                            for v in per_layer.values()
+                            if isinstance(v, (int, float)) and v == v
+                        ]
+                        if vals:
+                            cka_agg = float(sum(vals) / len(vals))
+                except OSError:
+                    cka_agg = None
 
         csv_path = pair_dir / f"layer_metrics_{tag}.csv"
         _run_export_csv(
@@ -524,6 +611,8 @@ def main() -> None:
         }
         if cka_path and cka_path.is_file():
             row["cka_json"] = str(cka_path)
+        if cka_agg is not None:
+            cka_matrix[i][j] = cka_matrix[j][i] = cka_agg
         if "jaccard_by_param_bucket" in rep:
             for bucket, block in rep["jaccard_by_param_bucket"].items():
                 row[f"jaccard_agg_{bucket}"] = block.get("aggregate_jaccard")
@@ -533,6 +622,7 @@ def main() -> None:
         "labels": labels,
         "mask_paths": masks,
         "jaccard_matrix": jaccard_matrix,
+        "cka_matrix": cka_matrix if run_cka else None,
         "pairwise": rollup_rows,
     }
     if args.smoke_debug:
@@ -557,6 +647,8 @@ def main() -> None:
 
     if heatmap:
         _maybe_heatmap(labels, jaccard_matrix, out_dir / "jaccard_matrix.png")
+        if run_cka:
+            _maybe_cka_heatmap(labels, cka_matrix, out_dir / "cka_matrix.png")
 
     if args.smoke_debug:
         _run_plot_layer_metrics(pair_dir, out_dir / "plots", py)
@@ -580,6 +672,18 @@ def main() -> None:
         )
         if not args.no_probe_plots:
             _run_plot_probe_reports(py, out_dir)
+        if args.probe_dense_vs_mask and args.probe_dense_checkpoint:
+            _run_dense_vs_mask_probes(
+                py,
+                masks,
+                labels,
+                out_dir,
+                checkpoint_dir=args.probe_dense_checkpoint,
+                model_name=args.cka_model,
+                builtin_datasets=args.probe_builtin_datasets,
+                batch_size=args.probe_batch_size,
+                max_length=args.probe_max_length,
+            )
 
 
 def _run_plot_probe_reports(py: str, out_dir: Path) -> None:
@@ -589,6 +693,83 @@ def _run_plot_probe_reports(py: str, out_dir: Path) -> None:
     r = subprocess.run(cmd, cwd=str(_REPO_ROOT))
     if r.returncode != 0:
         print("[probe] plot_probe_reports failed (non-fatal)", file=sys.stderr)
+
+
+def _run_dense_vs_mask_probes(
+    py: str,
+    masks: List[str],
+    labels: List[str],
+    out_dir: Path,
+    *,
+    checkpoint_dir: str,
+    model_name: str,
+    builtin_datasets: str,
+    batch_size: int,
+    max_length: int,
+) -> None:
+    """Call dense_vs_mask_probes.py and merge a lightweight index into suite_summary.json."""
+    script = _REPO_ROOT / "src" / "cold_start" / "dense_vs_mask_probes.py"
+    out_json = out_dir / "dense_vs_mask_probes.json"
+    cmd: List[str] = [
+        py,
+        str(script),
+        "--checkpoint-dir",
+        checkpoint_dir,
+        "--model-name",
+        model_name,
+        "--output-json",
+        str(out_json),
+        "--builtin-datasets",
+        builtin_datasets,
+        "--batch-size",
+        str(batch_size),
+        "--max-length",
+        str(max_length),
+        "--masks",
+        *masks,
+        "--labels",
+        *labels,
+    ]
+    print("RUN:", " ".join(cmd), flush=True)
+    r = subprocess.run(cmd, cwd=str(_REPO_ROOT))
+    if r.returncode != 0:
+        print("[probe] dense_vs_mask_probes failed (non-fatal)", file=sys.stderr)
+        return
+
+    # Also produce Irene-style heatmaps for the 4 builtin tasks.
+    plot_py = _REPO_ROOT / "src" / "cold_start" / "plot_dense_vs_mask_probes.py"
+    plot_out_dir = out_dir / "probe_plots"
+    cmd2 = [py, str(plot_py), "--input-json", str(out_json), "--output-dir", str(plot_out_dir)]
+    print("RUN:", " ".join(cmd2), flush=True)
+    r2 = subprocess.run(cmd2, cwd=str(_REPO_ROOT))
+    if r2.returncode != 0:
+        print("[probe] plot_dense_vs_mask_probes failed (non-fatal)", file=sys.stderr)
+
+    summary_path = out_dir / "suite_summary.json"
+    if summary_path.is_file():
+        try:
+            with open(summary_path, "r", encoding="utf-8") as f:
+                suite = json.load(f)
+        except OSError:
+            suite = {}
+        suite["dense_vs_mask_probes"] = {
+            "json": str(out_json),
+            "plots": {
+                "accuracy_png": str(plot_out_dir / "dense_vs_mask_builtin_accuracy.png"),
+                "delta_png": str(plot_out_dir / "dense_vs_mask_builtin_delta.png"),
+            },
+            "checkpoint_dir": checkpoint_dir,
+            "model_name": model_name,
+            "mask_labels": labels,
+        }
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                json.dump(suite, f, indent=2, ensure_ascii=False)
+        except OSError:
+            print(
+                "[probe] failed to update suite_summary.json with dense_vs_mask index",
+                file=sys.stderr,
+            )
 
 
 def _run_probe_reports_for_masks(
