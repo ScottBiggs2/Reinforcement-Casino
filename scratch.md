@@ -172,3 +172,19 @@ Submitted batch job 6574079
   scripts/sbatch_mask_interpretation_suite.she_%j.err \\"
 Submitted batch job 6574787
 (base) [biggs.s@explorer-01 rl_casino]$ 
+
+# score comparisons with global and hybrid tau methods: 
+(base) [biggs.s@explorer-01 rl_casino]$ export CHECKPOINT_DTYPE=bfloat16 SPARSITY_PERCENT=97.5
+export CERT_MIN_LAYER_KEEP_RATIO=0 CERT_MATCH_TIE_BREAK=1
+export CERT_GLOBAL_MODE=stream
+export CERT_TAU_RULE=global CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0
+export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/run_global_tau
+sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+Submitted batch job 6575643
+(base) [biggs.s@explorer-01 rl_casino]$ export CHECKPOINT_DTYPE=bfloat16 SPARSITY_PERCENT=97.5
+export CERT_MIN_LAYER_KEEP_RATIO=0 CERT_MATCH_TIE_BREAK=1
+export CERT_GLOBAL_MODE=stream
+export CERT_TAU_RULE=hybrid_global_phase CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0.02
+export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/run_hybrid_tau
+sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+Submitted batch job 6575644

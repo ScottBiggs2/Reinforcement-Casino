@@ -1,6 +1,7 @@
 #!/bin/bash
 # H200 DPO speed ablation v2 — **optimizer-only** (SparseAdamW vs dense AdamW), matching pipeline
-# Stage‑4 semantics (no BSR sparse backprop). BENCH_JSON timing + post-run ``report_h200_speed_ablation.py``.
+# Stage‑4 semantics (no BSR sparse backprop). BENCH_JSON timing + post-run ``report_h200_speed_ablation.py``
+# and ``plot_h200_speed_ablation.py`` (CSV plots + ``benchmark_visual_report.md``).
 #
 # Submit from repo root:
 #   sbatch scripts/h200_speed_ablation_v2.sh
@@ -164,5 +165,14 @@ if [ -f "${_SLURM_OUT}" ]; then
     --run-dir "$OUT_BASE" \
     --slurm-out "${_SLURM_OUT}" || true
 fi
+
+_PLOT_CMD=(
+  "$TRAIN_PY" "${REPO_ROOT}/scripts/plot_h200_speed_ablation.py"
+  --run-dir "$OUT_BASE"
+)
+if [ -f "${_SLURM_OUT}" ]; then
+  _PLOT_CMD+=(--slurm-out "${_SLURM_OUT}")
+fi
+"${_PLOT_CMD[@]}" || true
 
 exit "${_RC}"
