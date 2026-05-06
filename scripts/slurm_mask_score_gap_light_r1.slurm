@@ -2,28 +2,32 @@
 # Mask score-gap analysis: oracle vs warm magnitude at deltas 50/100/150/200 (+ random baseline).
 # Writes CSV/NPZ/gap diagnostics + matplotlib overlays under OUT_DIR/figures.
 #
-# Drop-in (Explorer defaults; HF + repo path unchanged from last run):
+# --- Drop-in launches (cd to repo root that contains scripts/ and src/, then paste one block) ---
 #
-#   cd /home/$USER/rl_casino
-#   export HF_TOKEN="$(tr -d '\n\r' < ~/.cache/huggingface/token)"   # optional if --export=ALL
-#   export SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"               # cert tau / margins (alias: CERT_SPARSITY_PERCENT)
-#   export CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
-#   export CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"         # set 0 to pass --cert_no_match_tie_break
-#   export CHECKPOINT_DTYPE=bfloat16   # bf16 halves RAM vs fp32; use float32 if you need bit-identical baselines
-#   export CERT_GLOBAL_MODE=stream     # stream tau/margins without full-model flat buffers (recommended)
+# (1) Global τ (Theorem-3 style pure top-k on flattened scores)
+#
+#   cd /scratch/$USER/rl_casino
+#   [ -f ~/.cache/huggingface/token ] && export HF_TOKEN="$(tr -d '\n\r' < ~/.cache/huggingface/token)"
+#   export CHECKPOINT_DTYPE=bfloat16 SPARSITY_PERCENT=97.5
+#   export CERT_MIN_LAYER_KEEP_RATIO=0 CERT_MATCH_TIE_BREAK=1
+#   export CERT_GLOBAL_MODE=stream
+#   export CERT_TAU_RULE=global CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0
+#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/run_global_tau
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 #
-# Compare Theorem-3 global τ vs hybrid (per-layer floors + global top-R), same OUT_DIR parent, different leaf dirs:
+# (2) Hybrid τ (per-layer floors + global top-R; set ratio to your training min_layer_keep_ratio)
 #
-#   export CERT_GLOBAL_MODE=stream CERT_TAU_RULE=global CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0
-#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/${SLURM_JOB_ID:-global}
+#   cd /scratch/$USER/rl_casino
+#   [ -f ~/.cache/huggingface/token ] && export HF_TOKEN="$(tr -d '\n\r' < ~/.cache/huggingface/token)"
+#   export CHECKPOINT_DTYPE=bfloat16 SPARSITY_PERCENT=97.5
+#   export CERT_MIN_LAYER_KEEP_RATIO=0 CERT_MATCH_TIE_BREAK=1
+#   export CERT_GLOBAL_MODE=stream
+#   export CERT_TAU_RULE=hybrid_global_phase CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0.02
+#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/run_hybrid_tau
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 #
-#   export CERT_GLOBAL_MODE=stream CERT_TAU_RULE=hybrid_global_phase CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0.02
-#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/${SLURM_JOB_ID:-hybrid}
-#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
-#
-# (Use two real job IDs or set OUT_DIR explicitly before each sbatch so runs do not overwrite.)
+# Change OUT_DIR leaf names or add e.g. _$(date +%Y%m%d_%H%M%S) if rerunning the same mode twice.
+# Override memory only if needed: sbatch --mem=256G scripts/slurm_mask_score_gap_light_r1.slurm
 #
 # If the job dies with Bash "Killed" and no Python traceback, it is usually cgroup/OOM (not TRAIN_PY).
 # Confirm vs your Slurm memory request:
@@ -76,9 +80,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-# Full 8B×2 + fp32 milestone caches + histograms can exceed 128G; 512G is a safer default on Explorer.
-# If the scheduler rejects this request, switch to your site's highmem partition or lower --mem and rely on CERT_GLOBAL_MODE=stream + bf16 weights.
-#SBATCH --mem=512G
+# Memory must fit one node in the partition (see https://rc.northeastern.edu/partitions/ — the “RAM Limit”
+# column is an aggregate/user limit, not per-node size). If sbatch says “Memory specification can not be satisfied”,
+# your --mem exceeds every node: check `sinfo -p short -h -o "%m" | sort -u` and set --mem below the max, or
+# submit with e.g. `sbatch --mem=512G ...` only if the cluster has nodes that large.
+# 256G fits typical Explorer CPU nodes; use stream + bf16 to reduce RSS before asking for more RAM.
+#SBATCH --mem=256G
 #SBATCH --time=08:00:00
 #SBATCH --job-name=mask_score_gap
 #SBATCH --output=logs/mask_score_gap_%j.out
