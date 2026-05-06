@@ -53,3 +53,6 @@ multi_gpu_example.sh
 
 current_bib.md
 current_tex.md
+
+# Local pip test deps (agent / CI scratch)
+_py_testdeps/

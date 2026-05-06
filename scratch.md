@@ -188,3 +188,18 @@ export CERT_TAU_RULE=hybrid_global_phase CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0.02
 export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/run_hybrid_tau
 sbatch scripts/slurm_mask_score_gap_light_r1.slurm
 Submitted batch job 6575644
+
+# 05/06 Morning! 
+
+(base) [biggs.s@explorer-01 rl_casino]$ squeue -u $USER
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           6578617       gpu h200_spe  biggs.s  R    1:26:28      1 d4052
+           6575644     short mask_sco  biggs.s  R    6:30:10      1 d0139
+           6578960     short mask_int  biggs.s  R      52:55      1 c0621
+
+# resubmitted hybrid tau with lighter hyperparams to finish faster while I develop/launch parallelized version
+
+(base) [biggs.s@explorer-01 rl_casino]$ sbatch --time=08:00:00 --mem=256G --export=ALL,HISTOGRAM_BINS=512  scripts/slurm_mask_score_gap_light_r1.slurm
+Submitted batch job 6589014
+
+

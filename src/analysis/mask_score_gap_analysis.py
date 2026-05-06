@@ -12,12 +12,14 @@ Writes summary CSV, per-layer CSV, histogram NPZ, gap diagnostics JSON, metadata
 Log histogram bins use log10(v + eps_batch) where eps adapts per chunk from small positive values,
 so stacking at 1e-30 from a hard clamp is avoided (zeros still map near log(eps)).
 
-Slurm: see scripts/slurm_mask_score_gap_light_r1.slurm
+Slurm: see scripts/slurm_mask_score_gap_light_r1.slurm (monolithic) and
+scripts/submit_mask_score_gap_parallel_light_r1.sh + scripts/slurm_mask_score_gap_parallel_light_r1.slurm (parallel DAG).
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import gc
 import json
@@ -90,6 +92,14 @@ def safe_torch_load(path: str, map_location: str = "cpu"):
         return torch.load(path, map_location=map_location, weights_only=True)
     except TypeError:
         return torch.load(path, map_location=map_location)
+
+
+def _torch_load_analysis_shard(path: Path):
+    """Load torch.save dict shards (numpy-heavy); PyTorch 2.6+ defaults weights_only=True."""
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location="cpu")
 
 
 def checkpoint_dtype_arg(s: str) -> torch.dtype:
@@ -338,6 +348,797 @@ def build_magnitude_milestone_caches(
     return paths
 
 
+PARALLEL_SHARD_VERSION = 1
+
+
+def parallel_shards_dir(out_dir: Path) -> Path:
+    return out_dir / "parallel_shards"
+
+
+def _moment_to_dict(m: MomentAccum) -> Dict[str, float]:
+    return {"n": float(m.n), "sum": float(m.sum), "sumsq": float(m.sumsq)}
+
+
+def _moment_from_dict(d: Dict[str, float]) -> MomentAccum:
+    return MomentAccum(n=int(d["n"]), sum=float(d["sum"]), sumsq=float(d["sumsq"]))
+
+
+def _moment_merge_inplace(dst: MomentAccum, src: MomentAccum) -> None:
+    dst.n += src.n
+    dst.sum += src.sum
+    dst.sumsq += src.sumsq
+
+
+def _log_hist_to_dict(h: LogSpaceHistogram) -> Dict[str, object]:
+    return {
+        "num_bins": h.num_bins,
+        "log_min": h.log_min,
+        "log_max": h.log_max,
+        "edges": h.edges.copy(),
+        "counts": h.counts.copy(),
+    }
+
+
+def _log_hist_from_dict(d: Dict[str, object]) -> LogSpaceHistogram:
+    h = LogSpaceHistogram(int(d["num_bins"]), float(d["log_min"]), float(d["log_max"]))
+    h.edges = np.asarray(d["edges"], dtype=np.float64).copy()
+    h.counts = np.asarray(d["counts"], dtype=np.int64).copy()
+    return h
+
+
+def _log_hist_merge_inplace(dst: LogSpaceHistogram, src: LogSpaceHistogram) -> None:
+    if dst.num_bins != src.num_bins or dst.log_min != src.log_min or dst.log_max != src.log_max:
+        raise ValueError("LogSpaceHistogram mismatch in merge")
+    dst.counts += src.counts
+
+
+def _lin_hist_to_dict(h: LinSpaceHistogram) -> Dict[str, object]:
+    return {"num_bins": h.num_bins, "upper": h.upper, "edges": h.edges.copy(), "counts": h.counts.copy()}
+
+
+def _lin_hist_from_dict(d: Dict[str, object]) -> LinSpaceHistogram:
+    h = LinSpaceHistogram(int(d["num_bins"]), float(d["upper"]))
+    h.edges = np.asarray(d["edges"], dtype=np.float64).copy()
+    h.counts = np.asarray(d["counts"], dtype=np.int64).copy()
+    return h
+
+
+def _lin_hist_merge_inplace(dst: LinSpaceHistogram, src: LinSpaceHistogram) -> None:
+    if dst.num_bins != src.num_bins or dst.upper != src.upper:
+        raise ValueError("LinSpaceHistogram mismatch in merge")
+    dst.counts += src.counts
+
+
+def _atomic_torch_save(obj: object, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(obj, tmp)
+    tmp.replace(path)
+
+
+def _write_shard_done(shard_path: Path) -> None:
+    done = Path(str(shard_path) + ".done")
+    done.write_text("ok\n", encoding="utf-8")
+
+
+def _process_single_milestone(
+    step: int,
+    *,
+    keys: List[str],
+    initial_sd: Dict[str, torch.Tensor],
+    final_sd: Dict[str, torch.Tensor],
+    mag_scores: Dict[str, torch.Tensor],
+    layer_by_name: Dict[str, Dict[str, object]],
+    histogram_bins: int,
+    flatten_dtype: torch.dtype,
+    sparsity_percent: float,
+    cert_match_tie_break: bool,
+    cert_global_mode: str,
+    cert_tau_rule: str,
+    cert_hybrid_min_layer_keep_ratio: float,
+    delta_verify: Optional[Dict[str, torch.Tensor]],
+    mag_raw_hist: LogSpaceHistogram,
+    mag_norm_hist: LinSpaceHistogram,
+    mag_w_raw: MomentAccum,
+    mag_w_norm: MomentAccum,
+    mag_margin_raw_hist: LogSpaceHistogram,
+    mag_margin_w_raw: MomentAccum,
+    gap_diag: Dict[str, object],
+    max_verify_diff: float,
+    verify_key_worst: str,
+    layer_mag_updates: Optional[Dict[str, Dict[str, float]]] = None,
+    layer_rows: Optional[List[Dict[str, object]]] = None,
+) -> Tuple[float, str]:
+    """One milestone worth of magnitude scoring + cert (mutates hist accumulators and gap_diag)."""
+    use_stream = cert_global_mode == "stream"
+    use_hybrid_tau = cert_tau_rule == "hybrid_global_phase"
+
+    n_elems = 0
+    n_zero_raw = 0
+    vmin_pos_accum = torch.tensor(float("inf"))
+    vmax_accum = torch.tensor(float("-inf"))
+    oracle_match_sample: List[Dict[str, object]] = []
+
+    mag_cert_n = 0
+    mag_eligible: List[str] = []
+    mag_numels: List[int] = []
+    for nm in keys:
+        if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+            continue
+        om = mag_scores[nm].shape
+        oo = initial_sd[nm].shape
+        of = final_sd[nm].shape
+        if om == oo == of:
+            n_mag_layer = int(math.prod(tuple(int(x) for x in om)))
+            mag_cert_n += n_mag_layer
+            mag_eligible.append(nm)
+            mag_numels.append(n_mag_layer)
+    if use_stream:
+        flat_mag_flat = torch.empty(0, dtype=flatten_dtype)
+        flat_oracle_flat_m = torch.empty(0, dtype=flatten_dtype)
+    else:
+        flat_mag_flat = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
+        flat_oracle_flat_m = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
+    mag_cert_off = 0
+
+    for ki, name in enumerate(keys):
+        if name not in initial_sd or name not in final_sd or name not in mag_scores:
+            continue
+        w0 = initial_sd[name]
+        w1 = final_sd[name]
+        if not w0.is_floating_point() or not w1.is_floating_point():
+            del w0, w1
+            continue
+        s_oracle = (w1 - w0).abs()
+        if s_oracle.is_floating_point():
+            s_oracle = s_oracle.to(dtype=flatten_dtype)
+        s_mag = mag_scores[name]
+        if s_mag.is_floating_point():
+            s_mag = s_mag.to(dtype=flatten_dtype)
+        if s_mag.shape != s_oracle.shape:
+            del w0, w1, s_oracle, s_mag
+            continue
+
+        nloc_mag = int(s_mag.numel())
+        if not use_stream:
+            flat_mag_flat[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_mag.reshape(-1))
+            flat_oracle_flat_m[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_oracle.reshape(-1))
+        mag_cert_off += nloc_mag
+
+        if delta_verify is not None and name in delta_verify:
+            dv = delta_verify[name].to(torch.float32).abs()
+            if dv.shape == s_oracle.shape:
+                diff = (s_oracle - dv).abs().max().item()
+                if diff > max_verify_diff:
+                    max_verify_diff = diff
+                    verify_key_worst = name
+
+        v_mag_raw = (s_mag - s_oracle).abs()
+        v_zero = v_mag_raw == 0
+        ne = int(v_mag_raw.numel())
+        nz = int(v_zero.sum().item())
+        n_elems += ne
+        n_zero_raw += nz
+
+        vp = v_mag_raw[v_mag_raw > 0]
+        if vp.numel():
+            vmin_pos_accum = torch.minimum(vmin_pos_accum, vp.min())
+            vmax_accum = torch.maximum(vmax_accum, v_mag_raw.max())
+
+        o_n = _minmax_norm(s_oracle)
+        m_n = _minmax_norm(s_mag)
+        v_mag_norm = (m_n - o_n).abs()
+
+        mag_raw_hist.update(v_mag_raw)
+        mag_norm_hist.update(v_mag_norm)
+        mag_w_raw.update(v_mag_raw)
+        mag_w_norm.update(v_mag_norm)
+
+        ln = layer_by_name.get(name)
+        if ln is None:
+            ln = {"param_name": name, "numel": int(s_oracle.numel())}
+            layer_by_name[name] = ln
+            if layer_rows is not None:
+                layer_rows.append(ln)
+        ln[f"mean_v_mag_raw_step{step}"] = float(v_mag_raw.mean().item())
+        ln[f"mean_v_mag_norm_step{step}"] = float(v_mag_norm.mean().item())
+        if layer_mag_updates is not None:
+            layer_mag_updates.setdefault(str(name), {})[f"mean_v_mag_raw_step{step}"] = float(v_mag_raw.mean().item())
+            layer_mag_updates[str(name)][f"mean_v_mag_norm_step{step}"] = float(v_mag_norm.mean().item())
+
+        if len(oracle_match_sample) < 2:
+            oracle_match_sample.append(
+                {"key": name, "frac_zero": nz / max(ne, 1), "mean_v_raw": float(v_mag_raw.mean().item())}
+            )
+
+        del w0, w1, s_oracle, s_mag, v_mag_raw, o_n, m_n, v_mag_norm
+        gc.collect()
+
+        if (ki + 1) % 60 == 0:
+            print(f"  @{step}: processed key {ki + 1}/{len(keys)}")
+
+    gap_diag[f"milestone_{step}_raw_frac_zero_exact"] = (n_zero_raw / n_elems) if n_elems else 0.0
+    _mn = float(vmin_pos_accum.item()) if n_elems else float("nan")
+    gap_diag[f"milestone_{step}_raw_min_positive"] = _mn if math.isfinite(_mn) else float("nan")
+    _mx = float(vmax_accum.item()) if n_elems else float("nan")
+    gap_diag[f"milestone_{step}_raw_global_max"] = _mx if math.isfinite(_mx) else float("nan")
+    gap_diag[f"milestone_{step}_sample_tensors"] = oracle_match_sample[:2]
+
+    if mag_cert_off != mag_cert_n:
+        raise RuntimeError(
+            f"Magnitude cert flatten mismatch at step {step}: wrote {mag_cert_off} vs expected {mag_cert_n}"
+        )
+
+    mag_keep = global_keep_count(mag_cert_n, sparsity_percent) if mag_cert_n > 0 else 0
+    mag_floors: List[int] = []
+    mag_floor_by_name: Dict[str, int] = {}
+    if use_hybrid_tau and mag_cert_n > 0:
+        mag_floors = scaled_hybrid_floor_counts_per_layer(
+            mag_numels, float(cert_hybrid_min_layer_keep_ratio), int(mag_keep)
+        )
+        gap_diag[f"cert_magnitude_step{step}_hybrid_floor_total"] = int(sum(mag_floors))
+        gap_diag[f"cert_magnitude_step{step}_hybrid_R"] = int(mag_keep - sum(mag_floors))
+        for _nm, _f in zip(mag_eligible, mag_floors):
+            mag_floor_by_name[_nm] = int(_f)
+
+    if use_stream and mag_cert_n > 0:
+        max_abs_m = 0.0
+        for nm in keys:
+            if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                continue
+            w0m, w1m = initial_sd[nm], final_sd[nm]
+            if not w0m.is_floating_point() or not w1m.is_floating_point():
+                continue
+            sm = mag_scores[nm]
+            om_sh = sm.shape
+            oo_sh = w0m.shape
+            of_sh = w1m.shape
+            if om_sh != oo_sh or om_sh != of_sh:
+                continue
+            xm = sm.to(dtype=flatten_dtype).reshape(-1).float()
+            torch.nan_to_num_(xm, nan=0.0, posinf=0.0, neginf=0.0)
+            max_abs_m = max(max_abs_m, float(xm.abs().max().item()))
+        scale_m = max(max_abs_m * 1e-6, 1e-12) if cert_match_tie_break else 0.0
+
+        def _mag_sel_chunks_stream():
+            gen_tb = torch.Generator(device="cpu")
+            gen_tb.manual_seed(42)
+            for nm in keys:
+                if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                    continue
+                w0m, w1m = initial_sd[nm], final_sd[nm]
+                if not w0m.is_floating_point() or not w1m.is_floating_point():
+                    continue
+                sm = mag_scores[nm]
+                som = (w1m - w0m).abs()
+                if sm.shape != som.shape:
+                    continue
+                x = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
+                torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+                if cert_match_tie_break:
+                    noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                    x = x + noise * scale_m
+                yield x
+
+        if use_hybrid_tau:
+            floor_sum_m = int(sum(mag_floors)) if mag_floors else 0
+            R_m = int(mag_keep) - floor_sum_m
+            if R_m <= 0 or mag_cert_n <= 0:
+                tau_m = float("nan")
+                k_m, N_m = int(mag_keep), int(mag_cert_n)
+            else:
+
+                def _mag_hybrid_pieces():
+                    gen_tb = torch.Generator(device="cpu")
+                    gen_tb.manual_seed(42)
+                    for nm in keys:
+                        if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                            continue
+                        w0m, w1m = initial_sd[nm], final_sd[nm]
+                        if not w0m.is_floating_point() or not w1m.is_floating_point():
+                            continue
+                        sm = mag_scores[nm]
+                        som = (w1m - w0m).abs()
+                        if sm.shape != som.shape:
+                            continue
+                        x = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
+                        torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+                        if cert_match_tie_break:
+                            noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                            x = x + noise * scale_m
+                        f = int(mag_floor_by_name.get(nm, 0))
+                        if f > 0:
+                            kk = min(f, int(x.numel()))
+                            _, idx = torch.topk(x, kk, largest=True)
+                            x[idx] = float("-inf")
+                        yield x
+
+                tau_m = streaming_min_of_global_top_r(_mag_hybrid_pieces(), R_m)
+                k_m, N_m = int(mag_keep), int(mag_cert_n)
+        else:
+            tau_m, k_m, N_m = streaming_global_topk_threshold(
+                total_n=mag_cert_n,
+                sparsity_percent=sparsity_percent,
+                iter_sel_chunks_fp32=_mag_sel_chunks_stream(),
+            )
+
+        gen_tb4 = torch.Generator(device="cpu")
+        gen_tb4.manual_seed(42)
+        c_ok_m = 0
+        c_den_m = 0
+        for nm in keys:
+            if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                continue
+            w0m, w1m = initial_sd[nm], final_sd[nm]
+            if not w0m.is_floating_point() or not w1m.is_floating_point():
+                continue
+            sm = mag_scores[nm]
+            som = (w1m - w0m).abs().to(dtype=flatten_dtype)
+            if sm.shape != som.shape:
+                continue
+            m_sel = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
+            torch.nan_to_num_(m_sel, nan=0.0, posinf=0.0, neginf=0.0)
+            if cert_match_tie_break:
+                noise = torch.randn(m_sel.numel(), generator=gen_tb4, dtype=torch.float32)
+                m_sel = m_sel + noise * scale_m
+            s_star_m = som.reshape(-1).float()
+            torch.nan_to_num_(s_star_m, nan=0.0, posinf=0.0, neginf=0.0)
+            gap_m = (m_sel - s_star_m).abs()
+            margin_m = (m_sel - tau_m).abs()
+            c_ok_m += int((gap_m < margin_m).sum().item())
+            c_den_m += int(gap_m.numel())
+            mag_margin_raw_hist.update(margin_m)
+            mag_margin_w_raw.update(margin_m)
+
+        gap_diag[f"cert_magnitude_step{step}_tau"] = tau_m
+        gap_diag[f"cert_magnitude_step{step}_k_keep"] = k_m
+        gap_diag[f"cert_magnitude_step{step}_N"] = N_m
+        gap_diag[f"cert_strict_frac_magnitude_step{step}"] = (c_ok_m / c_den_m) if c_den_m else float("nan")
+        gap_diag[f"cert_strict_numer_magnitude_step{step}"] = c_ok_m
+        gap_diag[f"cert_strict_denom_magnitude_step{step}"] = c_den_m
+
+    elif not use_stream and mag_cert_n > 0 and flat_mag_flat.numel() > 0:
+        flat_mag = flat_mag_flat
+        flat_oracle_m = flat_oracle_flat_m
+        m_sel = scores_for_cert_selection(flat_mag, match_tie_break=cert_match_tie_break)
+        if use_hybrid_tau:
+            tau_m, k_m, N_m, _ft_m, _rr_m = tau_hybrid_global_phase_from_flat(
+                m_sel, mag_numels, mag_floors, int(mag_keep)
+            )
+        else:
+            tau_m, k_m, N_m = global_topk_threshold(m_sel, sparsity_percent)
+        margin_m = (m_sel - tau_m).abs()
+        gap_cert_m = (m_sel - flat_oracle_m).abs()
+        c_ok, c_den = certifiability_strict_fraction(gap_cert_m, margin_m)
+        mag_margin_raw_hist.update(margin_m)
+        mag_margin_w_raw.update(margin_m)
+        gap_diag[f"cert_magnitude_step{step}_tau"] = tau_m
+        gap_diag[f"cert_magnitude_step{step}_k_keep"] = k_m
+        gap_diag[f"cert_magnitude_step{step}_N"] = N_m
+        gap_diag[f"cert_strict_frac_magnitude_step{step}"] = (c_ok / c_den) if c_den else float("nan")
+        gap_diag[f"cert_strict_numer_magnitude_step{step}"] = c_ok
+        gap_diag[f"cert_strict_denom_magnitude_step{step}"] = c_den
+
+    return max_verify_diff, verify_key_worst
+
+
+def write_mask_score_gap_artifacts(
+    *,
+    out_dir: Path,
+    milestones: List[int],
+    random_seeds: List[int],
+    histogram_bins: int,
+    gap_diag: Dict[str, object],
+    layer_rows: List[Dict[str, object]],
+    mag_raw_hists: Dict[int, LogSpaceHistogram],
+    mag_norm_hists: Dict[int, LinSpaceHistogram],
+    mag_w_raw: Dict[int, MomentAccum],
+    mag_w_norm: Dict[int, MomentAccum],
+    mag_margin_raw_hists: Dict[int, LogSpaceHistogram],
+    mag_margin_w_raw: Dict[int, MomentAccum],
+    rnd_raw_hists: Dict[int, LogSpaceHistogram],
+    rnd_norm_hists: Dict[int, LinSpaceHistogram],
+    rnd_w_raw: Dict[int, MomentAccum],
+    rnd_w_norm: Dict[int, MomentAccum],
+    rnd_margin_raw_hists: Dict[int, LogSpaceHistogram],
+    rnd_margin_w_raw: Dict[int, MomentAccum],
+    oracle_margin_hist: LogSpaceHistogram,
+    oracle_margin_w: MomentAccum,
+    delta_verify: Optional[Dict[str, torch.Tensor]],
+    max_verify_diff: float,
+    verify_key_worst: str,
+) -> None:
+    """Write CSV/JSON/NPZ artifacts (same schema as process_keys end)."""
+    qs = (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
+    milestones = sorted(milestones)
+
+    if delta_verify is not None:
+        print(f"verify deltas max |oracle - |delta500||: {max_verify_diff:.6e} (worst key: {verify_key_worst!r})")
+
+    with (out_dir / "mask_score_gap_gap_diagnostics.json").open("w", encoding="utf-8") as f:
+        json.dump(gap_diag, f, indent=2)
+
+    summary_path = out_dir / "mask_score_gap_summary.csv"
+    by_layer_path = out_dir / "mask_score_gap_by_layer.csv"
+    summary_rows: List[Dict[str, object]] = []
+
+    def pack_row(
+        case: str,
+        acc: MomentAccum,
+        h_log: Optional[LogSpaceHistogram],
+        h_lin: Optional[LinSpaceHistogram],
+    ) -> Dict[str, object]:
+        if h_log is not None:
+            qdict = _quantiles_log_hist(h_log.counts, h_log.edges, qs)
+        elif h_lin is not None:
+            qdict = _quantiles_from_hist_counts(h_lin.counts, h_lin.edges, qs)
+        else:
+            raise ValueError("pack_row requires h_log or h_lin")
+        return {"case": case, "total_numel": acc.n, "mean": acc.mean_value(), "std": acc.std_value(), **qdict}
+
+    def pack_cert_row(case: str, numer: int, denom: int) -> Dict[str, object]:
+        frac = (numer / denom) if denom else float("nan")
+        qnan = {f"p{int(round(q * 100)):02d}": float("nan") for q in qs}
+        return {"case": case, "total_numel": denom, "mean": frac, "std": 0.0, **qnan}
+
+    for step in milestones:
+        summary_rows.append(pack_row(f"magnitude_raw_step{step}", mag_w_raw[step], mag_raw_hists[step], None))
+        summary_rows.append(pack_row(f"magnitude_norm_step{step}", mag_w_norm[step], None, mag_norm_hists[step]))
+        summary_rows.append(
+            pack_row(f"magnitude_margin_raw_step{step}", mag_margin_w_raw[step], mag_margin_raw_hists[step], None)
+        )
+        dn = int(gap_diag.get(f"cert_strict_denom_magnitude_step{step}", 0) or 0)
+        nr = int(gap_diag.get(f"cert_strict_numer_magnitude_step{step}", 0) or 0)
+        if dn > 0:
+            summary_rows.append(pack_cert_row(f"cert_strict_magnitude_step{step}", nr, dn))
+    if oracle_margin_w.n > 0:
+        summary_rows.append(pack_row("oracle_margin_raw", oracle_margin_w, oracle_margin_hist, None))
+    for seed in random_seeds:
+        summary_rows.append(pack_row(f"random_raw_seed{seed}", rnd_w_raw[seed], rnd_raw_hists[seed], None))
+        summary_rows.append(pack_row(f"random_norm_seed{seed}", rnd_w_norm[seed], None, rnd_norm_hists[seed]))
+        summary_rows.append(
+            pack_row(f"random_margin_raw_seed{seed}", rnd_margin_w_raw[seed], rnd_margin_raw_hists[seed], None)
+        )
+        dn = int(gap_diag.get(f"cert_strict_denom_random_seed{seed}", 0) or 0)
+        nr = int(gap_diag.get(f"cert_strict_numer_random_seed{seed}", 0) or 0)
+        if dn > 0:
+            summary_rows.append(pack_cert_row(f"cert_strict_random_seed{seed}", nr, dn))
+
+    normalized_rows = sorted(layer_rows, key=lambda r: str(r.get("param_name", "")))
+
+    fn = sorted(summary_rows[0].keys()) if summary_rows else []
+    with summary_path.open("w", newline="", encoding="utf-8") as f:
+        wcsv = csv.DictWriter(f, fieldnames=fn)
+        wcsv.writeheader()
+        for row in summary_rows:
+            wcsv.writerow(row)
+
+    if normalized_rows:
+        lf = sorted(set().union(*(r.keys() for r in normalized_rows)))
+        with by_layer_path.open("w", newline="", encoding="utf-8") as f:
+            wcsv = csv.DictWriter(f, fieldnames=lf)
+            wcsv.writeheader()
+            for row in normalized_rows:
+                wcsv.writerow(row)
+
+    npz_payload: Dict[str, np.ndarray] = {"hist_bins": np.array([histogram_bins], dtype=np.int64)}
+    for step in milestones:
+        npz_payload[f"magnitude_raw_step{step}_counts"] = mag_raw_hists[step].counts
+        npz_payload[f"magnitude_raw_step{step}_log_edges"] = mag_raw_hists[step].edges
+        npz_payload[f"magnitude_norm_step{step}_counts"] = mag_norm_hists[step].counts
+        npz_payload[f"magnitude_norm_step{step}_edges"] = mag_norm_hists[step].edges
+    for seed in random_seeds:
+        npz_payload[f"random_raw_seed{seed}_counts"] = rnd_raw_hists[seed].counts
+        npz_payload[f"random_raw_seed{seed}_log_edges"] = rnd_raw_hists[seed].edges
+        npz_payload[f"random_norm_seed{seed}_counts"] = rnd_norm_hists[seed].counts
+        npz_payload[f"random_norm_seed{seed}_edges"] = rnd_norm_hists[seed].edges
+        npz_payload[f"random_margin_raw_seed{seed}_counts"] = rnd_margin_raw_hists[seed].counts
+        npz_payload[f"random_margin_raw_seed{seed}_log_edges"] = rnd_margin_raw_hists[seed].edges
+    for step in milestones:
+        npz_payload[f"magnitude_margin_raw_step{step}_counts"] = mag_margin_raw_hists[step].counts
+        npz_payload[f"magnitude_margin_raw_step{step}_log_edges"] = mag_margin_raw_hists[step].edges
+    if oracle_margin_hist.counts.sum() > 0:
+        npz_payload["oracle_margin_raw_counts"] = oracle_margin_hist.counts
+        npz_payload["oracle_margin_raw_log_edges"] = oracle_margin_hist.edges
+
+    np.savez(out_dir / "mask_score_gap_histograms.npz", **npz_payload)
+    print(f"Wrote {summary_path}, {by_layer_path}, mask_score_gap_histograms.npz, mask_score_gap_gap_diagnostics.json")
+
+
+def _save_baseline_parallel_shard(
+    *,
+    shard_dir: Path,
+    milestones: List[int],
+    random_seeds: List[int],
+    histogram_bins: int,
+    gap_diag: Dict[str, object],
+    layer_rows: List[Dict[str, object]],
+    oracle_margin_hist: LogSpaceHistogram,
+    oracle_margin_w: MomentAccum,
+    rnd_raw_hists: Dict[int, LogSpaceHistogram],
+    rnd_norm_hists: Dict[int, LinSpaceHistogram],
+    rnd_w_raw: Dict[int, MomentAccum],
+    rnd_w_norm: Dict[int, MomentAccum],
+    rnd_margin_raw_hists: Dict[int, LogSpaceHistogram],
+    rnd_margin_w_raw: Dict[int, MomentAccum],
+    max_verify_diff: float,
+    verify_key_worst: str,
+    cert_match_tie_break: bool,
+    cert_min_layer_keep_ratio: float,
+    cert_global_mode: str,
+    cert_tau_rule: str,
+    cert_hybrid_min_layer_keep_ratio: float,
+    sparsity_percent: float,
+    flatten_dtype: torch.dtype,
+) -> None:
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    payload: Dict[str, object] = {
+        "version": PARALLEL_SHARD_VERSION,
+        "kind": "baseline",
+        "histogram_bins": int(histogram_bins),
+        "milestones": list(milestones),
+        "random_seeds": list(random_seeds),
+        "gap_diag": dict(gap_diag),
+        "layer_rows": copy.deepcopy(layer_rows),
+        "oracle_margin_hist": _log_hist_to_dict(oracle_margin_hist),
+        "oracle_margin_w": _moment_to_dict(oracle_margin_w),
+        "rnd_raw_hists": {int(s): _log_hist_to_dict(rnd_raw_hists[s]) for s in random_seeds},
+        "rnd_norm_hists": {int(s): _lin_hist_to_dict(rnd_norm_hists[s]) for s in random_seeds},
+        "rnd_w_raw": {int(s): _moment_to_dict(rnd_w_raw[s]) for s in random_seeds},
+        "rnd_w_norm": {int(s): _moment_to_dict(rnd_w_norm[s]) for s in random_seeds},
+        "rnd_margin_raw_hists": {int(s): _log_hist_to_dict(rnd_margin_raw_hists[s]) for s in random_seeds},
+        "rnd_margin_w_raw": {int(s): _moment_to_dict(rnd_margin_w_raw[s]) for s in random_seeds},
+        "max_verify_diff": float(max_verify_diff),
+        "verify_key_worst": str(verify_key_worst),
+        "cert_match_tie_break": bool(cert_match_tie_break),
+        "cert_min_layer_keep_ratio": float(cert_min_layer_keep_ratio),
+        "cert_global_mode": str(cert_global_mode),
+        "cert_tau_rule": str(cert_tau_rule),
+        "cert_hybrid_min_layer_keep_ratio": float(cert_hybrid_min_layer_keep_ratio),
+        "sparsity_percent": float(sparsity_percent),
+        "flatten_dtype": str(flatten_dtype).replace("torch.", ""),
+    }
+    path = shard_dir / "baseline_shard.pt"
+    _atomic_torch_save(payload, path)
+    _write_shard_done(path)
+    print(f"Parallel baseline shard written to {path}")
+
+
+def merge_parallel_shards(*, out_dir: Path, milestones: List[int]) -> None:
+    """Combine baseline_shard + milestone_*_shard into final analysis artifacts."""
+    milestones = sorted(milestones)
+    sd = parallel_shards_dir(out_dir)
+    base_path = sd / "baseline_shard.pt"
+    done_b = Path(str(base_path) + ".done")
+    if not base_path.is_file() or not done_b.is_file():
+        raise FileNotFoundError(f"Expected {base_path} and {done_b}; run baseline_shard stage first.")
+    baseline = _torch_load_analysis_shard(base_path)
+    if int(baseline.get("version", -1)) != PARALLEL_SHARD_VERSION:
+        raise ValueError("baseline_shard.pt version mismatch")
+    histogram_bins = int(baseline["histogram_bins"])
+    seeds: List[int] = [int(x) for x in baseline["random_seeds"]]
+    gap_diag: Dict[str, object] = dict(baseline["gap_diag"])  # type: ignore[arg-type]
+    layer_rows: List[Dict[str, object]] = [dict(r) for r in baseline["layer_rows"]]  # type: ignore[arg-type]
+    row_by_name = {str(r["param_name"]): r for r in layer_rows}
+
+    mag_raw_hists: Dict[int, LogSpaceHistogram] = {}
+    mag_norm_hists: Dict[int, LinSpaceHistogram] = {}
+    mag_w_raw: Dict[int, MomentAccum] = {}
+    mag_w_norm: Dict[int, MomentAccum] = {}
+    mag_margin_raw_hists: Dict[int, LogSpaceHistogram] = {}
+    mag_margin_w_raw: Dict[int, MomentAccum] = {}
+
+    max_verify_diff = float(baseline["max_verify_diff"])
+    verify_key_worst = str(baseline["verify_key_worst"])
+    missing: List[int] = []
+
+    for step in milestones:
+        mp = sd / f"milestone_{step}_shard.pt"
+        md = Path(str(mp) + ".done")
+        if not mp.is_file() or not md.is_file():
+            missing.append(step)
+            continue
+        ms = _torch_load_analysis_shard(mp)
+        if int(ms.get("version", -1)) != PARALLEL_SHARD_VERSION:
+            raise ValueError(f"milestone shard bad version at step {step}")
+        gd = ms["gap_diag"]
+        for k, v in gd.items():
+            gap_diag[str(k)] = v
+        mag_raw_hists[int(step)] = _log_hist_from_dict(ms["mag_raw_hist"])
+        mag_norm_hists[int(step)] = _lin_hist_from_dict(ms["mag_norm_hist"])
+        mag_w_raw[int(step)] = _moment_from_dict(ms["mag_w_raw"])
+        mag_w_norm[int(step)] = _moment_from_dict(ms["mag_w_norm"])
+        mag_margin_raw_hists[int(step)] = _log_hist_from_dict(ms["mag_margin_hist"])
+        mag_margin_w_raw[int(step)] = _moment_from_dict(ms["mag_margin_w"])
+        mv = float(ms["max_verify_diff"])
+        if mv > max_verify_diff:
+            max_verify_diff = mv
+            verify_key_worst = str(ms["verify_key_worst"])
+        elif mv == max_verify_diff and mv > 0:
+            verify_key_worst = verify_key_worst or str(ms["verify_key_worst"])
+        for pname, cols in ms["layer_mag_updates"].items():
+            pn = str(pname)
+            if pn not in row_by_name:
+                row_by_name[pn] = {"param_name": pn, "numel": 0}
+                layer_rows.append(row_by_name[pn])
+            row_by_name[pn].update({str(k): v for k, v in cols.items()})
+
+    if missing:
+        raise FileNotFoundError(
+            f"Missing milestone shard or .done for steps {missing}. Expected under {sd}. "
+            f"Required steps: {milestones}"
+        )
+
+    rnd_raw_hists = {int(s): _log_hist_from_dict(baseline["rnd_raw_hists"][s]) for s in seeds}
+    rnd_norm_hists = {int(s): _lin_hist_from_dict(baseline["rnd_norm_hists"][s]) for s in seeds}
+    rnd_w_raw = {int(s): _moment_from_dict(baseline["rnd_w_raw"][s]) for s in seeds}
+    rnd_w_norm = {int(s): _moment_from_dict(baseline["rnd_w_norm"][s]) for s in seeds}
+    rnd_margin_raw_hists = {int(s): _log_hist_from_dict(baseline["rnd_margin_raw_hists"][s]) for s in seeds}
+    rnd_margin_w_raw = {int(s): _moment_from_dict(baseline["rnd_margin_w_raw"][s]) for s in seeds}
+    oracle_margin_hist = _log_hist_from_dict(baseline["oracle_margin_hist"])
+    oracle_margin_w = _moment_from_dict(baseline["oracle_margin_w"])
+
+    write_mask_score_gap_artifacts(
+        out_dir=out_dir,
+        milestones=milestones,
+        random_seeds=seeds,
+        histogram_bins=histogram_bins,
+        gap_diag=gap_diag,
+        layer_rows=layer_rows,
+        mag_raw_hists=mag_raw_hists,
+        mag_norm_hists=mag_norm_hists,
+        mag_w_raw=mag_w_raw,
+        mag_w_norm=mag_w_norm,
+        mag_margin_raw_hists=mag_margin_raw_hists,
+        mag_margin_w_raw=mag_margin_w_raw,
+        rnd_raw_hists=rnd_raw_hists,
+        rnd_norm_hists=rnd_norm_hists,
+        rnd_w_raw=rnd_w_raw,
+        rnd_w_norm=rnd_w_norm,
+        rnd_margin_raw_hists=rnd_margin_raw_hists,
+        rnd_margin_w_raw=rnd_margin_w_raw,
+        oracle_margin_hist=oracle_margin_hist,
+        oracle_margin_w=oracle_margin_w,
+        delta_verify=None,
+        max_verify_diff=max_verify_diff,
+        verify_key_worst=verify_key_worst,
+    )
+
+
+def run_milestone_shard_job(args: argparse.Namespace) -> None:
+    """Single-milestone worker (loads baseline shard + one mag_aggregate cache)."""
+    out_dir = Path(args.out_dir)
+    sd = parallel_shards_dir(out_dir)
+    step = int(args.milestone_shard_step)
+    cache_dir = out_dir / "magnitude_caches"
+    mag_path = cache_dir / f"mag_aggregate_step_{step}.pt"
+    if not mag_path.is_file():
+        raise FileNotFoundError(f"Milestone cache missing: {mag_path}")
+
+    base_path = sd / "baseline_shard.pt"
+    if not base_path.is_file():
+        raise FileNotFoundError(f"Baseline shard missing: {base_path}")
+    baseline = _torch_load_analysis_shard(base_path)
+
+    def _req_same(label: str, a: object, b: object) -> None:
+        if a != b:
+            raise ValueError(f"Milestone shard env mismatch on {label}: shard={a!r} job={b!r}")
+
+    _req_same("histogram_bins", baseline["histogram_bins"], args.histogram_bins)
+    cert_tb_job = True
+    if getattr(args, "cert_no_match_tie_break", False):
+        cert_tb_job = False
+    elif os.environ.get("CERT_MATCH_TIE_BREAK", "").strip().lower() in ("0", "false", "no"):
+        cert_tb_job = False
+    _req_same("cert_match_tie_break", baseline["cert_match_tie_break"], cert_tb_job)
+    _req_same("cert_min_layer_keep_ratio", baseline["cert_min_layer_keep_ratio"], float(args.cert_min_layer_keep_ratio))
+    _req_same("cert_global_mode", baseline["cert_global_mode"], str(args.cert_global_mode))
+    _req_same("cert_tau_rule", baseline["cert_tau_rule"], str(args.cert_tau_rule))
+    _req_same(
+        "cert_hybrid_min_layer_keep_ratio",
+        baseline["cert_hybrid_min_layer_keep_ratio"],
+        float(args.cert_hybrid_min_layer_keep_ratio),
+    )
+    _req_same("sparsity_percent", baseline["sparsity_percent"], float(args.sparsity_percent))
+
+    milestones_full: List[int] = [int(x) for x in baseline["milestones"]]
+    if step not in milestones_full:
+        raise ValueError(f"Milestone {step} not in baseline shard milestones {milestones_full}")
+
+    ckpt_dt = getattr(args, "checkpoint_dtype", torch.bfloat16)
+    _req_same("flatten_dtype", baseline["flatten_dtype"], str(ckpt_dt).replace("torch.", ""))
+
+    seeds_base: List[int] = sorted({int(x) for x in baseline["random_seeds"]})
+    seeds_job_list: List[int] = [int(args.random_seed)]
+    if args.random_seeds:
+        for s in args.random_seeds.split(","):
+            s = s.strip()
+            if s:
+                seeds_job_list.append(int(s))
+    seeds_job = sorted(set(seeds_job_list))
+    if seeds_base != seeds_job:
+        raise ValueError(f"random_seeds mismatch: baseline {seeds_base} vs job {seeds_job}")
+
+    print(f"Loading checkpoints for milestone shard step {step}...")
+    initial_sd = load_state_dict(args.initial_model, device="cpu", torch_dtype=ckpt_dt)
+    final_sd = load_state_dict(args.final_model, device="cpu", torch_dtype=ckpt_dt)
+    keys_all = [n for n in final_sd if n in initial_sd]
+    if args.mlp_only:
+        keys_all = [n for n in keys_all if is_mlp_param(n)]
+    keys = list(keys_all)
+    if args.max_keys is not None:
+        keys = keys[: max(0, args.max_keys)]
+
+    delta_verify: Optional[Dict[str, torch.Tensor]] = None
+    if args.verify_deltas_dir:
+        cand = Path(args.verify_deltas_dir) / "deltas_step_500.pt"
+        if cand.is_file():
+            delta_verify = safe_torch_load(str(cand), map_location="cpu")
+
+    layer_rows: List[Dict[str, object]] = [dict(r) for r in baseline["layer_rows"]]  # type: ignore[arg-type]
+    layer_by_name = {str(r["param_name"]): r for r in layer_rows}
+
+    mag_scores = safe_torch_load(str(mag_path), map_location="cpu")
+    gap_frag: Dict[str, object] = {}
+    mag_raw_hist = LogSpaceHistogram(args.histogram_bins)
+    mag_norm_hist = LinSpaceHistogram(args.histogram_bins, upper=1.0)
+    mag_w_r = MomentAccum()
+    mag_w_n = MomentAccum()
+    mag_margin_hist = LogSpaceHistogram(args.histogram_bins)
+    mag_margin_w = MomentAccum()
+    layer_mag_updates: Dict[str, Dict[str, float]] = {}
+
+    max_v, worst = _process_single_milestone(
+        step,
+        keys=keys,
+        initial_sd=initial_sd,
+        final_sd=final_sd,
+        mag_scores=mag_scores,
+        layer_by_name=layer_by_name,
+        histogram_bins=args.histogram_bins,
+        flatten_dtype=ckpt_dt,
+        sparsity_percent=float(args.sparsity_percent),
+        cert_match_tie_break=cert_tb_job,
+        cert_global_mode=str(args.cert_global_mode),
+        cert_tau_rule=str(args.cert_tau_rule),
+        cert_hybrid_min_layer_keep_ratio=float(args.cert_hybrid_min_layer_keep_ratio),
+        delta_verify=delta_verify,
+        mag_raw_hist=mag_raw_hist,
+        mag_norm_hist=mag_norm_hist,
+        mag_w_raw=mag_w_r,
+        mag_w_norm=mag_w_n,
+        mag_margin_raw_hist=mag_margin_hist,
+        mag_margin_w_raw=mag_margin_w,
+        gap_diag=gap_frag,
+        max_verify_diff=0.0,
+        verify_key_worst="",
+        layer_mag_updates=layer_mag_updates,
+        layer_rows=None,
+    )
+    del mag_scores
+    gc.collect()
+
+    payload: Dict[str, object] = {
+        "version": PARALLEL_SHARD_VERSION,
+        "kind": "milestone",
+        "step": int(step),
+        "gap_diag": gap_frag,
+        "mag_raw_hist": _log_hist_to_dict(mag_raw_hist),
+        "mag_norm_hist": _lin_hist_to_dict(mag_norm_hist),
+        "mag_w_raw": _moment_to_dict(mag_w_r),
+        "mag_w_norm": _moment_to_dict(mag_w_n),
+        "mag_margin_hist": _log_hist_to_dict(mag_margin_hist),
+        "mag_margin_w": _moment_to_dict(mag_margin_w),
+        "layer_mag_updates": layer_mag_updates,
+        "max_verify_diff": float(max_v),
+        "verify_key_worst": str(worst),
+    }
+    out_path = sd / f"milestone_{step}_shard.pt"
+    _atomic_torch_save(payload, out_path)
+    _write_shard_done(out_path)
+    print(f"Milestone shard written to {out_path}")
+
+
 def _minmax_norm(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     xf = x.float()
     mn = xf.min()
@@ -366,8 +1167,9 @@ def process_keys(
     cert_global_mode: str,
     cert_tau_rule: str,
     cert_hybrid_min_layer_keep_ratio: float,
+    parallel_stop_after_baseline: bool = False,
+    parallel_shard_dir: Optional[Path] = None,
 ) -> None:
-    qs = (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
     milestones = sorted(milestones)
     use_stream = cert_global_mode == "stream"
     use_hybrid_tau = cert_tau_rule == "hybrid_global_phase"
@@ -746,6 +1548,35 @@ def process_keys(
         del rnd_flat_bufs
     gc.collect()
 
+    if parallel_stop_after_baseline:
+        sd = parallel_shard_dir if parallel_shard_dir is not None else parallel_shards_dir(out_dir)
+        _save_baseline_parallel_shard(
+            shard_dir=sd,
+            milestones=milestones,
+            random_seeds=random_seeds,
+            histogram_bins=histogram_bins,
+            gap_diag=gap_diag,
+            layer_rows=layer_rows,
+            oracle_margin_hist=oracle_margin_hist,
+            oracle_margin_w=oracle_margin_w,
+            rnd_raw_hists=rnd_raw_hists,
+            rnd_norm_hists=rnd_norm_hists,
+            rnd_w_raw=rnd_w_raw,
+            rnd_w_norm=rnd_w_norm,
+            rnd_margin_raw_hists=rnd_margin_raw_hists,
+            rnd_margin_w_raw=rnd_margin_w_raw,
+            max_verify_diff=max_verify_diff,
+            verify_key_worst=verify_key_worst,
+            cert_match_tie_break=cert_match_tie_break,
+            cert_min_layer_keep_ratio=cert_min_layer_keep_ratio,
+            cert_global_mode=cert_global_mode,
+            cert_tau_rule=cert_tau_rule,
+            cert_hybrid_min_layer_keep_ratio=cert_hybrid_min_layer_keep_ratio,
+            sparsity_percent=sparsity_percent,
+            flatten_dtype=flatten_dtype,
+        )
+        return
+
     # ---------- per milestone magnitude caches
     layer_by_name = {row["param_name"]: row for row in layer_rows}
 
@@ -753,364 +1584,61 @@ def process_keys(
         path = milestone_cache_paths[step]
         print(f"Magnitude @{step}: load cached aggregates from {path}")
         mag_scores = safe_torch_load(str(path), map_location="cpu")
-        n_elems = 0
-        n_zero_raw = 0
-        vmin_pos_accum = torch.tensor(float("inf"))
-        vmax_accum = torch.tensor(float("-inf"))
-        oracle_match_sample: List[Dict[str, object]] = []
-
-        mag_cert_n = 0
-        mag_eligible: List[str] = []
-        mag_numels: List[int] = []
-        for nm in keys:
-            if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
-                continue
-            om = mag_scores[nm].shape
-            oo = initial_sd[nm].shape
-            of = final_sd[nm].shape
-            if om == oo == of:
-                n_mag_layer = int(math.prod(tuple(int(x) for x in om)))
-                mag_cert_n += n_mag_layer
-                mag_eligible.append(nm)
-                mag_numels.append(n_mag_layer)
-        if use_stream:
-            flat_mag_flat = torch.empty(0, dtype=flatten_dtype)
-            flat_oracle_flat_m = torch.empty(0, dtype=flatten_dtype)
-        else:
-            flat_mag_flat = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
-            flat_oracle_flat_m = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
-        mag_cert_off = 0
-
-        for ki, name in enumerate(keys):
-            if name not in initial_sd or name not in final_sd or name not in mag_scores:
-                continue
-            w0 = initial_sd[name]
-            w1 = final_sd[name]
-            if not w0.is_floating_point() or not w1.is_floating_point():
-                del w0, w1
-                continue
-            s_oracle = (w1 - w0).abs()
-            if s_oracle.is_floating_point():
-                s_oracle = s_oracle.to(dtype=flatten_dtype)
-            s_mag = mag_scores[name]
-            if s_mag.is_floating_point():
-                s_mag = s_mag.to(dtype=flatten_dtype)
-            if s_mag.shape != s_oracle.shape:
-                del w0, w1, s_oracle, s_mag
-                continue
-
-            nloc_mag = int(s_mag.numel())
-            if not use_stream:
-                flat_mag_flat[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_mag.reshape(-1))
-                flat_oracle_flat_m[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_oracle.reshape(-1))
-            mag_cert_off += nloc_mag
-
-            if delta_verify is not None and name in delta_verify:
-                dv = delta_verify[name].to(torch.float32).abs()
-                if dv.shape == s_oracle.shape:
-                    diff = (s_oracle - dv).abs().max().item()
-                    if diff > max_verify_diff:
-                        max_verify_diff = diff
-                        verify_key_worst = name
-
-            v_mag_raw = (s_mag - s_oracle).abs()
-            v_zero = v_mag_raw == 0
-            ne = int(v_mag_raw.numel())
-            nz = int(v_zero.sum().item())
-            n_elems += ne
-            n_zero_raw += nz
-
-            vp = v_mag_raw[v_mag_raw > 0]
-            if vp.numel():
-                vmin_pos_accum = torch.minimum(vmin_pos_accum, vp.min())
-                vmax_accum = torch.maximum(vmax_accum, v_mag_raw.max())
-
-            o_n = _minmax_norm(s_oracle)
-            m_n = _minmax_norm(s_mag)
-            v_mag_norm = (m_n - o_n).abs()
-
-            mag_raw_hists[step].update(v_mag_raw)
-            mag_norm_hists[step].update(v_mag_norm)
-            mag_w_raw[step].update(v_mag_raw)
-            mag_w_norm[step].update(v_mag_norm)
-
-            ln = layer_by_name.get(name)
-            if ln is None:
-                ln = {"param_name": name, "numel": int(s_oracle.numel())}
-                layer_by_name[name] = ln
-                layer_rows.append(ln)
-            ln[f"mean_v_mag_raw_step{step}"] = float(v_mag_raw.mean().item())
-            ln[f"mean_v_mag_norm_step{step}"] = float(v_mag_norm.mean().item())
-
-            if len(oracle_match_sample) < 2:
-                oracle_match_sample.append(
-                    {"key": name, "frac_zero": nz / max(ne, 1), "mean_v_raw": float(v_mag_raw.mean().item())}
-                )
-
-            del w0, w1, s_oracle, s_mag, v_mag_raw, o_n, m_n, v_mag_norm
-            gc.collect()
-
-            if (ki + 1) % 60 == 0:
-                print(f"  @{step}: processed key {ki + 1}/{len(keys)}")
-
-        gap_diag[f"milestone_{step}_raw_frac_zero_exact"] = (n_zero_raw / n_elems) if n_elems else 0.0
-        _mn = float(vmin_pos_accum.item()) if n_elems else float("nan")
-        gap_diag[f"milestone_{step}_raw_min_positive"] = (
-            _mn if math.isfinite(_mn) else float("nan")
+        max_verify_diff, verify_key_worst = _process_single_milestone(
+            step,
+            keys=keys,
+            initial_sd=initial_sd,
+            final_sd=final_sd,
+            mag_scores=mag_scores,
+            layer_by_name=layer_by_name,
+            histogram_bins=histogram_bins,
+            flatten_dtype=flatten_dtype,
+            sparsity_percent=sparsity_percent,
+            cert_match_tie_break=cert_match_tie_break,
+            cert_global_mode=cert_global_mode,
+            cert_tau_rule=cert_tau_rule,
+            cert_hybrid_min_layer_keep_ratio=cert_hybrid_min_layer_keep_ratio,
+            delta_verify=delta_verify,
+            mag_raw_hist=mag_raw_hists[step],
+            mag_norm_hist=mag_norm_hists[step],
+            mag_w_raw=mag_w_raw[step],
+            mag_w_norm=mag_w_norm[step],
+            mag_margin_raw_hist=mag_margin_raw_hists[step],
+            mag_margin_w_raw=mag_margin_w_raw[step],
+            gap_diag=gap_diag,
+            max_verify_diff=max_verify_diff,
+            verify_key_worst=verify_key_worst,
+            layer_mag_updates=None,
+            layer_rows=layer_rows,
         )
-        _mx = float(vmax_accum.item()) if n_elems else float("nan")
-        gap_diag[f"milestone_{step}_raw_global_max"] = _mx if math.isfinite(_mx) else float("nan")
-        gap_diag[f"milestone_{step}_sample_tensors"] = oracle_match_sample[:2]
-
-        if mag_cert_off != mag_cert_n:
-            raise RuntimeError(
-                f"Magnitude cert flatten mismatch at step {step}: wrote {mag_cert_off} vs expected {mag_cert_n}"
-            )
-
-        mag_keep = global_keep_count(mag_cert_n, sparsity_percent) if mag_cert_n > 0 else 0
-        mag_floors: List[int] = []
-        mag_floor_by_name: Dict[str, int] = {}
-        if use_hybrid_tau and mag_cert_n > 0:
-            mag_floors = scaled_hybrid_floor_counts_per_layer(
-                mag_numels, float(cert_hybrid_min_layer_keep_ratio), int(mag_keep)
-            )
-            gap_diag[f"cert_magnitude_step{step}_hybrid_floor_total"] = int(sum(mag_floors))
-            gap_diag[f"cert_magnitude_step{step}_hybrid_R"] = int(mag_keep - sum(mag_floors))
-            for _nm, _f in zip(mag_eligible, mag_floors):
-                mag_floor_by_name[_nm] = int(_f)
-
-        if use_stream and mag_cert_n > 0:
-            max_abs_m = 0.0
-            for nm in keys:
-                if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
-                    continue
-                w0m, w1m = initial_sd[nm], final_sd[nm]
-                if not w0m.is_floating_point() or not w1m.is_floating_point():
-                    continue
-                sm = mag_scores[nm]
-                om_sh = sm.shape
-                oo_sh = w0m.shape
-                of_sh = w1m.shape
-                if om_sh != oo_sh or om_sh != of_sh:
-                    continue
-                xm = sm.to(dtype=flatten_dtype).reshape(-1).float()
-                torch.nan_to_num_(xm, nan=0.0, posinf=0.0, neginf=0.0)
-                max_abs_m = max(max_abs_m, float(xm.abs().max().item()))
-            scale_m = max(max_abs_m * 1e-6, 1e-12) if cert_match_tie_break else 0.0
-
-            def _mag_sel_chunks_stream():
-                gen_tb = torch.Generator(device="cpu")
-                gen_tb.manual_seed(42)
-                for nm in keys:
-                    if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
-                        continue
-                    w0m, w1m = initial_sd[nm], final_sd[nm]
-                    if not w0m.is_floating_point() or not w1m.is_floating_point():
-                        continue
-                    sm = mag_scores[nm]
-                    som = (w1m - w0m).abs()
-                    if sm.shape != som.shape:
-                        continue
-                    x = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
-                    torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
-                    if cert_match_tie_break:
-                        noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
-                        x = x + noise * scale_m
-                    yield x
-
-            if use_hybrid_tau:
-                floor_sum_m = int(sum(mag_floors)) if mag_floors else 0
-                R_m = int(mag_keep) - floor_sum_m
-                if R_m <= 0 or mag_cert_n <= 0:
-                    tau_m = float("nan")
-                    k_m, N_m = int(mag_keep), int(mag_cert_n)
-                else:
-
-                    def _mag_hybrid_pieces():
-                        gen_tb = torch.Generator(device="cpu")
-                        gen_tb.manual_seed(42)
-                        for nm in keys:
-                            if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
-                                continue
-                            w0m, w1m = initial_sd[nm], final_sd[nm]
-                            if not w0m.is_floating_point() or not w1m.is_floating_point():
-                                continue
-                            sm = mag_scores[nm]
-                            som = (w1m - w0m).abs()
-                            if sm.shape != som.shape:
-                                continue
-                            x = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
-                            torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
-                            if cert_match_tie_break:
-                                noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
-                                x = x + noise * scale_m
-                            f = int(mag_floor_by_name.get(nm, 0))
-                            if f > 0:
-                                kk = min(f, int(x.numel()))
-                                _, idx = torch.topk(x, kk, largest=True)
-                                x[idx] = float("-inf")
-                            yield x
-
-                    tau_m = streaming_min_of_global_top_r(_mag_hybrid_pieces(), R_m)
-                    k_m, N_m = int(mag_keep), int(mag_cert_n)
-            else:
-                tau_m, k_m, N_m = streaming_global_topk_threshold(
-                    total_n=mag_cert_n,
-                    sparsity_percent=sparsity_percent,
-                    iter_sel_chunks_fp32=_mag_sel_chunks_stream(),
-                )
-
-            gen_tb4 = torch.Generator(device="cpu")
-            gen_tb4.manual_seed(42)
-            c_ok_m = 0
-            c_den_m = 0
-            for nm in keys:
-                if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
-                    continue
-                w0m, w1m = initial_sd[nm], final_sd[nm]
-                if not w0m.is_floating_point() or not w1m.is_floating_point():
-                    continue
-                sm = mag_scores[nm]
-                som = (w1m - w0m).abs().to(dtype=flatten_dtype)
-                if sm.shape != som.shape:
-                    continue
-                m_sel = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
-                torch.nan_to_num_(m_sel, nan=0.0, posinf=0.0, neginf=0.0)
-                if cert_match_tie_break:
-                    noise = torch.randn(m_sel.numel(), generator=gen_tb4, dtype=torch.float32)
-                    m_sel = m_sel + noise * scale_m
-                s_star_m = som.reshape(-1).float()
-                torch.nan_to_num_(s_star_m, nan=0.0, posinf=0.0, neginf=0.0)
-                gap_m = (m_sel - s_star_m).abs()
-                margin_m = (m_sel - tau_m).abs()
-                c_ok_m += int((gap_m < margin_m).sum().item())
-                c_den_m += int(gap_m.numel())
-                mag_margin_raw_hists[step].update(margin_m)
-                mag_margin_w_raw[step].update(margin_m)
-
-            gap_diag[f"cert_magnitude_step{step}_tau"] = tau_m
-            gap_diag[f"cert_magnitude_step{step}_k_keep"] = k_m
-            gap_diag[f"cert_magnitude_step{step}_N"] = N_m
-            gap_diag[f"cert_strict_frac_magnitude_step{step}"] = (c_ok_m / c_den_m) if c_den_m else float("nan")
-            gap_diag[f"cert_strict_numer_magnitude_step{step}"] = c_ok_m
-            gap_diag[f"cert_strict_denom_magnitude_step{step}"] = c_den_m
-
-        elif not use_stream and mag_cert_n > 0 and flat_mag_flat.numel() > 0:
-            flat_mag = flat_mag_flat
-            flat_oracle_m = flat_oracle_flat_m
-            m_sel = scores_for_cert_selection(flat_mag, match_tie_break=cert_match_tie_break)
-            if use_hybrid_tau:
-                tau_m, k_m, N_m, _ft_m, _rr_m = tau_hybrid_global_phase_from_flat(
-                    m_sel, mag_numels, mag_floors, int(mag_keep)
-                )
-            else:
-                tau_m, k_m, N_m = global_topk_threshold(m_sel, sparsity_percent)
-            margin_m = (m_sel - tau_m).abs()
-            gap_cert_m = (m_sel - flat_oracle_m).abs()
-            c_ok, c_den = certifiability_strict_fraction(gap_cert_m, margin_m)
-            mag_margin_raw_hists[step].update(margin_m)
-            mag_margin_w_raw[step].update(margin_m)
-            gap_diag[f"cert_magnitude_step{step}_tau"] = tau_m
-            gap_diag[f"cert_magnitude_step{step}_k_keep"] = k_m
-            gap_diag[f"cert_magnitude_step{step}_N"] = N_m
-            gap_diag[f"cert_strict_frac_magnitude_step{step}"] = (c_ok / c_den) if c_den else float("nan")
-            gap_diag[f"cert_strict_numer_magnitude_step{step}"] = c_ok
-            gap_diag[f"cert_strict_denom_magnitude_step{step}"] = c_den
-
         del mag_scores
         gc.collect()
 
-    if delta_verify is not None:
-        print(f"verify deltas max |oracle - |delta500||: {max_verify_diff:.6e} (worst key: {verify_key_worst!r})")
-
-    with (out_dir / "mask_score_gap_gap_diagnostics.json").open("w", encoding="utf-8") as f:
-        json.dump(gap_diag, f, indent=2)
-
-    summary_path = out_dir / "mask_score_gap_summary.csv"
-    by_layer_path = out_dir / "mask_score_gap_by_layer.csv"
-    summary_rows: List[Dict[str, object]] = []
-
-    def pack_row(
-        case: str,
-        acc: MomentAccum,
-        h_log: Optional[LogSpaceHistogram],
-        h_lin: Optional[LinSpaceHistogram],
-    ) -> Dict[str, object]:
-        if h_log is not None:
-            qdict = _quantiles_log_hist(h_log.counts, h_log.edges, qs)
-        elif h_lin is not None:
-            qdict = _quantiles_from_hist_counts(h_lin.counts, h_lin.edges, qs)
-        else:
-            raise ValueError("pack_row requires h_log or h_lin")
-        return {"case": case, "total_numel": acc.n, "mean": acc.mean_value(), "std": acc.std_value(), **qdict}
-
-    def pack_cert_row(case: str, numer: int, denom: int) -> Dict[str, object]:
-        frac = (numer / denom) if denom else float("nan")
-        qnan = {f"p{int(round(q * 100)):02d}": float("nan") for q in qs}
-        return {"case": case, "total_numel": denom, "mean": frac, "std": 0.0, **qnan}
-
-    for step in milestones:
-        summary_rows.append(pack_row(f"magnitude_raw_step{step}", mag_w_raw[step], mag_raw_hists[step], None))
-        summary_rows.append(pack_row(f"magnitude_norm_step{step}", mag_w_norm[step], None, mag_norm_hists[step]))
-        summary_rows.append(
-            pack_row(f"magnitude_margin_raw_step{step}", mag_margin_w_raw[step], mag_margin_raw_hists[step], None)
-        )
-        dn = int(gap_diag.get(f"cert_strict_denom_magnitude_step{step}", 0) or 0)
-        nr = int(gap_diag.get(f"cert_strict_numer_magnitude_step{step}", 0) or 0)
-        if dn > 0:
-            summary_rows.append(pack_cert_row(f"cert_strict_magnitude_step{step}", nr, dn))
-    if oracle_margin_w.n > 0:
-        summary_rows.append(pack_row("oracle_margin_raw", oracle_margin_w, oracle_margin_hist, None))
-    for seed in random_seeds:
-        summary_rows.append(pack_row(f"random_raw_seed{seed}", rnd_w_raw[seed], rnd_raw_hists[seed], None))
-        summary_rows.append(pack_row(f"random_norm_seed{seed}", rnd_w_norm[seed], None, rnd_norm_hists[seed]))
-        summary_rows.append(
-            pack_row(f"random_margin_raw_seed{seed}", rnd_margin_w_raw[seed], rnd_margin_raw_hists[seed], None)
-        )
-        dn = int(gap_diag.get(f"cert_strict_denom_random_seed{seed}", 0) or 0)
-        nr = int(gap_diag.get(f"cert_strict_numer_random_seed{seed}", 0) or 0)
-        if dn > 0:
-            summary_rows.append(pack_cert_row(f"cert_strict_random_seed{seed}", nr, dn))
-
-    normalized_rows = sorted(layer_rows, key=lambda r: str(r.get("param_name", "")))
-
-    fn = sorted(summary_rows[0].keys()) if summary_rows else []
-    with summary_path.open("w", newline="", encoding="utf-8") as f:
-        wcsv = csv.DictWriter(f, fieldnames=fn)
-        wcsv.writeheader()
-        for row in summary_rows:
-            wcsv.writerow(row)
-
-    if normalized_rows:
-        lf = sorted(set().union(*(r.keys() for r in normalized_rows)))
-        with by_layer_path.open("w", newline="", encoding="utf-8") as f:
-            wcsv = csv.DictWriter(f, fieldnames=lf)
-            wcsv.writeheader()
-            for row in normalized_rows:
-                wcsv.writerow(row)
-
-    npz_payload: Dict[str, np.ndarray] = {"hist_bins": np.array([histogram_bins], dtype=np.int64)}
-    for step in milestones:
-        npz_payload[f"magnitude_raw_step{step}_counts"] = mag_raw_hists[step].counts
-        npz_payload[f"magnitude_raw_step{step}_log_edges"] = mag_raw_hists[step].edges
-        npz_payload[f"magnitude_norm_step{step}_counts"] = mag_norm_hists[step].counts
-        npz_payload[f"magnitude_norm_step{step}_edges"] = mag_norm_hists[step].edges
-    for seed in random_seeds:
-        npz_payload[f"random_raw_seed{seed}_counts"] = rnd_raw_hists[seed].counts
-        npz_payload[f"random_raw_seed{seed}_log_edges"] = rnd_raw_hists[seed].edges
-        npz_payload[f"random_norm_seed{seed}_counts"] = rnd_norm_hists[seed].counts
-        npz_payload[f"random_norm_seed{seed}_edges"] = rnd_norm_hists[seed].edges
-        npz_payload[f"random_margin_raw_seed{seed}_counts"] = rnd_margin_raw_hists[seed].counts
-        npz_payload[f"random_margin_raw_seed{seed}_log_edges"] = rnd_margin_raw_hists[seed].edges
-    for step in milestones:
-        npz_payload[f"magnitude_margin_raw_step{step}_counts"] = mag_margin_raw_hists[step].counts
-        npz_payload[f"magnitude_margin_raw_step{step}_log_edges"] = mag_margin_raw_hists[step].edges
-    if oracle_margin_hist.counts.sum() > 0:
-        npz_payload["oracle_margin_raw_counts"] = oracle_margin_hist.counts
-        npz_payload["oracle_margin_raw_log_edges"] = oracle_margin_hist.edges
-
-    np.savez(out_dir / "mask_score_gap_histograms.npz", **npz_payload)
-    print(f"Wrote {summary_path}, {by_layer_path}, mask_score_gap_histograms.npz, mask_score_gap_gap_diagnostics.json")
+    write_mask_score_gap_artifacts(
+        out_dir=out_dir,
+        milestones=milestones,
+        random_seeds=random_seeds,
+        histogram_bins=histogram_bins,
+        gap_diag=gap_diag,
+        layer_rows=layer_rows,
+        mag_raw_hists=mag_raw_hists,
+        mag_norm_hists=mag_norm_hists,
+        mag_w_raw=mag_w_raw,
+        mag_w_norm=mag_w_norm,
+        mag_margin_raw_hists=mag_margin_raw_hists,
+        mag_margin_w_raw=mag_margin_w_raw,
+        rnd_raw_hists=rnd_raw_hists,
+        rnd_norm_hists=rnd_norm_hists,
+        rnd_w_raw=rnd_w_raw,
+        rnd_w_norm=rnd_w_norm,
+        rnd_margin_raw_hists=rnd_margin_raw_hists,
+        rnd_margin_w_raw=rnd_margin_w_raw,
+        oracle_margin_hist=oracle_margin_hist,
+        oracle_margin_w=oracle_margin_w,
+        delta_verify=delta_verify,
+        max_verify_diff=max_verify_diff,
+        verify_key_worst=verify_key_worst,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1202,17 +1730,41 @@ def parse_args() -> argparse.Namespace:
             "Default from CERT_HYBRID_MIN_LAYER_KEEP_RATIO env, else 0 (invalid for hybrid; must be >0)."
         ),
     )
+    p.add_argument(
+        "--execution_mode",
+        type=str,
+        choices=("full", "cache_only", "baseline_shard", "milestone_shard", "merge_shards"),
+        default=os.environ.get("MASK_GAP_EXECUTION_MODE", "full"),
+        help=(
+            "full: monolithic run (default). cache_only: build magnitude_caches only. "
+            "baseline_shard: oracle/random + cert, write parallel_shards/baseline_shard.pt. "
+            "milestone_shard: requires --milestone_shard_step; writes parallel_shards/milestone_<step>_shard.pt. "
+            "merge_shards: combine baseline + milestone shards into CSV/NPZ/JSON (no checkpoint load)."
+        ),
+    )
+    p.add_argument(
+        "--milestone_shard_step",
+        type=int,
+        default=None,
+        help="For execution_mode=milestone_shard: which milestone step (e.g. 50).",
+    )
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    ensure_hf_hub_token()
+    mode = str(getattr(args, "execution_mode", "full")).strip().lower()
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir = out_dir / "magnitude_caches"
 
     milestones = sorted({int(x.strip()) for x in args.magnitude_milestones.split(",") if x.strip()})
+
+    if mode == "merge_shards":
+        merge_parallel_shards(out_dir=out_dir, milestones=milestones)
+        return
+
+    ensure_hf_hub_token()
 
     seeds: List[int] = [int(args.random_seed)]
     if args.random_seeds:
@@ -1239,6 +1791,18 @@ def main() -> None:
         cache_dir,
         force_rebuild=args.force_magnitude_cache_rebuild,
     )
+
+    if mode == "cache_only":
+        print("execution_mode=cache_only: magnitude caches ready under", cache_dir)
+        meta_co = {
+            "execution_mode": "cache_only",
+            "magnitude_milestones": milestones,
+            "magnitude_cache_dir": str(cache_dir),
+            "git_rev": _git_rev(),
+        }
+        with (out_dir / "mask_score_gap_run.json").open("w", encoding="utf-8") as f:
+            json.dump(meta_co, f, indent=2)
+        return
 
     keys = list(keys_all)
     if args.max_keys is not None:
@@ -1284,6 +1848,7 @@ def main() -> None:
         "cert_global_mode": str(getattr(args, "cert_global_mode", "materialize")),
         "cert_tau_rule": str(getattr(args, "cert_tau_rule", "global")),
         "cert_hybrid_min_layer_keep_ratio": float(getattr(args, "cert_hybrid_min_layer_keep_ratio", 0.0)),
+        "execution_mode": mode,
         "cert_note": (
             "Margins use τ from cert_tau_rule (global = pure top-k on flattened selection scores; "
             "hybrid_global_phase = floors then global top-R). Key order = analysis iteration order."
@@ -1291,6 +1856,12 @@ def main() -> None:
     }
     with (out_dir / "mask_score_gap_run.json").open("w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
+
+    if mode == "milestone_shard":
+        if args.milestone_shard_step is None:
+            raise ValueError("execution_mode=milestone_shard requires --milestone_shard_step")
+        run_milestone_shard_job(args)
+        return
 
     print(f"Milestones {milestones}; intersecting keys: {len(keys)}")
     process_keys(
@@ -1310,6 +1881,8 @@ def main() -> None:
         cert_global_mode=str(getattr(args, "cert_global_mode", "materialize")),
         cert_tau_rule=str(getattr(args, "cert_tau_rule", "global")),
         cert_hybrid_min_layer_keep_ratio=float(getattr(args, "cert_hybrid_min_layer_keep_ratio", 0.0)),
+        parallel_stop_after_baseline=(mode == "baseline_shard"),
+        parallel_shard_dir=parallel_shards_dir(out_dir),
     )
 
 
