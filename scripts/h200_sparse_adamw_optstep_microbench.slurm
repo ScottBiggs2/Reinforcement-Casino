@@ -35,6 +35,9 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+export PYTHONUNBUFFERED=1
+
 OUT_BASE="${OUT_BASE:-/scratch/${USER}/rl_casino_optstep_microbench/${SLURM_JOB_ID:-local}}"
 mkdir -p "$OUT_BASE"
 

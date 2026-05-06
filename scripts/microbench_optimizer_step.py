@@ -21,6 +21,11 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import sys
 
+import os
+
+# Ensure `src.*` imports work when running from Slurm.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from src.optimizers.sparse_adamw import SparseAdamW
 from src.utils.mask_manager import SparseMaskManager
 
