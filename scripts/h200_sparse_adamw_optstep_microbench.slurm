@@ -35,6 +35,19 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+DEFAULT_TRAIN_ENV="${SCRATCH_USER_ROOT}/conda_envs/rl_casino"
+if [ -n "${TRAIN_PY:-}" ] && [ -x "$TRAIN_PY" ]; then
+  :
+elif [ -n "${TRAIN_ENV:-}" ] && [ -x "${TRAIN_ENV}/bin/python" ]; then
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+elif [ -x "${DEFAULT_TRAIN_ENV}/bin/python" ]; then
+  TRAIN_ENV="${DEFAULT_TRAIN_ENV}"
+  TRAIN_PY="${TRAIN_ENV}/bin/python"
+else
+  TRAIN_PY="python3"
+fi
+
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
@@ -55,7 +68,7 @@ echo "STEPS=$STEPS TRIM_FRAC=$TRIM_FRAC LR=$LR BLOCK_SIZE=$BLOCK_SIZE"
 echo "ELEM_MASK=$ELEM_MASK"
 echo "BLOCK_MASK=$BLOCK_MASK RUN_BLOCK=$RUN_BLOCK"
 
-python3 scripts/microbench_optimizer_step.py \
+"$TRAIN_PY" scripts/microbench_optimizer_step.py \
   --out-dir "$OUT_BASE/elem" \
   --mask_path "$ELEM_MASK" \
   --mask_label elem \
@@ -67,7 +80,7 @@ python3 scripts/microbench_optimizer_step.py \
   --run_dense_torch 1 --run_dense_8bit 1 --run_sparse 1
 
 if [ "$RUN_BLOCK" = "1" ] && [ -n "$BLOCK_MASK" ]; then
-  python3 scripts/microbench_optimizer_step.py \
+  "$TRAIN_PY" scripts/microbench_optimizer_step.py \
     --out-dir "$OUT_BASE/block" \
     --mask_path "$BLOCK_MASK" \
     --mask_label block \

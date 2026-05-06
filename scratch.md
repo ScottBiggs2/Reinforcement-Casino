@@ -226,7 +226,10 @@ Final artifacts under OUT_DIR after job 6590161 completes.
            6590308     short tulu3_pl  biggs.s PD       0:00      1 (Priority)
 (base) [biggs.s@explorer-02 rl_casino]$ 
 
-
+# again....
+(base) [biggs.s@explorer-02 rl_casino]$ export ELEM_MASK="/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
+Submitted batch job 6592410
 
 ## SparseAdamW optimizer.step() microbench (H200)
 
