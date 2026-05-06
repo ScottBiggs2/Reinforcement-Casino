@@ -155,12 +155,13 @@ def generate_block_random_masks_cpu(
 def _build_phases(
     sparsity_levels: List[float],
     *,
-    include_dense_baseline: bool = True,
+    dense_optimizers: Tuple[str, ...] = ("adamw_torch",),
     mask_types: Tuple[str, ...] = ("element",),
 ) -> List[Tuple]:
     phases: List[Tuple] = []
-    if include_dense_baseline:
-        phases.append(("dense", None, "adamw", "none"))
+    for dopt in dense_optimizers:
+        tag = "dense" if dopt == "adamw_torch" else f"dense_{dopt}"
+        phases.append((tag, None, dopt, "none"))
     for sp in sparsity_levels:
         sp_tag = str(sp).replace(".", "p")
         for mask_type in mask_types:
@@ -218,6 +219,12 @@ def main() -> None:
     p.add_argument("--run_label", type=str, default="h200_opt_bench")
     p.add_argument("--benchmark_sparsities", type=str, default="99.75,97.5,95,90")
     p.add_argument("--no_dense_baseline", action="store_true")
+    p.add_argument(
+        "--dense_optimizers",
+        type=str,
+        default="adamw_torch",
+        help="Comma-separated dense baselines: adamw_torch,adamw_8bit",
+    )
     p.add_argument("--phase_mask_types", type=str, default="element", help="Comma-separated: element,block")
     p.add_argument("--phase_start", type=int, default=0)
     p.add_argument("--phase_end", type=int, default=None)
@@ -229,11 +236,14 @@ def main() -> None:
         if mt not in ("element", "block"):
             raise ValueError(f"Invalid mask_type {mt!r}; expected element or block")
 
-    phases = _build_phases(
-        sparsity_levels,
-        include_dense_baseline=not args.no_dense_baseline,
-        mask_types=mask_types,
-    )
+    dense_opts = tuple(x.strip() for x in str(args.dense_optimizers).split(",") if x.strip())
+    if args.no_dense_baseline:
+        dense_opts = tuple()
+    for d in dense_opts:
+        if d not in ("adamw_torch", "adamw_8bit"):
+            raise ValueError(f"Invalid dense optimizer {d!r}; expected adamw_torch or adamw_8bit")
+
+    phases = _build_phases(sparsity_levels, dense_optimizers=dense_opts, mask_types=mask_types)
     n_total = len(phases)
     ps = max(0, int(args.phase_start))
     pe = n_total if args.phase_end is None else int(args.phase_end)
@@ -248,6 +258,8 @@ def main() -> None:
         f"Phase grid: {len(phases)} phases (dense={'no' if args.no_dense_baseline else 'yes'}) "
         f"sparsity levels={sparsity_levels} mask_types={list(mask_types)}"
     )
+    if dense_opts:
+        slurm_safe_print(f"Dense baselines: {list(dense_opts)}")
 
     os.environ["HF_DATASETS_CACHE"] = args.dataset_cache_dir or os.environ.get(
         "HF_DATASETS_CACHE", os.path.expanduser("~/.cache/huggingface/datasets")
@@ -397,7 +409,7 @@ def main() -> None:
             run_name=run_name,
             mlp_only=args.mlp_only,
             block_size=32,
-            optimizer_type=("adamw" if sparsity_pct is None else "sparse_adamw"),
+            optimizer_type=(opt if sparsity_pct is None else "sparse_adamw"),
             save_csv=False,
             grad_accum=args.grad_accum,
             save_model=False,

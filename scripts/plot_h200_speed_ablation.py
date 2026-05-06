@@ -98,6 +98,16 @@ def compute_phase_table(
             if "cumulative_steps_per_s_excl_first" in sub.columns
             else float("nan")
         )
+        tail_opt_ms = (
+            _tail_mean(sub["t_optimizer_step_ms"], tail_steps)
+            if "t_optimizer_step_ms" in sub.columns
+            else float("nan")
+        )
+        tail_opt_mean_ms = (
+            _tail_mean(sub["t_optimizer_step_mean_ms"], tail_steps)
+            if "t_optimizer_step_mean_ms" in sub.columns
+            else float("nan")
+        )
         sp = sub["sparsity_target_pct"].iloc[0] if "sparsity_target_pct" in sub.columns else None
         try:
             sp_f = float(sp) if sp is not None and str(sp).strip() != "" and not pd.isna(sp) else float("nan")
@@ -119,6 +129,8 @@ def compute_phase_table(
                 "tail_mean_inst_steps_per_s": tail_inst,
                 "tail_mean_steps_per_s_excl_first": tail_excl,
                 "summary_metric": _tail_mean(sub[tp_col], tail_steps) if tp_col in sub.columns else float("nan"),
+                "tail_t_optimizer_step_ms": tail_opt_ms,
+                "tail_t_optimizer_step_mean_ms": tail_opt_mean_ms,
                 "theory_active_fraction_global": t_frac_f,
             }
         )
@@ -135,7 +147,65 @@ def compute_phase_table(
             m = float(r["summary_metric"])
             ratios.append(round(m / dense_metric, 6) if m == m and m > 0 else float("nan"))
     out["ratio_vs_dense"] = ratios
+    # Derived: optimizer fraction of end-to-end step (estimated from inst_steps/s)
+    frac: List[float] = []
+    for _, r in out.iterrows():
+        sps = float(r.get("tail_mean_inst_steps_per_s", float("nan")))
+        opt_ms = float(r.get("tail_t_optimizer_step_ms", float("nan")))
+        if sps == sps and sps > 0 and opt_ms == opt_ms and opt_ms > 0:
+            e2e_ms = 1e3 / sps
+            frac.append(round(opt_ms / e2e_ms, 6))
+        else:
+            frac.append(float("nan"))
+    out["optimizer_step_frac_of_e2e_est"] = frac
     return out
+
+
+def plot_optimizer_step_ms(ptable: pd.DataFrame, out_path: Path) -> None:
+    if "tail_t_optimizer_step_ms" not in ptable.columns:
+        _save_placeholder(out_path, "No t_optimizer_step_ms in CSV; re-run benchmark with timing enabled.")
+        return
+    sub = ptable.copy()
+    sub = sub[sub["tail_t_optimizer_step_ms"].notna()]
+    if sub.empty:
+        _save_placeholder(out_path, "No optimizer-step timing rows found.")
+        return
+
+    fig, ax = plt.subplots(figsize=(max(8, len(sub) * 0.5), 4.5))
+    order = list(sub.sort_values(["sparsity_target_pct", "phase"])["phase"])
+    vals = [float(sub[sub["phase"] == ph]["tail_t_optimizer_step_ms"].iloc[0]) for ph in order]
+    ax.bar(np.arange(len(order)), vals, color="#80b1d3")
+    ax.set_xticks(np.arange(len(order)))
+    ax.set_xticklabels(order, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("tail mean optimizer.step() (ms)")
+    ax.set_title("Optimizer-only cost by phase (tail mean)")
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_optimizer_fraction(ptable: pd.DataFrame, out_path: Path) -> None:
+    if "optimizer_step_frac_of_e2e_est" not in ptable.columns:
+        _save_placeholder(out_path, "No optimizer fraction data.")
+        return
+    sub = ptable.copy()
+    sub = sub[sub["optimizer_step_frac_of_e2e_est"].notna()]
+    if sub.empty:
+        _save_placeholder(out_path, "No valid optimizer fraction values.")
+        return
+    fig, ax = plt.subplots(figsize=(max(8, len(sub) * 0.5), 4.5))
+    order = list(sub.sort_values(["sparsity_target_pct", "phase"])["phase"])
+    vals = [float(sub[sub["phase"] == ph]["optimizer_step_frac_of_e2e_est"].iloc[0]) for ph in order]
+    ax.bar(np.arange(len(order)), vals, color="#fdb462")
+    ax.set_xticks(np.arange(len(order)))
+    ax.set_xticklabels(order, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("optimizer.step fraction of step (est.)")
+    ax.set_title("Optimizer share of end-to-end step time (estimated)")
+    ax.grid(True, axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
 
 
 def parse_slurm_bench_json(text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -447,6 +517,8 @@ def write_markdown(
         ("Ratio vs dense", "03_ratio_vs_dense"),
         ("Wall-time composition", "04_wall_breakdown"),
         ("Theory active fraction vs throughput", "05_theory_vs_metric"),
+        ("Optimizer.step() timing (tail mean)", "06_optimizer_step_ms"),
+        ("Optimizer fraction of step (estimated)", "07_optimizer_fraction"),
     ]
     for title, key in order:
         if key not in plot_rel_paths:
@@ -557,6 +629,12 @@ def main() -> int:
             pass
         notes.append("Theory scatter skipped (need ≥2 sparse rows with `theory_active_fraction_global` in CSV).")
 
+    p06 = out_dir / "06_optimizer_step_ms.png"
+    plot_optimizer_step_ms(ptable, p06)
+
+    p07 = out_dir / "07_optimizer_fraction.png"
+    plot_optimizer_fraction(ptable, p07)
+
     # Relative paths from md_out directory to plot files
     md_parent = md_out.parent
     plot_keys = {
@@ -568,6 +646,10 @@ def main() -> int:
         plot_keys["04_wall_breakdown"] = os.path.relpath(p04, start=md_parent)
     if p05.is_file():
         plot_keys["05_theory_vs_metric"] = os.path.relpath(p05, start=md_parent)
+    if p06.is_file():
+        plot_keys["06_optimizer_step_ms"] = os.path.relpath(p06, start=md_parent)
+    if p07.is_file():
+        plot_keys["07_optimizer_fraction"] = os.path.relpath(p07, start=md_parent)
 
     write_markdown(md_out, run_dir, tp_col, tp_label, ptable, plot_keys, notes)
     print(f"Wrote {md_out}", file=sys.stderr)

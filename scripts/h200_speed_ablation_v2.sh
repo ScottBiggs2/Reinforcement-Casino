@@ -129,6 +129,7 @@ echo "REPO_ROOT=${REPO_ROOT}"
 echo "OUT_BASE=${OUT_BASE}"
 echo "H200_BSR_FULL_GRID=${H200_BSR_FULL_GRID:-0}  BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}"
 echo "H200_BSR_MASK_TYPES=${H200_BSR_MASK_TYPES:-element,block}  (passed as --phase_mask_types)"
+echo "H200_DENSE_OPTIMIZERS=${H200_DENSE_OPTIMIZERS:-adamw_torch}  (passed as --dense_optimizers)"
 echo "H200_BSR_ARRAY_PHASE=${H200_BSR_ARRAY_PHASE:-0}  phase_slice=${PHASE_SLICE_ARGS[*]}"
 
 GC_ARGS=()
@@ -152,6 +153,7 @@ BENCH_SCRIPT="src/full_training/h200_sparse_dpo_optimizer_benchmark.py"
   --dataset_cache_dir "$HF_DATASETS_CACHE" \
   --run_label "h200_ablat_${SLURM_JOB_ID:-local}" \
   --benchmark_sparsities "$BENCHMARK_SPARSITIES" \
+  --dense_optimizers "${H200_DENSE_OPTIMIZERS:-adamw_torch}" \
   "${PY_GRID_ARGS[@]}" \
   "${PHASE_SLICE_ARGS[@]}" \
   "${SKIP_DENSE_ARGS[@]}" \
