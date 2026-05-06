@@ -42,7 +42,6 @@ from src.utils.logging_utils import (
     FlexibleCheckpointCallback,
     CSVLoggerCallback,
     BenchmarkThroughputCallback,
-    OptimizerStepTimingCallback,
 )
 from src.utils.grpo_checkpoint_utils import (
     maybe_load_wandb_resume_env,
@@ -51,41 +50,6 @@ from src.utils.grpo_checkpoint_utils import (
     WandbRunIdCallback,
 )
 from src.optimizers.sparse_adamw import SparseAdamW
-
-
-class TimedOptimizer:
-    """
-    Thin wrapper that times optimizer.step().
-
-    Exposes ``last_step_ms``, ``mean_step_ms``, and ``step_count``.
-    """
-
-    def __init__(self, opt, *, sync_cuda: bool = True):
-        self._opt = opt
-        self.sync_cuda = bool(sync_cuda)
-        self.last_step_ms: float = float("nan")
-        self._sum_ms: float = 0.0
-        self.step_count: int = 0
-
-    def __getattr__(self, item):
-        return getattr(self._opt, item)
-
-    @property
-    def mean_step_ms(self) -> float:
-        return (self._sum_ms / self.step_count) if self.step_count > 0 else float("nan")
-
-    def step(self, *args, **kwargs):
-        if self.sync_cuda and torch.cuda.is_available():
-            torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        out = self._opt.step(*args, **kwargs)
-        if self.sync_cuda and torch.cuda.is_available():
-            torch.cuda.synchronize()
-        dt_ms = (time.perf_counter() - t0) * 1e3
-        self.last_step_ms = float(dt_ms)
-        self._sum_ms += float(dt_ms)
-        self.step_count += 1
-        return out
 
 def sanitize_model_name(model_name: str) -> str:
     sanitized = model_name.replace("/", "_").replace("-", "_").lower()
@@ -125,7 +89,6 @@ def train(
     benchmark_optimizer_label: str = None,
     benchmark_extra_log_fields: Optional[Dict[str, Any]] = None,
     use_wandb: bool = True,
-    sync_cuda_timing: bool = True,
     train_dataset=None,
     tokenizer_obj=None,
 ):
@@ -235,8 +198,6 @@ def train(
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
 
-    timed_optimizer = TimedOptimizer(optimizer, sync_cuda=sync_cuda_timing)
-        
     # Callbacks
     callbacks = []
 
@@ -304,13 +265,6 @@ def train(
                 extra_log_fields=benchmark_extra_log_fields,
             )
         )
-        callbacks.append(
-            OptimizerStepTimingCallback(
-                timed_optimizer,
-                sync_cuda=sync_cuda_timing,
-                prefix="t_optimizer_step",
-            )
-        )
 
     if use_hf_rolling:
         save_strategy = "steps"
@@ -351,7 +305,7 @@ def train(
         args=dpo_config,
         train_dataset=dpo_dataset,
         data_collator=lambda x: dpo_collator_fn(x, tokenizer),
-        optimizers=(timed_optimizer, None),
+        optimizers=(optimizer, None),
         callbacks=callbacks,
     )
 

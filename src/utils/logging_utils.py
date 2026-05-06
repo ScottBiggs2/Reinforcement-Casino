@@ -17,49 +17,6 @@ from typing import Any, Dict, List, Optional
 
 from src.utils.slurm_safe_log import slurm_safe_print
 
-
-class OptimizerStepTimingCallback(TrainerCallback):
-    """
-    Pull optimizer.step() timing from a wrapped optimizer.
-
-    We avoid patching Trainer internals; instead we wrap the optimizer's ``step`` method and
-    read the recorded timings here on each log event.
-    """
-
-    def __init__(
-        self,
-        timed_optimizer: Any,
-        *,
-        sync_cuda: bool = True,
-        prefix: str = "t_optimizer_step",
-    ) -> None:
-        self.opt = timed_optimizer
-        self.sync_cuda = bool(sync_cuda)
-        self.prefix = str(prefix)
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        if logs is None:
-            return
-        try:
-            last_ms = float(getattr(self.opt, "last_step_ms", float("nan")))
-        except Exception:
-            last_ms = float("nan")
-        try:
-            mean_ms = float(getattr(self.opt, "mean_step_ms", float("nan")))
-        except Exception:
-            mean_ms = float("nan")
-        try:
-            n = int(getattr(self.opt, "step_count", 0) or 0)
-        except Exception:
-            n = 0
-
-        if last_ms == last_ms:
-            logs[f"{self.prefix}_ms"] = round(last_ms, 6)
-        if mean_ms == mean_ms:
-            logs[f"{self.prefix}_mean_ms"] = round(mean_ms, 6)
-        if n:
-            logs[f"{self.prefix}_count"] = n
-
 class FlexibleCheckpointCallback(TrainerCallback):
     """
     Callback that saves deltas on a flexible schedule and tracks statistics.
