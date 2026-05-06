@@ -161,3 +161,14 @@ Submitted batch job 6573918
 (base) [biggs.s@explorer-01 rl_casino]$ sbatch scripts/h200_speed_ablation_v2.sh
 Submitted batch job 6573973
 (base) [biggs.s@explorer-01 rl_casino]$ 
+
+# and again... 
+(base) [biggs.s@explorer-01 rl_casino]$ sbatch scripts/h200_speed_ablation_v2.sh
+Submitted batch job 6574079
+(base) [biggs.s@explorer-01 rl_casino]$ 
+
+
+# interp suite launch on tulu3 oracle, 200, and random
+  scripts/sbatch_mask_interpretation_suite.she_%j.err \\"
+Submitted batch job 6574787
+(base) [biggs.s@explorer-01 rl_casino]$ 

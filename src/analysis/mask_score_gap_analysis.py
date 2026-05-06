@@ -27,7 +27,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -44,8 +44,13 @@ from src.warm_start.even_better_mask_finder import load_deltas_streaming  # noqa
 
 from src.analysis.certifiability_margin import (  # noqa: E402
     certifiability_strict_fraction,
+    global_keep_count,
     global_topk_threshold,
+    scaled_hybrid_floor_counts_per_layer,
     scores_for_cert_selection,
+    streaming_global_topk_threshold,
+    streaming_min_of_global_top_r,
+    tau_hybrid_global_phase_from_flat,
 )
 
 
@@ -118,6 +123,26 @@ def _explain_dtype(dt: torch.dtype) -> str:
         return "float16 (lower RAM; may be numerically brittle on CPU)"
     return "float32"
 
+
+def _cert_global_mode_default() -> str:
+    v = (os.environ.get("MASK_GAP_CERT_GLOBAL_MODE") or os.environ.get("CERT_GLOBAL_MODE") or "").strip().lower()
+    if v in ("materialize", "stream"):
+        return v
+    return "materialize"
+
+
+def _cert_tau_rule_default() -> str:
+    v = (os.environ.get("MASK_GAP_CERT_TAU_RULE") or os.environ.get("CERT_TAU_RULE") or "").strip().lower()
+    if v in ("global", "hybrid_global_phase"):
+        return v
+    return "global"
+
+
+def _cert_hybrid_min_layer_keep_ratio_default() -> float:
+    env = os.environ.get("CERT_HYBRID_MIN_LAYER_KEEP_RATIO") or os.environ.get("MASK_GAP_CERT_HYBRID_MIN_LAYER_KEEP_RATIO")
+    if env is not None and str(env).strip() != "":
+        return float(env)
+    return 0.0
 
 
 @dataclass
@@ -338,9 +363,16 @@ def process_keys(
     sparsity_percent: float,
     cert_match_tie_break: bool,
     cert_min_layer_keep_ratio: float,
+    cert_global_mode: str,
+    cert_tau_rule: str,
+    cert_hybrid_min_layer_keep_ratio: float,
 ) -> None:
     qs = (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
     milestones = sorted(milestones)
+    use_stream = cert_global_mode == "stream"
+    use_hybrid_tau = cert_tau_rule == "hybrid_global_phase"
+    if use_hybrid_tau and float(cert_hybrid_min_layer_keep_ratio) <= 0.0:
+        raise ValueError("cert_tau_rule=hybrid_global_phase requires --cert_hybrid_min_layer_keep_ratio > 0")
 
     rnd_raw_hists = {s: LogSpaceHistogram(histogram_bins) for s in random_seeds}
     rnd_norm_hists = {s: LinSpaceHistogram(histogram_bins, upper=1.0) for s in random_seeds}
@@ -373,27 +405,56 @@ def process_keys(
         "cert_match_tie_break": bool(cert_match_tie_break),
         "cert_min_layer_keep_ratio": float(cert_min_layer_keep_ratio),
         "flatten_dtype_for_globals": str(flatten_dtype).replace("torch.", ""),
+        "cert_global_mode": str(cert_global_mode),
+        "cert_tau_rule": str(cert_tau_rule),
+        "cert_hybrid_min_layer_keep_ratio": float(cert_hybrid_min_layer_keep_ratio),
     }
-    if cert_min_layer_keep_ratio > 0:
+    if cert_min_layer_keep_ratio > 0 and not use_hybrid_tau:
         gap_diag["cert_hybrid_warning"] = (
-            f"cert_min_layer_keep_ratio={cert_min_layer_keep_ratio} > 0 only affects this diagnostic metadata; "
-            "τ and m_i are still computed with pure global top-k (theorem-style). Training masks may use per-layer floors."
+            f"cert_min_layer_keep_ratio={cert_min_layer_keep_ratio} > 0 is metadata-only unless "
+            "cert_tau_rule=hybrid_global_phase (use --cert_hybrid_min_layer_keep_ratio for τ)."
+        )
+    if use_hybrid_tau:
+        gap_diag["cert_tau_note"] = (
+            "hybrid_global_phase: τ is the global-phase cutoff after per-layer floors (mask_utils-style), "
+            "not the pure-global Theorem-3 τ."
         )
 
     layer_rows: List[Dict[str, object]] = []
     max_verify_diff = 0.0
     verify_key_worst = ""
 
-    flat_oracle_n = 0
+    oracle_eligible: List[str] = []
+    oracle_numels: List[int] = []
     for _name in keys:
         if _name not in initial_sd or _name not in final_sd:
             continue
-        flat_oracle_n += int(initial_sd[_name].numel())
+        w0n, w1n = initial_sd[_name], final_sd[_name]
+        if not w0n.is_floating_point() or not w1n.is_floating_point():
+            continue
+        oracle_eligible.append(_name)
+        oracle_numels.append(int(w0n.numel()))
+    flat_oracle_n = int(sum(oracle_numels))
+    oracle_keep = global_keep_count(flat_oracle_n, sparsity_percent) if flat_oracle_n > 0 else 0
+    oracle_floors: List[int] = []
+    oracle_floor_by_name: Dict[str, int] = {}
+    if use_hybrid_tau and flat_oracle_n > 0:
+        oracle_floors = scaled_hybrid_floor_counts_per_layer(
+            oracle_numels, float(cert_hybrid_min_layer_keep_ratio), int(oracle_keep)
+        )
+        gap_diag["cert_oracle_hybrid_floor_total"] = int(sum(oracle_floors))
+        gap_diag["cert_oracle_hybrid_R"] = int(oracle_keep - sum(oracle_floors))
+        for _nm, _f in zip(oracle_eligible, oracle_floors):
+            oracle_floor_by_name[_nm] = int(_f)
 
-    oracle_flat_vec = torch.empty((flat_oracle_n,), dtype=flatten_dtype) if flat_oracle_n else torch.empty(0)
-    rnd_flat_bufs: Dict[int, torch.Tensor] = {
-        s: torch.empty((flat_oracle_n,), dtype=flatten_dtype) for s in random_seeds
-    }
+    oracle_offsets: List[Tuple[str, int, int]] = []
+
+    if use_stream:
+        oracle_flat_vec = torch.empty(0, dtype=flatten_dtype)
+        rnd_flat_bufs: Dict[int, torch.Tensor] = {}
+    else:
+        oracle_flat_vec = torch.empty((flat_oracle_n,), dtype=flatten_dtype) if flat_oracle_n else torch.empty(0)
+        rnd_flat_bufs = {s: torch.empty((flat_oracle_n,), dtype=flatten_dtype) for s in random_seeds}
     oracle_write_off = 0
 
     # ---------- random vs oracle (one pass over keys)
@@ -404,12 +465,13 @@ def process_keys(
         w0 = initial_sd[name]
         w1 = final_sd[name]
         if not w0.is_floating_point() or not w1.is_floating_point():
-            oracle_write_off += int(w0.numel())
             del w0, w1
             continue
         s_oracle = (w1 - w0).abs().to(dtype=flatten_dtype)
         nloc = int(s_oracle.numel())
-        oracle_flat_vec[oracle_write_off : oracle_write_off + nloc].copy_(s_oracle.reshape(-1))
+        if not use_stream:
+            oracle_offsets.append((name, oracle_write_off, oracle_write_off + nloc))
+            oracle_flat_vec[oracle_write_off : oracle_write_off + nloc].copy_(s_oracle.reshape(-1))
         row_base: Dict[str, object] = {
             "param_name": name,
             "numel": int(s_oracle.numel()),
@@ -419,7 +481,8 @@ def process_keys(
             g = torch.Generator(device="cpu")
             g.manual_seed(int(seed))
             s_rand = torch.rand(s_oracle.shape, generator=g, dtype=flatten_dtype)
-            rnd_flat_bufs[seed][oracle_write_off : oracle_write_off + nloc].copy_(s_rand.reshape(-1))
+            if not use_stream:
+                rnd_flat_bufs[seed][oracle_write_off : oracle_write_off + nloc].copy_(s_rand.reshape(-1))
             v_rr = (s_rand.to(torch.float32) - s_oracle.to(torch.float32)).abs()
             r_n = _minmax_norm(s_rand)
             v_rn = (r_n - o_n_r).abs()
@@ -440,36 +503,247 @@ def process_keys(
             f"Oracle flatten size mismatch ({oracle_write_off} vs expected {flat_oracle_n}); key order/filtering bug."
         )
 
-    if oracle_flat_vec.numel() > 0:
+    if use_stream and flat_oracle_n > 0:
+        print("Cert/margins: streaming global tau (no full-model flat buffers)...")
+
+        max_abs_o = 0.0
+        for name in keys:
+            if name not in initial_sd or name not in final_sd:
+                continue
+            w0, w1 = initial_sd[name], final_sd[name]
+            if not w0.is_floating_point() or not w1.is_floating_point():
+                continue
+            x = (w1 - w0).abs().to(dtype=flatten_dtype).reshape(-1).float()
+            torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+            max_abs_o = max(max_abs_o, float(x.abs().max().item()))
+        scale_o = max(max_abs_o * 1e-6, 1e-12) if cert_match_tie_break else 0.0
+
+        def _oracle_sel_chunks_stream():
+            gen_tb = torch.Generator(device="cpu")
+            gen_tb.manual_seed(42)
+            for name in keys:
+                if name not in initial_sd or name not in final_sd:
+                    continue
+                w0, w1 = initial_sd[name], final_sd[name]
+                if not w0.is_floating_point() or not w1.is_floating_point():
+                    continue
+                x = (w1 - w0).abs().to(dtype=flatten_dtype).reshape(-1).float().clone()
+                torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+                if cert_match_tie_break:
+                    noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                    x = x + noise * scale_o
+                yield x
+
+        if use_hybrid_tau:
+            floor_sum_o = int(sum(oracle_floors)) if oracle_floors else 0
+            R_o = int(oracle_keep) - floor_sum_o
+            if R_o <= 0 or flat_oracle_n <= 0:
+                tau_o = float("nan")
+                k_o, N_o = int(oracle_keep), int(flat_oracle_n)
+            else:
+
+                def _oracle_hybrid_pieces_inner():
+                    gen_tb = torch.Generator(device="cpu")
+                    gen_tb.manual_seed(42)
+                    for name in keys:
+                        if name not in initial_sd or name not in final_sd:
+                            continue
+                        w0, w1 = initial_sd[name], final_sd[name]
+                        if not w0.is_floating_point() or not w1.is_floating_point():
+                            continue
+                        x = (w1 - w0).abs().to(dtype=flatten_dtype).reshape(-1).float().clone()
+                        torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+                        if cert_match_tie_break:
+                            noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                            x = x + noise * scale_o
+                        f = int(oracle_floor_by_name.get(name, 0))
+                        if f > 0:
+                            kk = min(f, int(x.numel()))
+                            _, idx = torch.topk(x, kk, largest=True)
+                            x[idx] = float("-inf")
+                        yield x
+
+                tau_o = streaming_min_of_global_top_r(_oracle_hybrid_pieces_inner(), R_o)
+                k_o, N_o = int(oracle_keep), int(flat_oracle_n)
+        else:
+            tau_o, k_o, N_o = streaming_global_topk_threshold(
+                total_n=flat_oracle_n,
+                sparsity_percent=sparsity_percent,
+                iter_sel_chunks_fp32=_oracle_sel_chunks_stream(),
+            )
+        gap_diag["cert_oracle_tau"] = tau_o
+        gap_diag["cert_oracle_k_keep"] = k_o
+        gap_diag["cert_oracle_N"] = N_o
+
+        gen_tb2 = torch.Generator(device="cpu")
+        gen_tb2.manual_seed(42)
+        for name in keys:
+            if name not in initial_sd or name not in final_sd:
+                continue
+            w0, w1 = initial_sd[name], final_sd[name]
+            if not w0.is_floating_point() or not w1.is_floating_point():
+                continue
+            x = (w1 - w0).abs().to(dtype=flatten_dtype).reshape(-1).float().clone()
+            torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+            if cert_match_tie_break:
+                noise = torch.randn(x.numel(), generator=gen_tb2, dtype=torch.float32)
+                x = x + noise * scale_o
+            margin_o = (x - tau_o).abs()
+            oracle_margin_hist.update(margin_o)
+            oracle_margin_w.update(margin_o)
+
+        for seed in random_seeds:
+            max_abs_r = 0.0
+            for name in keys:
+                if name not in initial_sd or name not in final_sd:
+                    continue
+                w0, w1 = initial_sd[name], final_sd[name]
+                if not w0.is_floating_point() or not w1.is_floating_point():
+                    continue
+                sh = w0.shape
+                g0 = torch.Generator(device="cpu")
+                g0.manual_seed(int(seed))
+                raw = torch.rand(sh, generator=g0, dtype=flatten_dtype).reshape(-1).float()
+                torch.nan_to_num_(raw, nan=0.0, posinf=0.0, neginf=0.0)
+                max_abs_r = max(max_abs_r, float(raw.abs().max().item()))
+            scale_r = max(max_abs_r * 1e-6, 1e-12) if cert_match_tie_break else 0.0
+
+            def _rand_sel_chunks_stream():
+                gen_tb = torch.Generator(device="cpu")
+                gen_tb.manual_seed(42)
+                for name in keys:
+                    if name not in initial_sd or name not in final_sd:
+                        continue
+                    w0, w1 = initial_sd[name], final_sd[name]
+                    if not w0.is_floating_point() or not w1.is_floating_point():
+                        continue
+                    sh = w0.shape
+                    g0 = torch.Generator(device="cpu")
+                    g0.manual_seed(int(seed))
+                    raw = torch.rand(sh, generator=g0, dtype=flatten_dtype).reshape(-1).float().clone()
+                    torch.nan_to_num_(raw, nan=0.0, posinf=0.0, neginf=0.0)
+                    x = raw
+                    if cert_match_tie_break:
+                        noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                        x = x + noise * scale_r
+                    yield x
+
+            if use_hybrid_tau:
+                floor_sum_r = int(sum(oracle_floors)) if oracle_floors else 0
+                R_r = int(oracle_keep) - floor_sum_r
+                if R_r <= 0 or flat_oracle_n <= 0:
+                    tau_r = float("nan")
+                    k_r, N_r = int(oracle_keep), int(flat_oracle_n)
+                else:
+
+                    def _rand_hybrid_pieces():
+                        gen_tb = torch.Generator(device="cpu")
+                        gen_tb.manual_seed(42)
+                        for name in keys:
+                            if name not in initial_sd or name not in final_sd:
+                                continue
+                            w0, w1 = initial_sd[name], final_sd[name]
+                            if not w0.is_floating_point() or not w1.is_floating_point():
+                                continue
+                            sh = w0.shape
+                            g0 = torch.Generator(device="cpu")
+                            g0.manual_seed(int(seed))
+                            raw = torch.rand(sh, generator=g0, dtype=flatten_dtype).reshape(-1).float().clone()
+                            torch.nan_to_num_(raw, nan=0.0, posinf=0.0, neginf=0.0)
+                            x = raw
+                            if cert_match_tie_break:
+                                noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                                x = x + noise * scale_r
+                            f = int(oracle_floor_by_name.get(name, 0))
+                            if f > 0:
+                                kk = min(f, int(x.numel()))
+                                _, idx = torch.topk(x, kk, largest=True)
+                                x[idx] = float("-inf")
+                            yield x
+
+                    tau_r = streaming_min_of_global_top_r(_rand_hybrid_pieces(), R_r)
+                    k_r, N_r = int(oracle_keep), int(flat_oracle_n)
+            else:
+                tau_r, k_r, N_r = streaming_global_topk_threshold(
+                    total_n=flat_oracle_n,
+                    sparsity_percent=sparsity_percent,
+                    iter_sel_chunks_fp32=_rand_sel_chunks_stream(),
+                )
+
+            gen_tb3 = torch.Generator(device="cpu")
+            gen_tb3.manual_seed(42)
+            c_ok = 0
+            c_den = 0
+            for name in keys:
+                if name not in initial_sd or name not in final_sd:
+                    continue
+                w0, w1 = initial_sd[name], final_sd[name]
+                if not w0.is_floating_point() or not w1.is_floating_point():
+                    continue
+                sh = w0.shape
+                g0 = torch.Generator(device="cpu")
+                g0.manual_seed(int(seed))
+                raw = torch.rand(sh, generator=g0, dtype=flatten_dtype).reshape(-1).float().clone()
+                torch.nan_to_num_(raw, nan=0.0, posinf=0.0, neginf=0.0)
+                r_sel = raw
+                if cert_match_tie_break:
+                    noise = torch.randn(r_sel.numel(), generator=gen_tb3, dtype=torch.float32)
+                    r_sel = r_sel + noise * scale_r
+                s_star = (w1 - w0).abs().to(dtype=flatten_dtype).reshape(-1).float()
+                torch.nan_to_num_(s_star, nan=0.0, posinf=0.0, neginf=0.0)
+                gap = (r_sel - s_star).abs()
+                margin = (r_sel - tau_r).abs()
+                c_ok += int((gap < margin).sum().item())
+                c_den += int(gap.numel())
+                rnd_margin_raw_hists[seed].update(margin)
+                rnd_margin_w_raw[seed].update(margin)
+
+            gap_diag[f"cert_random_seed{seed}_tau"] = tau_r
+            gap_diag[f"cert_random_seed{seed}_k_keep"] = k_r
+            gap_diag[f"cert_random_seed{seed}_N"] = N_r
+            gap_diag[f"cert_strict_frac_random_seed{seed}"] = (c_ok / c_den) if c_den else float("nan")
+            gap_diag[f"cert_strict_numer_random_seed{seed}"] = c_ok
+            gap_diag[f"cert_strict_denom_random_seed{seed}"] = c_den
+
+    elif not use_stream and oracle_flat_vec.numel() > 0:
         o_sel = scores_for_cert_selection(oracle_flat_vec, match_tie_break=cert_match_tie_break)
-        tau_o, k_o, N_o = global_topk_threshold(o_sel, sparsity_percent)
+        if use_hybrid_tau:
+            tau_o, k_o, N_o, _ft_o, _rr_o = tau_hybrid_global_phase_from_flat(
+                o_sel, oracle_numels, oracle_floors, int(oracle_keep)
+            )
+        else:
+            tau_o, k_o, N_o = global_topk_threshold(o_sel, sparsity_percent)
         margin_o = (o_sel - tau_o).abs()
         oracle_margin_hist.update(margin_o)
         oracle_margin_w.update(margin_o)
         gap_diag["cert_oracle_tau"] = tau_o
         gap_diag["cert_oracle_k_keep"] = k_o
         gap_diag["cert_oracle_N"] = N_o
-    for seed in random_seeds:
-        if oracle_flat_vec.numel() == 0:
-            continue
-        flat_r = rnd_flat_bufs.get(seed)
-        if flat_r is None or flat_r.numel() != oracle_flat_vec.numel():
-            continue
-        r_sel = scores_for_cert_selection(flat_r, match_tie_break=cert_match_tie_break)
-        tau_r, k_r, N_r = global_topk_threshold(r_sel, sparsity_percent)
-        margin_r = (r_sel - tau_r).abs()
-        gap_cert_r = (r_sel - oracle_flat_vec).abs()
-        c_ok, c_den = certifiability_strict_fraction(gap_cert_r, margin_r)
-        rnd_margin_raw_hists[seed].update(margin_r)
-        rnd_margin_w_raw[seed].update(margin_r)
-        gap_diag[f"cert_random_seed{seed}_tau"] = tau_r
-        gap_diag[f"cert_random_seed{seed}_k_keep"] = k_r
-        gap_diag[f"cert_random_seed{seed}_N"] = N_r
-        gap_diag[f"cert_strict_frac_random_seed{seed}"] = (c_ok / c_den) if c_den else float("nan")
-        gap_diag[f"cert_strict_numer_random_seed{seed}"] = c_ok
-        gap_diag[f"cert_strict_denom_random_seed{seed}"] = c_den
+        for seed in random_seeds:
+            flat_r = rnd_flat_bufs.get(seed)
+            if flat_r is None or flat_r.numel() != oracle_flat_vec.numel():
+                continue
+            r_sel = scores_for_cert_selection(flat_r, match_tie_break=cert_match_tie_break)
+            if use_hybrid_tau:
+                tau_r, k_r, N_r, _ft_r, _rr_r = tau_hybrid_global_phase_from_flat(
+                    r_sel, oracle_numels, oracle_floors, int(oracle_keep)
+                )
+            else:
+                tau_r, k_r, N_r = global_topk_threshold(r_sel, sparsity_percent)
+            margin_r = (r_sel - tau_r).abs()
+            gap_cert_r = (r_sel - oracle_flat_vec).abs()
+            c_ok, c_den = certifiability_strict_fraction(gap_cert_r, margin_r)
+            rnd_margin_raw_hists[seed].update(margin_r)
+            rnd_margin_w_raw[seed].update(margin_r)
+            gap_diag[f"cert_random_seed{seed}_tau"] = tau_r
+            gap_diag[f"cert_random_seed{seed}_k_keep"] = k_r
+            gap_diag[f"cert_random_seed{seed}_N"] = N_r
+            gap_diag[f"cert_strict_frac_random_seed{seed}"] = (c_ok / c_den) if c_den else float("nan")
+            gap_diag[f"cert_strict_numer_random_seed{seed}"] = c_ok
+            gap_diag[f"cert_strict_denom_random_seed{seed}"] = c_den
 
-    del rnd_flat_bufs
+    if not use_stream:
+        del rnd_flat_bufs
     gc.collect()
 
     # ---------- per milestone magnitude caches
@@ -486,6 +760,8 @@ def process_keys(
         oracle_match_sample: List[Dict[str, object]] = []
 
         mag_cert_n = 0
+        mag_eligible: List[str] = []
+        mag_numels: List[int] = []
         for nm in keys:
             if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
                 continue
@@ -493,9 +769,16 @@ def process_keys(
             oo = initial_sd[nm].shape
             of = final_sd[nm].shape
             if om == oo == of:
-                mag_cert_n += int(math.prod(tuple(int(x) for x in om)))
-        flat_mag_flat = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
-        flat_oracle_flat_m = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
+                n_mag_layer = int(math.prod(tuple(int(x) for x in om)))
+                mag_cert_n += n_mag_layer
+                mag_eligible.append(nm)
+                mag_numels.append(n_mag_layer)
+        if use_stream:
+            flat_mag_flat = torch.empty(0, dtype=flatten_dtype)
+            flat_oracle_flat_m = torch.empty(0, dtype=flatten_dtype)
+        else:
+            flat_mag_flat = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
+            flat_oracle_flat_m = torch.empty((mag_cert_n,), dtype=flatten_dtype) if mag_cert_n > 0 else torch.empty(0)
         mag_cert_off = 0
 
         for ki, name in enumerate(keys):
@@ -517,8 +800,9 @@ def process_keys(
                 continue
 
             nloc_mag = int(s_mag.numel())
-            flat_mag_flat[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_mag.reshape(-1))
-            flat_oracle_flat_m[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_oracle.reshape(-1))
+            if not use_stream:
+                flat_mag_flat[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_mag.reshape(-1))
+                flat_oracle_flat_m[mag_cert_off : mag_cert_off + nloc_mag].copy_(s_oracle.reshape(-1))
             mag_cert_off += nloc_mag
 
             if delta_verify is not None and name in delta_verify:
@@ -583,11 +867,144 @@ def process_keys(
                 f"Magnitude cert flatten mismatch at step {step}: wrote {mag_cert_off} vs expected {mag_cert_n}"
             )
 
-        if mag_cert_n > 0 and flat_mag_flat.numel() > 0:
+        mag_keep = global_keep_count(mag_cert_n, sparsity_percent) if mag_cert_n > 0 else 0
+        mag_floors: List[int] = []
+        mag_floor_by_name: Dict[str, int] = {}
+        if use_hybrid_tau and mag_cert_n > 0:
+            mag_floors = scaled_hybrid_floor_counts_per_layer(
+                mag_numels, float(cert_hybrid_min_layer_keep_ratio), int(mag_keep)
+            )
+            gap_diag[f"cert_magnitude_step{step}_hybrid_floor_total"] = int(sum(mag_floors))
+            gap_diag[f"cert_magnitude_step{step}_hybrid_R"] = int(mag_keep - sum(mag_floors))
+            for _nm, _f in zip(mag_eligible, mag_floors):
+                mag_floor_by_name[_nm] = int(_f)
+
+        if use_stream and mag_cert_n > 0:
+            max_abs_m = 0.0
+            for nm in keys:
+                if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                    continue
+                w0m, w1m = initial_sd[nm], final_sd[nm]
+                if not w0m.is_floating_point() or not w1m.is_floating_point():
+                    continue
+                sm = mag_scores[nm]
+                om_sh = sm.shape
+                oo_sh = w0m.shape
+                of_sh = w1m.shape
+                if om_sh != oo_sh or om_sh != of_sh:
+                    continue
+                xm = sm.to(dtype=flatten_dtype).reshape(-1).float()
+                torch.nan_to_num_(xm, nan=0.0, posinf=0.0, neginf=0.0)
+                max_abs_m = max(max_abs_m, float(xm.abs().max().item()))
+            scale_m = max(max_abs_m * 1e-6, 1e-12) if cert_match_tie_break else 0.0
+
+            def _mag_sel_chunks_stream():
+                gen_tb = torch.Generator(device="cpu")
+                gen_tb.manual_seed(42)
+                for nm in keys:
+                    if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                        continue
+                    w0m, w1m = initial_sd[nm], final_sd[nm]
+                    if not w0m.is_floating_point() or not w1m.is_floating_point():
+                        continue
+                    sm = mag_scores[nm]
+                    som = (w1m - w0m).abs()
+                    if sm.shape != som.shape:
+                        continue
+                    x = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
+                    torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+                    if cert_match_tie_break:
+                        noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                        x = x + noise * scale_m
+                    yield x
+
+            if use_hybrid_tau:
+                floor_sum_m = int(sum(mag_floors)) if mag_floors else 0
+                R_m = int(mag_keep) - floor_sum_m
+                if R_m <= 0 or mag_cert_n <= 0:
+                    tau_m = float("nan")
+                    k_m, N_m = int(mag_keep), int(mag_cert_n)
+                else:
+
+                    def _mag_hybrid_pieces():
+                        gen_tb = torch.Generator(device="cpu")
+                        gen_tb.manual_seed(42)
+                        for nm in keys:
+                            if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                                continue
+                            w0m, w1m = initial_sd[nm], final_sd[nm]
+                            if not w0m.is_floating_point() or not w1m.is_floating_point():
+                                continue
+                            sm = mag_scores[nm]
+                            som = (w1m - w0m).abs()
+                            if sm.shape != som.shape:
+                                continue
+                            x = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
+                            torch.nan_to_num_(x, nan=0.0, posinf=0.0, neginf=0.0)
+                            if cert_match_tie_break:
+                                noise = torch.randn(x.numel(), generator=gen_tb, dtype=torch.float32)
+                                x = x + noise * scale_m
+                            f = int(mag_floor_by_name.get(nm, 0))
+                            if f > 0:
+                                kk = min(f, int(x.numel()))
+                                _, idx = torch.topk(x, kk, largest=True)
+                                x[idx] = float("-inf")
+                            yield x
+
+                    tau_m = streaming_min_of_global_top_r(_mag_hybrid_pieces(), R_m)
+                    k_m, N_m = int(mag_keep), int(mag_cert_n)
+            else:
+                tau_m, k_m, N_m = streaming_global_topk_threshold(
+                    total_n=mag_cert_n,
+                    sparsity_percent=sparsity_percent,
+                    iter_sel_chunks_fp32=_mag_sel_chunks_stream(),
+                )
+
+            gen_tb4 = torch.Generator(device="cpu")
+            gen_tb4.manual_seed(42)
+            c_ok_m = 0
+            c_den_m = 0
+            for nm in keys:
+                if nm not in initial_sd or nm not in final_sd or nm not in mag_scores:
+                    continue
+                w0m, w1m = initial_sd[nm], final_sd[nm]
+                if not w0m.is_floating_point() or not w1m.is_floating_point():
+                    continue
+                sm = mag_scores[nm]
+                som = (w1m - w0m).abs().to(dtype=flatten_dtype)
+                if sm.shape != som.shape:
+                    continue
+                m_sel = sm.to(dtype=flatten_dtype).reshape(-1).float().clone()
+                torch.nan_to_num_(m_sel, nan=0.0, posinf=0.0, neginf=0.0)
+                if cert_match_tie_break:
+                    noise = torch.randn(m_sel.numel(), generator=gen_tb4, dtype=torch.float32)
+                    m_sel = m_sel + noise * scale_m
+                s_star_m = som.reshape(-1).float()
+                torch.nan_to_num_(s_star_m, nan=0.0, posinf=0.0, neginf=0.0)
+                gap_m = (m_sel - s_star_m).abs()
+                margin_m = (m_sel - tau_m).abs()
+                c_ok_m += int((gap_m < margin_m).sum().item())
+                c_den_m += int(gap_m.numel())
+                mag_margin_raw_hists[step].update(margin_m)
+                mag_margin_w_raw[step].update(margin_m)
+
+            gap_diag[f"cert_magnitude_step{step}_tau"] = tau_m
+            gap_diag[f"cert_magnitude_step{step}_k_keep"] = k_m
+            gap_diag[f"cert_magnitude_step{step}_N"] = N_m
+            gap_diag[f"cert_strict_frac_magnitude_step{step}"] = (c_ok_m / c_den_m) if c_den_m else float("nan")
+            gap_diag[f"cert_strict_numer_magnitude_step{step}"] = c_ok_m
+            gap_diag[f"cert_strict_denom_magnitude_step{step}"] = c_den_m
+
+        elif not use_stream and mag_cert_n > 0 and flat_mag_flat.numel() > 0:
             flat_mag = flat_mag_flat
             flat_oracle_m = flat_oracle_flat_m
             m_sel = scores_for_cert_selection(flat_mag, match_tie_break=cert_match_tie_break)
-            tau_m, k_m, N_m = global_topk_threshold(m_sel, sparsity_percent)
+            if use_hybrid_tau:
+                tau_m, k_m, N_m, _ft_m, _rr_m = tau_hybrid_global_phase_from_flat(
+                    m_sel, mag_numels, mag_floors, int(mag_keep)
+                )
+            else:
+                tau_m, k_m, N_m = global_topk_threshold(m_sel, sparsity_percent)
             margin_m = (m_sel - tau_m).abs()
             gap_cert_m = (m_sel - flat_oracle_m).abs()
             c_ok, c_den = certifiability_strict_fraction(gap_cert_m, margin_m)
@@ -737,7 +1154,7 @@ def parse_args() -> argparse.Namespace:
         "--cert_min_layer_keep_ratio",
         type=float,
         default=float(os.environ.get("CERT_MIN_LAYER_KEEP_RATIO", "0")),
-        help="Document-only for hybrid masks: τ/m_i stay pure-global; >0 logs a warning in gap diagnostics.",
+        help="Training-mask metadata (logged in gap diagnostics). For hybrid τ, use --cert_hybrid_min_layer_keep_ratio.",
     )
     p.add_argument(
         "--cert_no_match_tie_break",
@@ -752,6 +1169,37 @@ def parse_args() -> argparse.Namespace:
             "Storage dtype for checkpoint weights loaded into RAM (hub + local shards). "
             "Default: MASK_GAP_CHECKPOINT_DTYPE or CHECKPOINT_DTYPE env, else bfloat16. "
             "fp16/bf16 cut memory (~2×) versus fp32; intermediate ops still promote as needed."
+        ),
+    )
+    p.add_argument(
+        "--cert_global_mode",
+        type=str,
+        choices=("materialize", "stream"),
+        default=_cert_global_mode_default(),
+        help=(
+            "How to compute global tau/margins/cert: stream avoids full-model flat tensors (lower RAM). "
+            "Default from MASK_GAP_CERT_GLOBAL_MODE or CERT_GLOBAL_MODE env, else materialize."
+        ),
+    )
+    p.add_argument(
+        "--cert_tau_rule",
+        type=str,
+        choices=("global", "hybrid_global_phase"),
+        default=_cert_tau_rule_default(),
+        help=(
+            "global: Theorem-3 style τ = min(top-k) on flattened selection scores. "
+            "hybrid_global_phase: per-layer floor top-k then global top-R on remainder (mask_utils flat hybrid). "
+            "Default from MASK_GAP_CERT_TAU_RULE or CERT_TAU_RULE env, else global."
+        ),
+    )
+    p.add_argument(
+        "--cert_hybrid_min_layer_keep_ratio",
+        type=float,
+        default=_cert_hybrid_min_layer_keep_ratio_default(),
+        help=(
+            "When --cert_tau_rule=hybrid_global_phase, per-layer keep floor as a fraction of layer size "
+            "(same scaling as mask_utils when floors exceed budget). "
+            "Default from CERT_HYBRID_MIN_LAYER_KEEP_RATIO env, else 0 (invalid for hybrid; must be >0)."
         ),
     )
     return p.parse_args()
@@ -810,6 +1258,13 @@ def main() -> None:
     elif os.environ.get("CERT_MATCH_TIE_BREAK", "").strip().lower() in ("0", "false", "no"):
         cert_match_tie_break = False
 
+    if str(getattr(args, "cert_tau_rule", "global")) == "hybrid_global_phase":
+        if float(getattr(args, "cert_hybrid_min_layer_keep_ratio", 0.0)) <= 0.0:
+            raise ValueError(
+                "--cert_tau_rule=hybrid_global_phase requires --cert_hybrid_min_layer_keep_ratio > 0 "
+                "(or set CERT_HYBRID_MIN_LAYER_KEEP_RATIO)."
+            )
+
     meta = {
         "initial_model": args.initial_model,
         "final_model": args.final_model,
@@ -826,9 +1281,12 @@ def main() -> None:
         "sparsity_percent": float(args.sparsity_percent),
         "cert_match_tie_break": cert_match_tie_break,
         "cert_min_layer_keep_ratio": float(args.cert_min_layer_keep_ratio),
+        "cert_global_mode": str(getattr(args, "cert_global_mode", "materialize")),
+        "cert_tau_rule": str(getattr(args, "cert_tau_rule", "global")),
+        "cert_hybrid_min_layer_keep_ratio": float(getattr(args, "cert_hybrid_min_layer_keep_ratio", 0.0)),
         "cert_note": (
-            "Margins use pure global τ on flattened scores (key order = analysis iteration order). "
-            "Training hybrid masks with min_layer_keep_ratio>0 are not described by this single τ."
+            "Margins use τ from cert_tau_rule (global = pure top-k on flattened selection scores; "
+            "hybrid_global_phase = floors then global top-R). Key order = analysis iteration order."
         ),
     }
     with (out_dir / "mask_score_gap_run.json").open("w", encoding="utf-8") as f:
@@ -849,6 +1307,9 @@ def main() -> None:
         sparsity_percent=float(args.sparsity_percent),
         cert_match_tie_break=cert_match_tie_break,
         cert_min_layer_keep_ratio=float(args.cert_min_layer_keep_ratio),
+        cert_global_mode=str(getattr(args, "cert_global_mode", "materialize")),
+        cert_tau_rule=str(getattr(args, "cert_tau_rule", "global")),
+        cert_hybrid_min_layer_keep_ratio=float(getattr(args, "cert_hybrid_min_layer_keep_ratio", 0.0)),
     )
 
 

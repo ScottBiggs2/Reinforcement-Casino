@@ -10,7 +10,25 @@
 #   export CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
 #   export CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"         # set 0 to pass --cert_no_match_tie_break
 #   export CHECKPOINT_DTYPE=bfloat16   # bf16 halves RAM vs fp32; use float32 if you need bit-identical baselines
+#   export CERT_GLOBAL_MODE=stream     # stream tau/margins without full-model flat buffers (recommended)
 #   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+#
+# Compare Theorem-3 global τ vs hybrid (per-layer floors + global top-R), same OUT_DIR parent, different leaf dirs:
+#
+#   export CERT_GLOBAL_MODE=stream CERT_TAU_RULE=global CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0
+#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/${SLURM_JOB_ID:-global}
+#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+#
+#   export CERT_GLOBAL_MODE=stream CERT_TAU_RULE=hybrid_global_phase CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0.02
+#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_light_r1/${SLURM_JOB_ID:-hybrid}
+#   sbatch scripts/slurm_mask_score_gap_light_r1.slurm
+#
+# (Use two real job IDs or set OUT_DIR explicitly before each sbatch so runs do not overwrite.)
+#
+# If the job dies with Bash "Killed" and no Python traceback, it is usually cgroup/OOM (not TRAIN_PY).
+# Confirm vs your Slurm memory request:
+#   sacct -j $SLURM_JOB_ID --format=JobID,State,ExitCode,ReqMem,MaxRSS,Elapsed -P
+# (MaxRSS is batch-step RSS; compare to #SBATCH --mem.) Raise --mem or use a highmem partition if needed.
 #
 # Copy out (after job):
 #   mkdir -p ~/rl_casino/results/mask_score_gap_${JOBID} && \
@@ -33,7 +51,7 @@
 #
 # Optional overrides (still one line, comma-separated after ALL):
 #   ...,CKPT500_DIR=/scratch/$USER/.../checkpoint-500,DELTA_LOG_DIR=/scratch/$USER/.../deltas/...,OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_gap1,VERIFY_DELTAS_DIR=/path/with/deltas_step_500.pt
-#   ...,SPARSITY_PERCENT=97.5,CERT_MIN_LAYER_KEEP_RATIO=0,CERT_MATCH_TIE_BREAK=1
+#   ...,SPARSITY_PERCENT=97.5,CERT_MIN_LAYER_KEEP_RATIO=0,CERT_MATCH_TIE_BREAK=1,CERT_TAU_RULE=global,CERT_HYBRID_MIN_LAYER_KEEP_RATIO=0.02
 #
 # If TRAIN_PY errors with /conda_envs/... (no /scratch/$USER): your shell exported TRAIN_ENV wrong.
 #   unset TRAIN_ENV
@@ -58,7 +76,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
+# Full 8B×2 + fp32 milestone caches + histograms can exceed 128G; 512G is a safer default on Explorer.
+# If the scheduler rejects this request, switch to your site's highmem partition or lower --mem and rely on CERT_GLOBAL_MODE=stream + bf16 weights.
+#SBATCH --mem=512G
 #SBATCH --time=08:00:00
 #SBATCH --job-name=mask_score_gap
 #SBATCH --output=logs/mask_score_gap_%j.out
@@ -133,6 +153,9 @@ SPARSITY_PERCENT="${CERT_SPARSITY_PERCENT:-${SPARSITY_PERCENT:-97.5}}"
 CERT_MIN_LAYER_KEEP_RATIO="${CERT_MIN_LAYER_KEEP_RATIO:-0}"
 CERT_MATCH_TIE_BREAK="${CERT_MATCH_TIE_BREAK:-1}"
 CHECKPOINT_DTYPE="${MASK_GAP_CHECKPOINT_DTYPE:-${CHECKPOINT_DTYPE:-bfloat16}}"
+CERT_GLOBAL_MODE="${CERT_GLOBAL_MODE:-stream}"
+CERT_TAU_RULE="${CERT_TAU_RULE:-global}"
+CERT_HYBRID_MIN_LAYER_KEEP_RATIO="${CERT_HYBRID_MIN_LAYER_KEEP_RATIO:-0}"
 
 mkdir -p "${OUT_DIR}"
 
@@ -149,6 +172,9 @@ echo "SPARSITY_PERCENT=${SPARSITY_PERCENT}"
 echo "CERT_MIN_LAYER_KEEP_RATIO=${CERT_MIN_LAYER_KEEP_RATIO}"
 echo "CERT_MATCH_TIE_BREAK=${CERT_MATCH_TIE_BREAK}"
 echo "CHECKPOINT_DTYPE=${CHECKPOINT_DTYPE}"
+echo "CERT_GLOBAL_MODE=${CERT_GLOBAL_MODE}"
+echo "CERT_TAU_RULE=${CERT_TAU_RULE}"
+echo "CERT_HYBRID_MIN_LAYER_KEEP_RATIO=${CERT_HYBRID_MIN_LAYER_KEEP_RATIO}"
 
 ARGS=(
   src/analysis/mask_score_gap_analysis.py
@@ -161,6 +187,9 @@ ARGS=(
   --sparsity_percent "${SPARSITY_PERCENT}"
   --cert_min_layer_keep_ratio "${CERT_MIN_LAYER_KEEP_RATIO}"
   --checkpoint_dtype "${CHECKPOINT_DTYPE}"
+  --cert_global_mode "${CERT_GLOBAL_MODE}"
+  --cert_tau_rule "${CERT_TAU_RULE}"
+  --cert_hybrid_min_layer_keep_ratio "${CERT_HYBRID_MIN_LAYER_KEEP_RATIO}"
 )
 if [ "${CERT_MATCH_TIE_BREAK}" = "0" ] || [ "${CERT_MATCH_TIE_BREAK}" = "false" ]; then
   ARGS+=( --cert_no_match_tie_break )
