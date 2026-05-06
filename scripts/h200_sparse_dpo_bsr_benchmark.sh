@@ -22,7 +22,9 @@
 #    / Nsight on one step, optional --mlp_only driver flag to narrow scope, or future sparse forward.
 #
 # Northeastern Explorer-style defaults; override env vars as needed.
-#SBATCH --partition=gpu
+# Single H200 via **multigpu** partition — shorter queue vs ``gpu`` (same hack as GRPO mask suite / Light-R1 GraSP scripts).
+# CLI overrides embed: sbatch --partition=gpu scripts/h200_sparse_dpo_bsr_benchmark.sh  # if you prefer the gpu queue
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1
@@ -126,7 +128,10 @@ export RL_CASINO_BSR_GRAD_INPUT_MODE="${RL_CASINO_BSR_GRAD_INPUT_MODE:-dense}"
 
 # Sparse grid sparsity targets (comma-separated). Default includes **99.75%** plus 97.5 / 95 / 90.
 # Each level: element mask vs block mask × Adam block_1d vs block_2d = 4 sparse phases.
-export BENCHMARK_SPARSITIES="${BENCHMARK_SPARSITIES:-99.75,97.5,95,90}"
+# Use ``-v`` so an **explicitly empty** value (dense-only orchestrator shard) is not replaced by the default.
+if ! [[ -v BENCHMARK_SPARSITIES ]]; then
+  export BENCHMARK_SPARSITIES="99.75,97.5,95,90"
+fi
 
 # 0 (default): **include** one dense baseline phase. Set H200_BSR_SKIP_DENSE=1 to omit dense (faster grid only).
 export H200_BSR_SKIP_DENSE="${H200_BSR_SKIP_DENSE:-0}"
@@ -162,6 +167,14 @@ echo "RL_CASINO_BSR_DETAILED_TIMING=${RL_CASINO_BSR_DETAILED_TIMING}  RL_CASINO_
 echo "H200_BSR_SKIP_DENSE=${H200_BSR_SKIP_DENSE}  (0=dense baseline included; ≠0 ⇒ --no_dense_baseline)"
 echo "Mask scope: full-model (this script never passes --mlp_only)"
 echo "BENCHMARK_SPARSITIES=${BENCHMARK_SPARSITIES}  (each level → +4 sparse phases; +1 dense when SKIP_DENSE=0)"
+if [ -n "${H200_BSR_MASK_CACHE:-}" ]; then
+  echo "H200_BSR_MASK_CACHE=${H200_BSR_MASK_CACHE}  (shared mask root → <dir>/masks/*.pt)"
+fi
+
+MASK_CACHE_ARGS=()
+if [ -n "${H200_BSR_MASK_CACHE:-}" ]; then
+  MASK_CACHE_ARGS+=(--mask_cache_dir "${H200_BSR_MASK_CACHE}")
+fi
 
 GC_ARGS=()
 if [ "${DPO_GRADIENT_CHECKPOINTING:-1}" = "0" ]; then
@@ -195,4 +208,5 @@ exec "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
   --phase_adam_kernels "block_1d,block_2d" \
   "${PHASE_SLICE_ARGS[@]}" \
   "${SKIP_DENSE_ARGS[@]}" \
-  "${GC_ARGS[@]}"
+  "${GC_ARGS[@]}" \
+  "${MASK_CACHE_ARGS[@]}"

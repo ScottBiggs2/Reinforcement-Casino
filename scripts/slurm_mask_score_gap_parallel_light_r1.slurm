@@ -18,12 +18,15 @@
 #
 # Do not rsync magnitude_caches/ into $HOME/repo — copy only CSV/NPZ/JSON/figures after merge.
 #
+# Walltime matches scripts/slurm_mask_score_gap_light_r1.slurm (raise with e.g. sbatch --time=12:00:00 ...).
+# Default HISTOGRAM_BINS=1024 below saves CPU vs 2048; override with export HISTOGRAM_BINS=512|2048.
+#
 #SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=256G
-#SBATCH --time=24:00:00
+#SBATCH --time=08:00:00
 #SBATCH --job-name=mgap_par
 #SBATCH --output=logs/mask_score_gap_parallel_%j.out
 #SBATCH --error=logs/mask_score_gap_parallel_%j.err
@@ -77,7 +80,7 @@ OUT_DIR="${OUT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_analysis/mask_score_gap_paral
 MAGNITUDE_MILESTONES="${MAGNITUDE_MILESTONES:-50,100,150,200}"
 FORCE_MAG_CACHE_REBUILD="${FORCE_MAG_CACHE_REBUILD:-0}"
 RANDOM_SEEDS="${RANDOM_SEEDS:-}"
-HISTOGRAM_BINS="${HISTOGRAM_BINS:-2048}"
+HISTOGRAM_BINS="${HISTOGRAM_BINS:-1024}"
 MAX_KEYS="${MAX_KEYS:-}"
 VERIFY_DELTAS_DIR="${VERIFY_DELTAS_DIR:-}"
 SPARSITY_PERCENT="${CERT_SPARSITY_PERCENT:-${SPARSITY_PERCENT:-97.5}}"

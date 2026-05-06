@@ -43,7 +43,6 @@ import gc
 import json
 import hashlib
 import time
-import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -253,6 +252,77 @@ def _mask_cache_path(
     return os.path.join(out_dir, "masks", f"{tag}.pt")
 
 
+def _mask_parent_dir(args: argparse.Namespace) -> str:
+    """Directory whose ``masks/`` subtree holds ``.pt`` caches (shared or per-run output_dir)."""
+    if getattr(args, "mask_cache_dir", None):
+        return str(args.mask_cache_dir)
+    return str(args.output_dir)
+
+
+def _prefetch_masks_only(args: argparse.Namespace, sparsity_levels: List[float], mask_types: Tuple[str, ...]) -> None:
+    """Write mask files under ``<mask_parent>/masks/`` for each (sparsity, mask_type); no training."""
+    root = _mask_parent_dir(args)
+    os.makedirs(os.path.join(root, "masks"), exist_ok=True)
+    n_skip = 0
+    n_write = 0
+    for sp in sparsity_levels:
+        if float(sp) == 0.0:
+            slurm_safe_print(f"  Skip sparsity 0% (dense baseline; no mask file).")
+            continue
+        for mask_type in mask_types:
+            mt = "block" if mask_type == "block" else "element"
+            cache_path = _mask_cache_path(
+                out_dir=root,
+                sparsity_pct=float(sp),
+                mask_type=mt,
+                block_size=int(args.block_size_bsr),
+                mlp_only=bool(args.mlp_only),
+                min_layer_keep_ratio=float(args.min_layer_keep_ratio),
+            )
+            if os.path.isfile(cache_path):
+                slurm_safe_print(f"  Already present: {cache_path}")
+                n_skip += 1
+                continue
+            seed = _stable_mask_seed(base=424200, sparsity_pct=float(sp), mask_type=mt)
+            if mt == "block":
+                masks = generate_block_random_masks_cpu(
+                    args.model_name,
+                    args.checkpoint,
+                    float(sp),
+                    seed=seed,
+                    mlp_only=args.mlp_only,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                    block_size=args.block_size_bsr,
+                )
+            else:
+                masks = generate_random_masks_cpu(
+                    args.model_name,
+                    args.checkpoint,
+                    float(sp),
+                    seed=seed,
+                    mlp_only=args.mlp_only,
+                    min_layer_keep_ratio=args.min_layer_keep_ratio,
+                )
+            bool_masks = {k: v.bool() if v.dtype != torch.bool else v for k, v in masks.items()}
+            print_block_sparsity_profile(bool_masks, block_size=args.block_size_bsr)
+            meta = {
+                "method": "random_global_benchmark",
+                "sparsity_percent": float(sp),
+                "seed": int(seed),
+                "format": "torch_bool_binary",
+                "mask_type": mt,
+                "block_size_bsr": int(args.block_size_bsr),
+                "mlp_only": bool(args.mlp_only),
+                "min_layer_keep_ratio": float(args.min_layer_keep_ratio),
+            }
+            save_masks(bool_masks, cache_path, metadata=meta)
+            slurm_safe_print(f"  Saved: {cache_path}")
+            n_write += 1
+            del masks
+            gc.collect()
+    slurm_safe_print(f"✓ prefetch_masks_only complete (wrote {n_write}, skipped {n_skip} existing).")
+
+
 def _write_theory_sidecar(path: str, records: List[Dict[str, Any]]) -> None:
     """Write theory JSON incrementally so partial runs still have a sidecar."""
     tmp = f"{path}.tmp"
@@ -285,6 +355,17 @@ def main():
     p.add_argument("--disable_tf32", action="store_true")
     p.add_argument("--device_map", type=str, default="none", help="HF device_map (none = single GPU .to)")
     p.add_argument("--output_dir", type=str, required=True)
+    p.add_argument(
+        "--mask_cache_dir",
+        type=str,
+        default=None,
+        help="If set, read/write mask .pt files under <dir>/masks/ instead of <output_dir>/masks/.",
+    )
+    p.add_argument(
+        "--prefetch_masks_only",
+        action="store_true",
+        help="Generate and cache random masks for --benchmark_sparsities × --phase_mask_types, then exit (no DPO load, no training).",
+    )
     p.add_argument("--dataset_cache_dir", type=str, default=None)
     p.add_argument("--run_label", type=str, default="h200_bsr_bench")
     p.add_argument(
@@ -354,6 +435,13 @@ def main():
             f"grad_input_modes bad={bad_gi} (valid={sorted(_valid_gi)}), "
             f"adam_kernels bad={bad_adam} (valid={sorted(_valid_adam)})"
         )
+
+    if args.prefetch_masks_only:
+        if not args.mask_cache_dir:
+            raise ValueError("prefetch_masks_only requires --mask_cache_dir (shared mask root).")
+        os.makedirs(args.output_dir, exist_ok=True)
+        _prefetch_masks_only(args, sparsity_levels, mask_types)
+        return
 
     phases = _build_benchmark_phases(
         sparsity_levels,
@@ -433,10 +521,11 @@ def main():
         extra_log: Optional[Dict[str, Any]] = None
         if sparsity_pct is not None:
             # Mask reuse: cache one mask per (sparsity, mask_type, block_size, mlp_only, floor).
-            os.makedirs(os.path.join(args.output_dir, "masks"), exist_ok=True)
+            _mp = _mask_parent_dir(args)
+            os.makedirs(os.path.join(_mp, "masks"), exist_ok=True)
             mt = "block" if mask_type == "block" else "element"
             cache_path = _mask_cache_path(
-                out_dir=args.output_dir,
+                out_dir=_mp,
                 sparsity_pct=float(sparsity_pct),
                 mask_type=mt,
                 block_size=int(args.block_size_bsr),
@@ -618,7 +707,7 @@ def main():
                 sink.flush()
             except OSError as e:
                 print(f"WARNING: could not flush benchmark CSV (disk/NFS issue): {e}", file=sys.stderr)
-            # tmp_mask path no longer used; masks are cached under output_dir/masks/.
+            # tmp_mask path no longer used; masks are under <mask_parent>/masks/.
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

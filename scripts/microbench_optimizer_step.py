@@ -111,7 +111,11 @@ def _make_params_from_mask(
     for k, m, n in items:
         if len(named) >= int(max_tensors):
             break
-        if total + n > int(max_total_numel) and len(named) > 0:
+        cap = int(max_total_numel)
+        # If a single tensor exceeds the cap, skip it (avoid accidental 0.5B+ tensor allocations).
+        if n > cap:
+            continue
+        if total + n > cap:
             break
         total += n
         p = torch.nn.Parameter(torch.randn(tuple(m.shape), device=device, dtype=dtype))
@@ -304,6 +308,29 @@ def main() -> int:
             f"{r.mean_ms_mid:.6g} | {r.p50_ms_mid:.6g} | {r.note} |"
         )
 
+    # Simple speedup section (mid mean) when baselines are present.
+    def _row_by_opt(key: str) -> Optional[ResultRow]:
+        for rr in rows:
+            if rr.optimizer == key:
+                return rr
+        return None
+
+    dense_t = _row_by_opt("adamw_torch")
+    dense_8 = _row_by_opt("adamw_8bit")
+    sparse = _row_by_opt("sparse_adamw")
+    if sparse is not None:
+        lines.append("")
+        lines.append("## Key speedups (trimmed mean)")
+        lines.append("")
+        if dense_t is not None and dense_t.mean_ms_mid == dense_t.mean_ms_mid and sparse.mean_ms_mid == sparse.mean_ms_mid:
+            lines.append(
+                f"- **SparseAdamW vs torch AdamW:** x{dense_t.mean_ms_mid / max(1e-9, sparse.mean_ms_mid):.3f} faster (lower is better)."
+            )
+        if dense_8 is not None and dense_8.mean_ms_mid == dense_8.mean_ms_mid and sparse.mean_ms_mid == sparse.mean_ms_mid:
+            lines.append(
+                f"- **SparseAdamW vs AdamW 8-bit:** x{dense_8.mean_ms_mid / max(1e-9, sparse.mean_ms_mid):.3f} faster (lower is better)."
+            )
+
     lines.append("")
     lines.append("## Memory / traffic estimates (subset only)")
     lines.append("")
@@ -315,12 +342,13 @@ def main() -> int:
     lines.append("|---|---:|---:|---:|---:|---:|")
     for r in rows:
         lines.append(
-            f"| `{r.case}` | {r.est_param_bytes/1e6:.3g} | {r.est_grad_bytes/1e6:.3g} | "
-            f"{r.est_adam_state_bytes_fp32_dense/1e6:.3g} | {r.est_adam_state_bytes_fp32_sparse/1e6:.3g} | "
-            f"{r.est_sparseadamw_traffic_bytes_proxy/1e6:.3g} |"
+            f"| `{r.case}` | {r.est_param_bytes/1e6:.1f} | {r.est_grad_bytes/1e6:.1f} | "
+            f"{r.est_adam_state_bytes_fp32_dense/1e6:.1f} | {r.est_adam_state_bytes_fp32_sparse/1e6:.1f} | "
+            f"{r.est_sparseadamw_traffic_bytes_proxy/1e6:.1f} |"
         )
 
-    md_path.write_text("\\n".join(lines), encoding="utf-8")
+    # Important: use real newlines (not literal backslash-n sequences).
+    md_path.write_text("\n".join(lines), encoding="utf-8")
 
     print(f"Wrote {csv_path}", file=sys.stderr)
     print(f"Wrote {md_path}", file=sys.stderr)

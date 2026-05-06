@@ -235,19 +235,42 @@ Submitted batch job 6592410
 
 Goal: isolate optimizer kernel memory/speed savings (no forward/backward).
 
-- **Script**: `scripts/microbench_optimizer_step.py`
-- **Slurm**: `scripts/h200_sparse_adamw_optstep_microbench.slurm`
-- **Mask inputs**: element by default; optional block via `RUN_BLOCK=1` and `BLOCK_MASK=...`
-- **Element mask example**: `/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
-- **Block mask example**: `/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_block256_mean_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
-- **Device/dtype**: `cuda`, `bf16`
-- **Steps**: 50 `optimizer.step()` calls
-- **Fairness trimming**: exclude first/last 10% from stats (5 steps each) → report `*_mid` columns
-- **CUDA sync**: enabled (sync before/after step for honest timing)
-- **LR**: `5e-7` (kept consistent; step kernel cost mostly independent)
-- **SparseAdamW block_size**: 32
-- **Parameters**: synthetic tensors created to exactly match mask key names + mask shapes (realistic update geometry)
-- **Baselines**:
-  - `adamw_torch`
-  - `adamw_8bit` (when bitsandbytes is importable on the cluster)
+- **Run**:
 
+```bash
+export ELEM_MASK="/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
+```
+
+- **What to open**: `/scratch/$USER/rl_casino_optstep_microbench/<JOBID>/elem/optimizer_step_microbench.md`
+- **Defaults (designed for fairness + speed)**:
+  - steps: 50, trim: 10% (drop first/last 5)
+  - dtype: bf16, CUDA sync: on
+  - caps: `max_total_numel=25_000_000`, `max_tensors=64`
+
+### Latest result snapshot (elem mask, job 6593156)
+
+- **Mask**: `/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
+- **Settings**: bf16, block_size=32, steps=50, trim=10%, CUDA sync=on
+
+#### Timing (trimmed mid-window)
+
+| case | optimizer | mean_ms_mid | p50_ms_mid |
+|---|---|---:|---:|
+| `dense_elem` | `adamw_torch` | 7.1216 | 7.1201 |
+| `dense8bit_elem` | `adamw_8bit` | 14.1032 | 14.0989 |
+| `sparse_elem` | `sparse_adamw` | 4.3116 | 4.2679 |
+
+- **Speedups (trimmed mean)**:
+  - SparseAdamW vs torch AdamW: **x1.652 faster**
+  - SparseAdamW vs AdamW 8-bit: **x3.272 faster**
+
+#### Memory / traffic estimates (subset only; proxy)
+
+Active fraction (subset): **0.02499** (≈2.5% active).
+
+| case | param_MB | grad_MB | adam_state_MB_dense(fp32 m+v) | adam_state_MB_sparse(fp32 m+v) | traffic_proxy_MB |
+|---|---:|---:|---:|---:|---:|
+| `dense_elem` | 1050 | 1050 | 4200 | 105 | 1470 |
+| `dense8bit_elem` | 1050 | 1050 | 4200 | 105 | 1470 |
+| `sparse_elem` | 1050 | 1050 | 4200 | 105 | 1470 |
