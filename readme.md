@@ -1,578 +1,166 @@
-## RL Acceleration Project
+# RL Acceleration Project (RL Casino)
 
-Reinforcement Learning training infrastructure with Triton-accelerated sparse optimization for DPO and GRPO.
+Reinforcement Learning training infrastructure for **dense → masked → sparse** experiments, with Triton-accelerated sparse optimization paths for **DPO** and **GRPO**.
 
-### Research angle
+## What this repo is for
 
-We study **task-oriented subnetworks** inside large language models: binary masks over weights, built without iterative pruning at full scale. We care about subnetworks that are **strong** (competitive at high sparsity), **transferable** across related tasks or stages, **interpretable** via mask overlap, scoring methods, and layer metrics, and **optimizable**—training and inference can target the active set while dense forward passes (or controlled sparse paths) keep the story grounded. This repo implements that loop: dense training → mask construction (warm/cold/random baselines) → sparse training and evaluation, plus tooling for comparisons and benchmarks.
+We study **task-oriented subnetworks** in LLMs: binary masks over weights, built without full-scale iterative pruning. The loop implemented here is:
 
-For a short collaborator-facing note (automation and where GRPO sits relative to the default Slurm pipeline), see `docs/COLLABORATOR_GRPO_AND_AUTOMATION.md`.
+**dense training → mask construction (warm/cold/random + complements) → sparse training → evaluation + interpretation**
 
-### Implementation status
+Key emphasis: subnetworks that are **strong** at high sparsity, **transferable**, **interpretable** (mask overlap + layer metrics + CKA), and **optimizable** (update only the active set where appropriate).
 
-- **GRPO:** `GRPO_train.py` and `sparse_grpo_bsr.py` use **math-style rewards** (accuracy / format helpers) aligned with the OpenR1-style setup. `GRPO_timing_baseline.py` and `src/magic/sparse_GRPO_v2.py` use simpler **heuristic** rewards (e.g. length / markers)—fine for timing or legacy Triton paths, but not comparable to the main GRPO scripts without aligning rewards.
-- **Cold start:** Partially implemented. Mask gathering scripts exist in `cold_start/` (Fisher, CAV, SNIP) and emit standard mask formats for training.
-- **BSR backprop:** Not yet fully validated. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; treat correctness and performance as experimental.
+If you’re joining midstream, read `docs/COLLABORATOR_GRPO_AND_AUTOMATION.md` and `scripts/README.md` first.
 
-**Optimizer caveat:** AdamW decays **all** weights; masked training with vanilla AdamW still decays frozen weights. BSR sparse AdamW avoids that on the active set—choose the optimizer to match the masking story.
+## Start here (common workflows)
 
-Quick sparse DPO smoke (see [Sparse DPO (BSR backprop)](#sparse-dpo-bsr-backprop) for flags and ablations):
+### 1) End-to-end DPO pipeline (recommended default)
 
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --mask masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt \
-  --n_steps 50 \
-  --optimizer sgd \
-  --use_wandb
-```
+- **Single job (≤8h wall)**: `scripts/run_full_pipeline.sh`
+- **Chained jobs (afterok; recommended for longer runs)**: `scripts/submit_pipeline_chain.sh`
 
----
+This pipeline runs dense DPO, generates warm/cold/random masks (and optional inverse masks), launches sparse jobs per mask, runs comparison/interpretation exports, then fans out evaluation jobs.
+
+Operational details (stage breakdown, resume helper, output layout, auto-resume wrapper): see `scripts/README.md`.
+
+### 2) Production GRPO path (Open-R1 Math, Llama 3.1 8B)
+
+- **Slurm launcher**: `scripts/grpo_openr1_llama31_slurm.sh`
+- **Runbook**: `docs/GRPO_OPEN_R1_RUNBOOK.md`
+- **Canonical hyperparameters**: `docs/hyperparams/open_r1_llama31.yaml`
+- **HPC copy/paste blocks**: `docs/GRPO_HPC_COPYPASTE.md`
+
+Important GRPO notes:
+
+- **Reward profiles**: math rewards live in `src/utils/grpo_rewards.py`. The runbook documents `GRPO_REWARD_PROFILE` (`llama_cot` vs `openr1_tags`) and evaluation parity gotchas.
+- **vLLM import guard**: TRL may import vLLM opportunistically and fail if your vLLM build mismatches PyTorch. This repo defaults to skipping vLLM import unless `TRL_SKIP_VLLM_IMPORT=0`. Details: `docs/TROUBLESHOOTING_GRPO.md`.
+
+### 3) Mask interpretation + plots (Jaccard / CKA / CSV / figures)
+
+Mask comparison tooling (structural + functional + per-layer metrics + plotting) is documented in:
+
+- `src/cold_start/MASK_COMPARISON_GUIDE.md`
+
+Common entrypoints:
+
+- **Orchestrated GRPO vs DPO mask suite + plots**: `scripts/gen_grpo_masks_and_plot.sh`
+- **Pairwise Jaccard**: `src/cold_start/mask_to_jaccard.py`
+- **Pairwise CKA**: `src/cold_start/mask_to_cka.py`
+- **Many masks, all pairs**: `src/cold_start/mask_interpretation_suite.py`
 
 ## Prerequisites
 
-- **Python 3.11** (required for TRL compatibility)
-- **H100 / H200 GPU** (for intended training throughput)
-- **Weights & Biases account** (for experiment tracking)
-- **HuggingFace account** (for model access)
+- **Python 3.11**
+- **CUDA GPU** (H100/H200 intended for throughput; other GPUs may work with reduced settings)
+- **Hugging Face** access (set `HF_TOKEN` for gated models like Llama 3.1)
+- **Weights & Biases** optional (recommended for tracking; can disable per script)
 
-## Conda environments (HPC)
+## Environments (HPC)
 
-Training scripts default to the `rl_casino` env. Evaluation harnesses (lm-evaluation-harness / coding eval) default to a separate env: `rl_casino_eval`. The steps for creation are the same, just with different naming schemes. Use `rl_casino` for training and `rl_casino_eval` for evaluation.
+The repo generally assumes two conda envs:
 
-### Create eval env (clone to scratch)
+- **Training**: `rl_casino`
+- **Evaluation**: `rl_casino_eval`
+
+Explorer-style example (clone eval env to scratch):
 
 ```bash
 conda create -n rl_casino_eval python=3.11.14 -y
 conda activate rl_casino_eval
 
 conda create --prefix /scratch/biggs.s/conda_envs/rl_casino_eval --clone /home/biggs.s/miniconda/envs/rl_casino_eval
-
 conda activate /scratch/biggs.s/conda_envs/rl_casino_eval
-# or
-conda activate /scratch/biggs.s/conda_envs/rl_casino
 ```
 
-To preinstall eval deps (optional; the Slurm scripts will also install what they need):
+Authentication:
 
 ```bash
-pip install -r eval_requirements.txt
-```
-
-If your local miniconda path differs, update the `--clone ...` source path accordingly.
-
-### Authentication
-
-```bash
-# Wandb login
 wandb login [YOUR_KEY_HERE]
-
-# HuggingFace login
 hf auth login [YOUR_KEY_HERE]
 ```
+
+## “Repo root” requirement (Slurm)
+
+Most Slurm scripts rely on `SLURM_SUBMIT_DIR` to find the repo. **Always run `sbatch` from the repository root** (the folder containing `src/` and `scripts/`). This is a common failure mode; see `scripts/README.md`.
 
 ## Project structure
 
 ```text
 src/
-├── cold_start/          # Cold-start mask methods (Fisher, CAV, SNIP; partial)
-├── full_training/       # Full training pipelines (DPO, GRPO) + sparse DPO
-├── lora_training/       # LoRA training scripts
-├── magic/               # Triton-accelerated sparse training (legacy scripts)
-├── utils/               # Utilities (checkpoint reconstruction, etc.)
-└── warm_start/          # Mask finding and warm start utilities
-docs/                    # Onboarding notes (see COLLABORATOR_GRPO_AND_AUTOMATION.md)
-scripts/                 # Slurm and orchestration scripts (training, masks, eval, full pipeline)
+  cold_start/        Cold-start mask methods + interpretation tools
+  warm_start/        Warm-start mask finder over DPO deltas
+  full_training/     Dense + sparse training entrypoints (DPO, GRPO)
+  evaluation/        Benchmark harnesses (lm-eval, coding eval, etc.)
+  utils/             Shared helpers (data, masks, checkpoint utils, etc.)
+scripts/             Slurm + orchestration utilities (pipeline, eval, GRPO launch)
+docs/                Runbooks + troubleshooting + hyperparameter canon
 ```
 
-## Full training (`src/full_training/`)
+## Training entrypoints (overview)
 
-### DPO training
+### DPO
 
-Train with Direct Preference Optimization on the Light-R1 dataset.
+- **Dense DPO**: `src/full_training/DPO_train.py` (supports multiple dataset keys; writes optional delta logs for warm masks)
+- **Sparse DPO (efficiency)**: `src/full_training/sparse_dpo_efficiency.py` (SGD/AdamW/SparseAdamW ablations)
+- **Sparse DPO (BSR backprop; experimental)**: `src/full_training/sparse_dpo_bsr.py`
 
-**Script:** `DPO_train.py`
+More details and dataset keys: `src/full_training/README.md`.
 
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--model_name` | str | `google/gemma-3-270m-it` | HuggingFace model name |
+### GRPO
 
-```bash
-# Default model
-python src/full_training/DPO_train.py
+- **Dense GRPO (canonical)**: `src/full_training/GRPO_train.py`
+- **Sparse GRPO (BSR path; experimental)**: `src/full_training/sparse_grpo_bsr.py`
 
-# Custom model
-python src/full_training/DPO_train.py --model_name "meta-llama/Llama-3.1-8B-Instruct"
-```
+Legacy / timing-only scripts with heuristic rewards exist (see `docs/COLLABORATOR_GRPO_AND_AUTOMATION.md` for the “what counts as comparable” split).
 
-**Output paths (determined by `--model_name` via sanitized name):**
+## Mask finding (overview)
 
-| Output | Path pattern | Example (`google/gemma-3-270m-it`) |
-|--------|----------------|-------------------------------------|
-| Checkpoints | `./checkpoints_{sanitized}_dpo/` | `./checkpoints_google_gemma_3_270m_it_dpo/` |
-| Delta logs | `./delta_logs_{sanitized}/` | `./delta_logs_google_gemma_3_270m_it/` |
-| Wandb project | `{sanitized}-dpo-subnetwork-emergence` | `google_gemma_3_270m_it-dpo-subnetwork-emergence` |
+- **Warm-start (DPO deltas → scores → masks)**: `src/warm_start/even_better_mask_finder.py`
+- **Cold-start (inference-time scoring; DPO or GRPO calibration)**: `src/cold_start/inference_mask_finder.py`
 
-**Checkpoint / delta schedule:** Defined in-script (not a CLI arg). Default schedule saves deltas at steps **10, 20, 30, 40, 100, 150, 200**. Delta files are `deltas_step_{step}.pt` and `base_state.pt` inside the delta log dir. To change which steps are saved, edit `CHECKPOINT_SCHEDULE` and `NUM_STEPS` in `DPO_train.py`.
-
-**Mask finding:** The mask finder (`even_better_mask_finder.py`) reads from the **delta log directory** produced by this script. Use `--delta_log_dir` equal to that path (e.g. `./delta_logs_google_gemma_3_270m_it`). Use `--target_step` equal to a step where deltas were saved (one of the schedule steps above), or omit for the latest available step.
-
-### GRPO training
-
-Train with Group Relative Policy Optimization (TRL `GRPOTrainer`). Default dataset registry key is **`math-220k`** (OpenR1 Math); rewards in `GRPO_train.py` are **math-oriented** (solution accuracy and format), not placeholders.
-
-**Script:** `GRPO_train.py`
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--model_name` | str | `google/gemma-3-270m-it` | HuggingFace model name |
-
-```bash
-python src/full_training/GRPO_train.py
-python src/full_training/GRPO_train.py --model_name "Qwen/Qwen2.5-0.5B-Instruct"
-```
-
-**Outputs:** Default `--output_base_dir` is `{RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense` (see `scratch_paths.py`). Each run uses `run_slug/` (default `{model}_{dataset}_grpo_dense`): HuggingFace checkpoints in `run_slug/checkpoints/`, optional deltas in `run_slug/deltas/` when `--delta_log_interval` is set, `run_manifest.json`, and `wandb_run_id.txt` for resumed W&B runs. Use `--resume_from_checkpoint auto` (or a path) to continue training.
-
-**Open-R1 + Llama 3.1 8B (Slurm):** `scripts/grpo_openr1_llama31_slurm.sh` — runbook `docs/GRPO_OPEN_R1_RUNBOOK.md`, canonical hyperparameters `docs/hyperparams/open_r1_llama31.yaml`.
-
-**vLLM / import errors:** If `trl` fails to import `GRPOTrainer` due to a broken `vllm` install, see `docs/TROUBLESHOOTING_GRPO.md`. By default we skip loading vLLM (HF generation only); set `TRL_SKIP_VLLM_IMPORT=0` only when using a compatible vLLM build.
-
-### Sparse DPO (efficiency)
-
-Triton-accelerated sparse DPO with optimizer ablations (SGD, AdamW, Sparse AdamW).
-
-**Script:** `sparse_dpo_efficiency.py`
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--model_name` | str | `google/gemma-3-270m-it` | Base model name |
-| `--checkpoint` | str | None | Checkpoint path (None = use `model_name`) |
-| `--mask` | str | `masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt` | Sparse mask file |
-| `--n_steps` | int | 100 | Training steps |
-| `--batch_size` | int | 4 | Batch size |
-| `--grad_accum` | int | 4 | Gradient accumulation steps |
-| `--lr` | float | 5e-5 | Learning rate |
-| `--subset_size` | int | None | Dataset subset size (None = full) |
-| `--optimizer` | str | `sparse_adamw` | `sgd`, `adamw`, or `sparse_adamw` |
-| `--block_size` | int | 32 | Block size for sparse AdamW |
-| `--mlp_only` | flag | False (omit) | Pass `--mlp_only` to restrict sparsity to MLP layers only |
-| `--use_wandb` | flag | False | Log to Wandb |
-| `--save_csv` | flag | False | Save per-step CSV logs |
-
-```bash
-python src/full_training/sparse_dpo_efficiency.py \
-  --model_name "google/gemma-3-270m-it" \
-  --mask "masks/warm_magnitude_google_gemma_3_270m_it_sparsity95.0pct_step50.pt" \
-  --optimizer sparse_adamw \
-  --n_steps 50 \
-  --use_wandb \
-  --save_csv
-```
-
-### Sparse DPO (BSR backprop)
-
-BSR sparse MLP layers with custom sparse autograd. **BSR backprop is not yet tested**; use for experimentation only.
-
-**Script:** `sparse_dpo_bsr.py`
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--model_name` | str | `google/gemma-3-270m-it` | Base model name |
-| `--checkpoint` | str | None | Checkpoint path (None = use `model_name`) |
-| `--mask` | str | `masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt` | Sparse mask file |
-| `--n_steps` | int | 10 | Training steps |
-| `--batch_size` | int | 1 | Batch size |
-| `--grad_accum` | int | 8 | Gradient accumulation steps |
-| `--lr` | float | 5e-5 | Learning rate |
-| `--subset_size` | int | None | Dataset subset size (None = full) |
-| `--optimizer` | str | `sparse_adamw` | `sgd`, `adamw`, or `sparse_adamw` |
-| `--block_size_bsr` | int | 16 | BSR block size for sparse MLP |
-| `--block_size_adam` | int | 128 | Block size for sparse AdamW |
-| `--mlp_only` | flag | False (omit) | Pass `--mlp_only` to restrict sparsity to MLP layers only |
-| `--use_wandb` | flag | False | Log to Wandb |
-| `--save_csv` | flag | False | Save per-step CSV logs |
-
-```bash
-python src/full_training/sparse_dpo_bsr.py \
-  --model_name "google/gemma-3-270m-it" \
-  --mask "masks/warm_magnitude_google_gemma_3_270m_it_sparsity95.0pct_step50.pt" \
-  --optimizer sparse_adamw \
-  --block_size_bsr 16 \
-  --use_wandb
-
-python src/full_training/sparse_dpo_bsr.py \
-  --model_name "google/gemma-3-270m-it" \
-  --mask "masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt" \
-  --optimizer sgd \
-  --block_size_bsr 16 \
-  --n_steps 100 \
-  --use_wandb
-```
-
-### Timing baselines (dense)
-
-Minimal dense runs for timing comparison (no delta logging, minimal checkpointing).
-
-**DPO baseline:** `DPO_timing_baseline.py`
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--checkpoint` | str | None | Checkpoint path (None = base model) |
-| `--n_steps` | int | 10 | Training steps |
-| `--batch_size` | int | 4 | Batch size |
-| `--learning_rate` | float | 5e-5 | Learning rate |
-| `--subset_size` | int | 10 | Dataset subset size |
-| `--optimizer` | str | `sgd` | `sgd` or `adamw` |
-| `--save_model` | flag | False | Save final model to safetensors |
-
-```bash
-python src/full_training/DPO_timing_baseline.py \
-  --n_steps 100 \
-  --batch_size 4 \
-  --subset_size 1000 \
-  --optimizer adamw \
-  --save_model
-```
-
-**GRPO baseline:** `GRPO_timing_baseline.py` — minimal timing run; uses **heuristic** rewards (not the same as `GRPO_train.py`).
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--checkpoint` | str | None | Checkpoint path (None = base model) |
-| `--n_steps` | int | 10 | Training steps |
-| `--batch_size` | int | 1 | Batch size |
-| `--learning_rate` | float | 5e-5 | Learning rate |
-| `--subset_size` | int | 10 | Dataset subset size |
-
-```bash
-python src/full_training/GRPO_timing_baseline.py \
-  --checkpoint None \
-  --n_steps 50 \
-  --batch_size 1 \
-  --subset_size 10
-```
-
-## Sparse training (legacy, `src/magic/`)
-
-Older Triton scripts; for new work prefer `src/full_training/sparse_dpo_efficiency.py` and `sparse_dpo_bsr.py`.
-
-### Sparse DPO (v2 / v3)
-
-```bash
-python src/magic/sparse_DPO_v2.py --model_name "google/gemma-3-270m-it" --checkpoint None \
-  --mask masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt --n_steps 50
-
-python src/magic/sparse_DPO_v3.py --model_name "meta-llama/Llama-3.2-3B-Instruct" --checkpoint None \
-  --mask masks/warm_fisher_meta_llama_llama_3_2_3b_instruct_sparsity97.5pct_step50.pt --n_steps 100 --batch_size 1 --subset_size 100 --learning_rate 5e-5
-```
-
-### Sparse GRPO (v2)
-
-Legacy Triton path; **heuristic rewards** (not aligned with `GRPO_train.py`). Prefer `src/full_training/sparse_grpo_bsr.py` for experiments that should match the main GRPO training story.
-
-```bash
-python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --checkpoint None \
-  --mask masks/warm_momentum_w5_google_gemma_3_270m_it_sparsity90.0pct_step25.pt --n_steps 50
-```
-
-## Mask finding
-
-**Uses output from `src/full_training/DPO_train.py`.** The mask finder reads the **delta log directory** that DPO training writes (see [DPO training](#dpo-training) for path format and checkpoint schedule).
-
-**Argument setup:**
-
-- `--delta_log_dir` — Must match the delta log dir produced by `DPO_train.py` for the same model. Format: `./delta_logs_{sanitized}/` where `{sanitized}` is the model name with slashes/dashes lowercased and replaced by underscores (e.g. `./delta_logs_google_gemma_3_270m_it`).
-- `--target_step` — Step at which to compute the mask. Must be a step where `DPO_train.py` saved deltas (default schedule: 10, 20, 30, 40, 100, 150, 200). Omit to use all available steps up to the latest.
-
-**Mask pooling (defaults):** Warm/cold paths that call `create_mask_from_scores_gpu_efficient` now use **hybrid global pooling** by default—one global ranking over all scored weights plus a small per-tensor keep floor (`min_layer_keep_ratio=0.0025`, metadata `pooling_mode`: `"global_with_layer_floor"`). Pass `--min_layer_keep_ratio 0.0` for pure global masking (`"global"`). Use `--local_pool` for **per-weight-matrix** top-k (`"local_per_tensor"`); local pooling ignores the floor by construction. Both `src/warm_start/random_mask_baseline.py` and `src/utils/generate_random_mask.py` are aligned with the same hybrid-global semantics. Large global/hybrid masks now use an **exact chunked CPU-first selector** instead of flattening the full model into one giant score vector, so they preserve global-competition semantics without the previous `torch.cat(...)->topk(...)` memory spike.
-
-**Script:** `src/warm_start/even_better_mask_finder.py`.
-
-### Warm-start: magnitude-based
-
-```bash
-python src/warm_start/even_better_mask_finder.py \
-  --delta_log_dir "delta_logs_google_gemma_3_270m_it" \
-  --method magnitude \
-  --sparsity_percent 97.5 \
-  --target_step 50 \
-  --compute_jaccard \
-  --debug
-```
-
-*Output:* `masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt`
-
-### Warm-start: momentum-based
-
-```bash
-python src/warm_start/even_better_mask_finder.py \
-  --delta_log_dir "delta_logs_meta_llama_llama_3_1_8b_instruct" \
-  --method momentum \
-  --sparsity_percent 97.5 \
-  --target_step 40 \
-  --compute_jaccard \
-  --debug
-```
-
-*Output:* `masks/warm_momentum_w5_meta_llama_llama_3_1_8b_instruct_sparsity97.5pct_step40.pt`
-
-### Warm-start: Fisher-based
-
-```bash
-python src/warm_start/even_better_mask_finder.py \
-  --delta_log_dir "delta_logs_meta_llama_llama_3_2_3b_instruct" \
-  --method fisher \
-  --sparsity_percent 97.5 \
-  --target_step 100 \
-  --compute_jaccard \
-  --debug
-```
-
-*Output:* `masks/warm_fisher_meta_llama_llama_3_2_3b_instruct_sparsity97.5pct_step100.pt`
-
-### Cold-start mask finder
-
-All cold-start methods use a single unified script (`src/cold_start/inference_mask_finder.py`). Select the scoring method with `--method`. Uses `--sparsity` (percent weights zeroed) and `--n_samples` for calibration size.
-
-**Fisher** — diagonal Fisher Information:
-
-```bash
-python src/cold_start/inference_mask_finder.py \
-  --model_name "google/gemma-3-270m-it" \
-  --dataset_name "qihoo360/Light-R1-DPOData" \
-  --method fisher \
-  --sparsity 95.0 \
-  --n_samples 512
-```
-
-**CAV** — linear-probe discriminative scores:
-
-```bash
-python src/cold_start/inference_mask_finder.py \
-  --model_name "google/gemma-3-270m-it" \
-  --dataset_name "qihoo360/Light-R1-DPOData" \
-  --method cav \
-  --sparsity 95.0 \
-  --n_samples 256
-```
-
-**SNIP** — gradient saliency:
-
-```bash
-python src/cold_start/inference_mask_finder.py \
-  --model_name "google/gemma-3-270m-it" \
-  --method snip \
-  --sparsity 95.0 \
-  --n_samples 256
-```
-
-Add `--mode grpo` to use GRPO-format datasets instead of DPO. Add `--verbose` for per-layer diagnostics.
-
-Legacy entrypoints `src/cold_start/cold_mask_finder.py` and `cav_cold_mask_finder.py` remain for older Slurm/pipeline scripts; prefer `inference_mask_finder.py` for new runs.
-
-### Chunked mask verification
-
-For a fast selector-level sanity check without model artifacts, including flat-vs-chunked agreement on small tensors:
-
-```bash
-python src/analysis/verify_hybrid_mask_selector.py
-```
-
-For a lightweight end-to-end warm/cold smoke on the cluster, set a real delta directory and submit:
-
-```bash
-cd /path/to/rl_casino
-DELTA_LOG_DIR=/path/to/delta_logs_model sbatch scripts/run_mask_smoke.sh
-```
-
-That smoke script:
-
-- forces the exact chunked selector path, even on small smoke inputs
-- runs the selector sanity check
-- builds one warm magnitude mask with the default floor and one pure-global control
-- builds one cold Fisher mask with the default floor and one pure-global control
-- writes outputs to `masks/smoke/`
-
-Useful smoke env knobs:
-
-- `RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL=1` forces the chunked selector on every run.
-- `RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu` forces warm-score accumulation off GPU (pipeline defaults to **cuda** so GPU Slurm jobs stay utilized; use **cpu** if you hit OOM).
-
-The main runner scripts under `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly for reproducibility. Set that variable to `0.0` in a script if you want legacy pure-global behavior.
-
-## Checkpoint reconstruction
-
-Reconstruct full checkpoints from delta files:
-
-```bash
-# Reconstruct at step 100
-python src/utils/reconstruct_checkpoint.py \
-  --model_name "google/gemma-3-270m-it" \
-  --delta_log_dir ./delta_logs_google_gemma_3_270m_it \
-  --step 100 \
-  --output_dir ./reconstructed_checkpoints/step_100
-
-# List available steps
-python src/utils/reconstruct_checkpoint.py \
-  --delta_log_dir ./delta_logs_google_gemma_3_270m_it \
-  --list_steps
-```
-
-## Model name sanitization
-
-Scripts sanitize HuggingFace model names for paths:
-
-- `google/gemma-3-270m-it` → `google_gemma_3_270m_it`
-- `meta-llama/Llama-3.1-8B` → `meta_llama_llama_3_1_8b`
-
-## General notes
-
-- **Delta logging:** Training scripts can save parameter deltas (vs initial state) instead of full checkpoints to save disk.
-- **Checkpoint schedules:** Configurable step schedules control when deltas are written.
-- **Weights & Biases:** Runs log to Wandb with model-specific project names when enabled.
-- **Sparse training:** Triton kernels only update non-zero mask elements for speed at high sparsity.
+Mask pooling defaults are **hybrid global with a per-tensor keep floor** (`min_layer_keep_ratio=0.0025`). For pure global pooling, use `--min_layer_keep_ratio 0.0`. For per-tensor top-k, use `--local_pool`. (See the mask scripts and pipeline defaults in `scripts/README.md`.)
 
 ## Evaluation
 
-The project includes a comprehensive evaluation harness based on `lm-evaluation-harness`.
+Evaluation harness overview and install guidance live in `src/evaluation/README.md`.
 
-### Supported benchmarks
-
-- **MMLU**: General knowledge and reasoning.
-- **MATH**: Advanced mathematical problem solving (Standard MATH task).
-- **GSM8K**: Grade school math word problems.
-- **HumanEval / MBPP**: Coding proficiency (pass@1).
-- **IFEval**: Instruction following capabilities.
-- **SQuAD**: Reading comprehension.
-- **GPQA**: Graduate-level science questions.
-
-### Execution
-
-#### Unified runner
-
-Run all or specific benchmarks using the unified runner:
+Common entrypoint:
 
 ```bash
 python src/evaluation/run_all_benchmarks.py \
   --model_path "meta-llama/Llama-3.1-8B-Instruct" \
   --benchmarks mmlu,math,gsm8k \
-  --batch_size auto \
-  --use_vllm
+  --batch_size auto
 ```
 
-#### Environment variables
-
-Certain benchmarks and models require environment variables:
-
-- `HF_TOKEN`: Required for gated models like Llama 3.1.
-- `HF_ALLOW_CODE_EVAL=1`: Required for HumanEval and MBPP to execute model-generated code.
-
-### Speed optimizations
-
-Evaluation can be slow. To maximize throughput:
-
-1. **Use vLLM:** Pass `--use_vllm` to use the vLLM backend (requires `pip install vllm`). This is significantly faster than the default `hf` backend.
-2. **Auto batching:** Use `--batch_size auto` to automatically find the largest batch size that fits in GPU memory.
-3. **Limit samples:** Use `--limit N` (e.g., `--limit 100`) to run a representative subset for faster iteration.
-
-### Slurm integration
-
-Submit a full evaluation job to a GPU cluster:
+Cluster eval launcher:
 
 ```bash
 sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
 ```
 
-*Note:* The eval scripts use `ENV_PATH=/scratch/biggs.s/conda_envs/rl_casino_eval` by default. If needed, edit `scripts/run_evals_slurm.sh` / `scripts/verify_coding.sh` and ensure `HF_TOKEN` is exported.
+## Datasets (notes)
 
-### Full single-GPU pipeline
+Short dataset pointers live in `src/data/datasets.md`:
 
-To run the full DPO → masks → sparse DPO → eval pipeline on a single GPU, **run `sbatch` from the repo root** (Slurm sets `SLURM_SUBMIT_DIR` to that path):
+- Tulu3 DPO mixture (instruction following)
+- Math-Step-DPO-10K (math)
+- Light-R1-DPOData (math/reasoning; default in several scripts)
+- CodePref (coding)
 
-```bash
-cd /path/to/rl_casino
-sbatch scripts/run_full_pipeline.sh
-```
+## Troubleshooting (entry points)
 
-The script requests `gpu:h200:1` on the `gpu` partition (Explorer-style headers in `scripts/run_full_pipeline.sh`). Edit the `#SBATCH` lines there if your queue uses different GPU types or limits.
+- **GRPO vLLM import / bf16 setup / reward term stuck at zero**: `docs/TROUBLESHOOTING_GRPO.md`
+- **GRPO launch + resume + checkpoint retention semantics**: `docs/GRPO_OPEN_R1_RUNBOOK.md`
+- **Pipeline orchestration, resume-from-stage, auto-resume wrapper**: `scripts/README.md`
 
-This will:
+## Documentation index (high-signal)
 
-- Run dense DPO training on `light-r1` for a small number of steps (default base model: `meta-llama/Llama-3.1-8B-Instruct`; set `HF_TOKEN` for gated downloads).
-- Build warm-start (magnitude, momentum, Fisher) and cold-start (Fisher, CAV) masks.
-- Run sparse DPO training for each mask.
-- Submit evaluation jobs (base, dense, sparse models) with `--limit` for faster turnaround.
-
-The masking jobs in `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly. Change that to `0.0` inside a script if you need pure global pooling for a controlled comparison against older runs.
-
-### Model loading examples
-
-The evaluation harness supports loading models naturally via standard HuggingFace paths or local checkpoint directories.
-
-#### 1. Stock HuggingFace models
-
-To evaluate a base model directly from HuggingFace:
-
-```bash
-python src/evaluation/run_all_benchmarks.py \
-  --model_path "meta-llama/Llama-3.1-8B-Instruct" \
-  --use_vllm
-```
-
-#### 2. Sparse-tuned models (natural loading)
-
-Models trained with `sparse_dpo_bsr.py` or `sparse_dpo_efficiency.py` automatically save a full, HF-compatible checkpoint to `{run_dir}/final_model` upon completion. You can evaluate these just like any other model:
-
-```bash
-python src/evaluation/run_all_benchmarks.py \
-  --model_path "./results/sparse_dpo_run/final_model" \
-  --use_vllm
-```
-
-#### 3. DPO evaluation (diagnostic & comparison)
-
-The dedicated `DPO_evaluation.py` utility allows for direct comparison between a base model and a fine-tuned checkpoint. It defaults to natural loading of "single unit" checkpoints:
-
-```bash
-python src/evaluation/DPO_evaluation.py \
-  --model_name_or_path "google/gemma-3-270m-it" \
-  --checkpoint_path "./results/run_name/final_model"
-```
-
-If you specifically want to verify the sparsity logic, you can still pass a `--mask_path` to dynamically reconstruct the masked model for diagnostic comparison.
-
-## Appendix: cluster snippet (Tulu3, H200)
-
-This is an example cluster submission / environment block for a Tulu3-style DPO run on a single H200. It is **not** required for basic usage but documents the core paper hyperparameters.
-
-```bash
-sbatch scripts/run_evals_slurm.sh \
-  --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
-  --trust_remote_code \
-  --output_dir "/scratch/biggs.s/rl_casino_eval_runs/manual_$(date +%Y%m%d_%H%M%S)" \
-  --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_fisher_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_fisher_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
-  --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_magnitude_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_magnitude_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
-  --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_momentum_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_momentum_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
-  --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500
-
-# Core paper hyperparameters (Tulu3 DPO, single H200)
-export NUM_STEPS_DPO=1000
-export DPO_LEARNING_RATE=5e-7
-export DPO_WARMUP_RATIO=0.1
-export DPO_MAX_LENGTH=1024
-export DPO_MAX_PROMPT_LENGTH=512
-export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=2
-export DPO_GRADIENT_ACCUMULATION_STEPS=64
-export DPO_GRADIENT_CHECKPOINTING=1
-
-# Mask metrics and CPU-offloading parameters
-export RL_CASINO_WARM_MASK_SCORE_DEVICE="cpu"
-export TARGET_STEP_DPO=200
-export DELTA_LOG_END_STEP=200
-export RUN_MASK_CKA=1
-export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=0
-
-# Standardized launch
-export PIPELINE_RUN_ID="tulu3_1000_h200_fresh_0408"
-bash scripts/submit_pipeline_chain.sh
-```
+- `docs/COLLABORATOR_GRPO_AND_AUTOMATION.md`
+- `docs/GRPO_OPEN_R1_RUNBOOK.md`
+- `docs/GRPO_HPC_COPYPASTE.md`
+- `docs/TROUBLESHOOTING_GRPO.md`
+- `src/full_training/README.md`
+- `src/evaluation/README.md`
+- `scripts/README.md`
+- `src/cold_start/MASK_COMPARISON_GUIDE.md`

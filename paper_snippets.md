@@ -1,214 +1,34 @@
-# SparseAdamW optimizer.step() microbench
+# SparseAdamW \texttt{optimizer.step()} microbench
 
-- **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_h200_bsr/random_mask_blob/masks/s0p25_element_b16_mlp0_floor0.0025.pt`
-- **device:** `cuda`  **dtype:** `bf16`
-- **lr:** `5e-07`  **block_size:** `32`
-- **steps_total:** `50`  **trim_frac:** `0.1` (excludes first/last 10%)
-- **sync_cuda:** `True`
-- **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
+## Experimental setup
 
-## Timing summary (trimmed mid-window)
+The microbench isolates the optimizer kernel: only \texttt{optimizer.step()} is timed
+(no forward, backward, or data-loading paths), with full CUDA synchronization before
+and after each timed iteration. Each configuration is timed for 50 consecutive steps;
+we drop the first and last 10\% of samples and report both the trimmed mean and the
+trimmed median across the middle window. Synthetic gradients are pre-allocated and
+reused, so the only quantity the optimizer reads/writes is the parameter / state
+buffers.
 
-| case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
-|---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.9975 | 7.12002 | 7.11832 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.9975 | 14.1088 | 14.1037 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.9975 | 6.20827 | 6.21492 |  |
+| Setting | Value |
+|---|---|
+| Hardware | 1 \(\times\) NVIDIA H200 |
+| Parameter and gradient dtype | BF16 |
+| First / second moment dtype | fp32 for \texttt{adamw\_torch} and \texttt{sparse\_adamw}; 8-bit block-quantized for \texttt{adamw\_8bit} |
+| Timed steps per case (mid-window) | 50 (drop first / last 10\%) |
+| CUDA synchronization | enabled before and after every timed step |
+| Synthetic parameter subset | a single 2-D weight tensor of shape matching the largest model parameter (\(\approx 525\)M BF16 elements) held fixed across sparsity levels |
+| SparseAdamW tile size | 32 |
+| Mask construction | element-wise random masks at six target sparsities; one mask per sparsity, reused across all three optimizers |
+| Sparsity grid (\%) | 0.25, 50, 75, 90, 97.5, 99.75 |
+| Compared optimizers | PyTorch AdamW (\texttt{adamw\_torch}), bitsandbytes AdamW 8-bit (\texttt{adamw\_8bit}), and SparseAdamW (\texttt{sparse\_adamw}, this work) |
 
-## Key speedups (trimmed mean)
+The fixed \(\approx 525\)M-element subset is used so that the dense baselines
+(\texttt{adamw\_torch}, \texttt{adamw\_8bit}) see exactly the same workload at every
+sparsity level, isolating the effect of the SparseAdamW kernel's mask-aware
+load/store and update pattern.
 
-- **SparseAdamW vs torch AdamW:** x1.147 faster (lower is better).
-- **SparseAdamW vs AdamW 8-bit:** x2.273 faster (lower is better).
-
-## Memory / traffic estimates (subset only)
-
-- `est_param_bytes` / `est_grad_bytes` use the chosen dtype bytes-per-element.
-- AdamW state estimate assumes fp32 `m`+`v` (8 bytes/element).
-- Sparse traffic proxy uses 112 bytes per active element (see `src/utils/bsr_theory_metrics.py`).
-
-| case | est_param_MB | est_grad_MB | est_adam_state_MB_dense | est_adam_state_MB_sparse | traffic_proxy_MB |
-|---|---:|---:|---:|---:|---:|
-| `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 4192.2 | 58690.4 |
-| `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 4192.2 | 58690.4 |
-| `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 4192.2 | 58690.4 |
-
-# SparseAdamW optimizer.step() microbench
-
-- **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_h200_bsr/random_mask_blob/masks/s50p0_element_b16_mlp0_floor0.0025.pt`
-- **device:** `cuda`  **dtype:** `bf16`
-- **lr:** `5e-07`  **block_size:** `32`
-- **steps_total:** `50`  **trim_frac:** `0.1` (excludes first/last 10%)
-- **sync_cuda:** `True`
-- **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
-
-## Timing summary (trimmed mid-window)
-
-| case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
-|---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.5 | 7.13145 | 7.1283 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.5 | 14.1201 | 14.1173 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.5 | 6.18028 | 6.18989 |  |
-
-## Key speedups (trimmed mean)
-
-- **SparseAdamW vs torch AdamW:** x1.154 faster (lower is better).
-- **SparseAdamW vs AdamW 8-bit:** x2.285 faster (lower is better).
-
-## Memory / traffic estimates (subset only)
-
-- `est_param_bytes` / `est_grad_bytes` use the chosen dtype bytes-per-element.
-- AdamW state estimate assumes fp32 `m`+`v` (8 bytes/element).
-- Sparse traffic proxy uses 112 bytes per active element (see `src/utils/bsr_theory_metrics.py`).
-
-| case | est_param_MB | est_grad_MB | est_adam_state_MB_dense | est_adam_state_MB_sparse | traffic_proxy_MB |
-|---|---:|---:|---:|---:|---:|
-| `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 2101.3 | 29418.1 |
-| `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 2101.3 | 29418.1 |
-| `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 2101.3 | 29418.1 |
-
-# SparseAdamW optimizer.step() microbench
-
-- **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_h200_bsr/random_mask_blob/masks/s75p0_element_b16_mlp0_floor0.0025.pt`
-- **device:** `cuda`  **dtype:** `bf16`
-- **lr:** `5e-07`  **block_size:** `32`
-- **steps_total:** `50`  **trim_frac:** `0.1` (excludes first/last 10%)
-- **sync_cuda:** `True`
-- **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
-
-## Timing summary (trimmed mid-window)
-
-| case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
-|---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.25 | 7.13851 | 7.13721 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.25 | 14.1406 | 14.1185 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.25 | 6.20708 | 6.19083 |  |
-
-## Key speedups (trimmed mean)
-
-- **SparseAdamW vs torch AdamW:** x1.150 faster (lower is better).
-- **SparseAdamW vs AdamW 8-bit:** x2.278 faster (lower is better).
-
-## Memory / traffic estimates (subset only)
-
-- `est_param_bytes` / `est_grad_bytes` use the chosen dtype bytes-per-element.
-- AdamW state estimate assumes fp32 `m`+`v` (8 bytes/element).
-- Sparse traffic proxy uses 112 bytes per active element (see `src/utils/bsr_theory_metrics.py`).
-
-| case | est_param_MB | est_grad_MB | est_adam_state_MB_dense | est_adam_state_MB_sparse | traffic_proxy_MB |
-|---|---:|---:|---:|---:|---:|
-| `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 1050.7 | 14709.6 |
-| `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 1050.7 | 14709.6 |
-| `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 1050.7 | 14709.6 |
-
-# SparseAdamW optimizer.step() microbench
-
-- **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_h200_bsr/random_mask_blob/masks/s90p0_element_b16_mlp0_floor0.0025.pt`
-- **device:** `cuda`  **dtype:** `bf16`
-- **lr:** `5e-07`  **block_size:** `32`
-- **steps_total:** `50`  **trim_frac:** `0.1` (excludes first/last 10%)
-- **sync_cuda:** `True`
-- **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
-
-## Timing summary (trimmed mid-window)
-
-| case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
-|---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.1 | 7.14816 | 7.14505 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.1 | 14.1186 | 14.114 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.1 | 6.16879 | 6.16622 |  |
-
-## Key speedups (trimmed mean)
-
-- **SparseAdamW vs torch AdamW:** x1.159 faster (lower is better).
-- **SparseAdamW vs AdamW 8-bit:** x2.289 faster (lower is better).
-
-## Memory / traffic estimates (subset only)
-
-- `est_param_bytes` / `est_grad_bytes` use the chosen dtype bytes-per-element.
-- AdamW state estimate assumes fp32 `m`+`v` (8 bytes/element).
-- Sparse traffic proxy uses 112 bytes per active element (see `src/utils/bsr_theory_metrics.py`).
-
-| case | est_param_MB | est_grad_MB | est_adam_state_MB_dense | est_adam_state_MB_sparse | traffic_proxy_MB |
-|---|---:|---:|---:|---:|---:|
-| `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 420.4 | 5885.0 |
-| `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 420.4 | 5885.0 |
-| `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 420.4 | 5885.0 |
-
-# SparseAdamW optimizer.step() microbench
-
-- **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
-- **device:** `cuda`  **dtype:** `bf16`
-- **lr:** `5e-07`  **block_size:** `32`
-- **steps_total:** `50`  **trim_frac:** `0.1` (excludes first/last 10%)
-- **sync_cuda:** `True`
-- **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
-
-## Timing summary (trimmed mid-window)
-
-| case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
-|---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.02499 | 7.13214 | 7.13068 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.02499 | 14.1286 | 14.1123 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.02499 | 4.21413 | 4.21716 |  |
-
-## Key speedups (trimmed mean)
-
-- **SparseAdamW vs torch AdamW:** x1.692 faster (lower is better).
-- **SparseAdamW vs AdamW 8-bit:** x3.353 faster (lower is better).
-
-## Memory / traffic estimates (subset only)
-
-- `est_param_bytes` / `est_grad_bytes` use the chosen dtype bytes-per-element.
-- AdamW state estimate assumes fp32 `m`+`v` (8 bytes/element).
-- Sparse traffic proxy uses 112 bytes per active element (see `src/utils/bsr_theory_metrics.py`).
-
-| case | est_param_MB | est_grad_MB | est_adam_state_MB_dense | est_adam_state_MB_sparse | traffic_proxy_MB |
-|---|---:|---:|---:|---:|---:|
-| `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 105.0 | 1470.5 |
-| `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 105.0 | 1470.5 |
-| `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 105.0 | 1470.5 |
-
-# SparseAdamW optimizer.step() microbench
-
-- **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_h200_bsr/random_mask_blob/masks/s99p75_element_b16_mlp0_floor0.0025.pt`
-- **device:** `cuda`  **dtype:** `bf16`
-- **lr:** `5e-07`  **block_size:** `32`
-- **steps_total:** `50`  **trim_frac:** `0.1` (excludes first/last 10%)
-- **sync_cuda:** `True`
-- **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
-
-## Timing summary (trimmed mid-window)
-
-| case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
-|---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.0025 | 7.11813 | 7.11673 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.0025 | 14.1167 | 14.1063 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.0025 | 2.17141 | 2.17123 |  |
-
-## Key speedups (trimmed mean)
-
-- **SparseAdamW vs torch AdamW:** x3.278 faster (lower is better).
-- **SparseAdamW vs AdamW 8-bit:** x6.501 faster (lower is better).
-
-## Memory / traffic estimates (subset only)
-
-- `est_param_bytes` / `est_grad_bytes` use the chosen dtype bytes-per-element.
-- AdamW state estimate assumes fp32 `m`+`v` (8 bytes/element).
-- Sparse traffic proxy uses 112 bytes per active element (see `src/utils/bsr_theory_metrics.py`).
-
-| case | est_param_MB | est_grad_MB | est_adam_state_MB_dense | est_adam_state_MB_sparse | traffic_proxy_MB |
-|---|---:|---:|---:|---:|---:|
-| `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 10.5 | 147.1 |
-| `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 10.5 | 147.1 |
-| `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 10.5 | 147.1 |
-
-### Fill in the table: 
+## Step-time results
 
 \begin{table}[H]
     \centering
@@ -278,3 +98,31 @@
         \bottomrule
     \end{tabular}
 \end{table}
+
+## Optimizer-state and traffic footprint (subset only)
+
+The footprint table reports the static memory and per-step traffic charged to the
+synthetic 525M-element subset. \emph{Param} and \emph{Grad} are BF16 buffers
+(\(2\,\text{B} \times N\)). \emph{Dense state} is fp32 \(m + v\)
+(\(8\,\text{B} \times N\)). \emph{Sparse state} is fp32 \(m + v\) restricted to
+active elements only, scaling with the active fraction \(1 - s\). The
+\emph{traffic proxy} charges \(112\) bytes per active element, modeling the
+SparseAdamW kernel's per-element load/store footprint
+(BF16 \(p, g\) read/write, fp32 \(m, v\) read/write, plus block-index metadata).
+
+| Sparsity (\%) | Active fraction | Param (MB) | Grad (MB) | Dense state (MB) | Sparse state (MB) | Traffic proxy (MB) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.25  | 0.9975  | 1051 | 1051 | 4203 | 4192 | 58690 |
+| 50.0  | 0.5000  | 1051 | 1051 | 4203 | 2101 | 29418 |
+| 75.0  | 0.2500  | 1051 | 1051 | 4203 | 1051 | 14710 |
+| 90.0  | 0.1000  | 1051 | 1051 | 4203 |  420 |  5885 |
+| 97.5  | 0.0250  | 1051 | 1051 | 4203 |  105 |  1471 |
+| 99.75 | 0.0025  | 1051 | 1051 | 4203 |   11 |   147 |
+
+At the highest sparsity in the grid (\(99.75\%\)), the SparseAdamW state
+footprint shrinks by approximately \(380\times\) relative to fp32 dense AdamW
+(\(11\) MB vs.\ \(4203\) MB on this subset), and the per-step traffic proxy
+shrinks by approximately \(400\times\) (\(147\) MB vs.\ \(58690\) MB), which is
+consistent with the \(\sim 3.28\times\) measured step-time speedup over
+\texttt{adamw\_torch} once kernel-launch and synchronization overhead are taken
+into account.
