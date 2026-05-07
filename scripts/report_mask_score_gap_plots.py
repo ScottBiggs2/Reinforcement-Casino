@@ -270,7 +270,7 @@ def main() -> None:
                 ax_pdf.plot(
                     lin_c,
                     dens,
-                    label=rf"$|\,w^{{\mathrm{{warm}}}}_{{\le {s}}} - w^{{*}}\,|$",
+                    label=rf"$|\,w^{{\mathrm{{warm}}}}_{{\leq {s}}} - w^{{*}}\,|$",
                     color=cols[f"step{s}"],
                     lw=2.2,
                     alpha=0.9,
@@ -316,7 +316,7 @@ def main() -> None:
                     x,
                     y,
                     where="mid",
-                    label=rf"warm mag, step $\le {s}$",
+                    label=rf"warm mag, step $\leq {s}$",
                     color=cols[f"step{s}"],
                     lw=2.2,
                 )
@@ -350,7 +350,7 @@ def main() -> None:
             ax_ecdf.set_xlim(x_lo_disp, x_hi_disp)
             ax_ecdf.set_ylim(0, 1)
             ax_ecdf.set_xlabel(r"gap $|s_i - w^{*}_i|$")
-            ax_ecdf.set_ylabel(r"$\Pr[\,|s_i - w^{*}_i| \le x\,]$")
+            ax_ecdf.set_ylabel(r"$\mathrm{Pr}[\,|s_i - w^{*}_i| \leq x\,]$")
             ax_ecdf.set_title(r"ECDF of raw gap $|s_i - w^{*}_i|$")
             ax_ecdf.grid(True, which="both", ls=":", alpha=0.35)
             ax_ecdf.legend(loc="lower right")
