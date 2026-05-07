@@ -219,6 +219,7 @@ def compute_fisher_scores(
         return any(kw in name.lower() for kw in MLP_KEYWORDS)
 
     # Initialize accumulator
+    # Important for large models: keep Fisher buffers on CPU regardless of model device.
     fisher_scores = {}
     scored_params = {}
     for name, param in model.named_parameters():
@@ -226,7 +227,7 @@ def compute_fisher_scores(
             continue
         if not param.requires_grad:
             continue
-        fisher_scores[name] = torch.zeros_like(param, dtype=torch.float32)
+        fisher_scores[name] = torch.zeros_like(param, dtype=torch.float32, device="cpu")
         scored_params[name] = param
 
     print(f"  Scoring {len(fisher_scores)} parameter tensors")
@@ -266,10 +267,12 @@ def compute_fisher_scores(
         # This gives E[g]^2 (low variance) rather than E[g^2] (high variance)
         total_loss.backward()
 
+        # Accumulate squared gradients into CPU buffers to avoid GPU OOM on large models.
         with torch.no_grad():
             for name, param in scored_params.items():
-                if param.grad is not None:
-                    fisher_scores[name] += param.grad.float().pow(2)
+                g = param.grad
+                if g is not None:
+                    fisher_scores[name] += g.detach().to("cpu", dtype=torch.float32).pow(2)
 
         n_batches += 1
         batch_start = batch_end
