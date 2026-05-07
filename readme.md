@@ -1,16 +1,16 @@
-# RL Acceleration Project
+## RL Acceleration Project
 
 Reinforcement Learning training infrastructure with Triton-accelerated sparse optimization for DPO and GRPO.
 
-## Research angle
+### Research angle
 
-We study **task-oriented subnetworks** inside large language models: binary masks over weights, built without iterative pruning at full scale. The empirical picture we care about is that these subnetworks can be **strong** (competitive at high sparsity), **transferable** across related tasks or stages, **interpretable** via mask overlap, scoring methods, and layer metrics, and **optimizable**—training and inference can target the active set while dense forward passes (or controlled sparse paths) keep the story grounded. This repo implements that loop: dense training → mask construction (warm/cold/random baselines) → sparse training and evaluation, plus tooling for comparisons and benchmarks.
+We study **task-oriented subnetworks** inside large language models: binary masks over weights, built without iterative pruning at full scale. We care about subnetworks that are **strong** (competitive at high sparsity), **transferable** across related tasks or stages, **interpretable** via mask overlap, scoring methods, and layer metrics, and **optimizable**—training and inference can target the active set while dense forward passes (or controlled sparse paths) keep the story grounded. This repo implements that loop: dense training → mask construction (warm/cold/random baselines) → sparse training and evaluation, plus tooling for comparisons and benchmarks.
 
-For a short collaborator-facing note (automation and where GRPO sits relative to the default Slurm pipeline), see [docs/COLLABORATOR_GRPO_AND_AUTOMATION.md](docs/COLLABORATOR_GRPO_AND_AUTOMATION.md).
+For a short collaborator-facing note (automation and where GRPO sits relative to the default Slurm pipeline), see `docs/COLLABORATOR_GRPO_AND_AUTOMATION.md`.
 
-## Implementation status
+### Implementation status
 
-- **GRPO:** `GRPO_train.py` and `sparse_grpo_bsr.py` use **math-style rewards** (accuracy / format helpers) aligned with the OpenR1-style setup. **`GRPO_timing_baseline.py`** and **`src/magic/sparse_GRPO_v2.py`** use simpler **heuristic** rewards (e.g. length/markers)—fine for timing or legacy Triton paths, but not comparable to the main GRPO scripts without aligning rewards.
+- **GRPO:** `GRPO_train.py` and `sparse_grpo_bsr.py` use **math-style rewards** (accuracy / format helpers) aligned with the OpenR1-style setup. `GRPO_timing_baseline.py` and `src/magic/sparse_GRPO_v2.py` use simpler **heuristic** rewards (e.g. length / markers)—fine for timing or legacy Triton paths, but not comparable to the main GRPO scripts without aligning rewards.
 - **Cold start:** Partially implemented. Mask gathering scripts exist in `cold_start/` (Fisher, CAV, SNIP) and emit standard mask formats for training.
 - **BSR backprop:** Not yet fully validated. `sparse_dpo_bsr.py` uses BSR sparse MLP layers and custom sparse autograd; treat correctness and performance as experimental.
 
@@ -31,13 +31,13 @@ python src/full_training/sparse_dpo_bsr.py \
 ## Prerequisites
 
 - **Python 3.11** (required for TRL compatibility)
-- **H100 GPU** (required for optimal performance - or H100, I always mix them up)
-- **Wandb account** (for experiment tracking)
+- **H100 / H200 GPU** (for intended training throughput)
+- **Weights & Biases account** (for experiment tracking)
 - **HuggingFace account** (for model access)
 
-## Conda Environments (HPC)
+## Conda environments (HPC)
 
-Training scripts default to the `rl_casino` env. Evaluation harnesses (lm-evaluation-harness / coding eval) default to a separate env: `rl_casino_eval`. The steps for creation are the same, just with different naming schemes. The eval env is to be used in evaluation, the default to be used in training.  
+Training scripts default to the `rl_casino` env. Evaluation harnesses (lm-evaluation-harness / coding eval) default to a separate env: `rl_casino_eval`. The steps for creation are the same, just with different naming schemes. Use `rl_casino` for training and `rl_casino_eval` for evaluation.
 
 ### Create eval env (clone to scratch)
 
@@ -50,7 +50,6 @@ conda create --prefix /scratch/biggs.s/conda_envs/rl_casino_eval --clone /home/b
 conda activate /scratch/biggs.s/conda_envs/rl_casino_eval
 # or
 conda activate /scratch/biggs.s/conda_envs/rl_casino
-
 ```
 
 To preinstall eval deps (optional; the Slurm scripts will also install what they need):
@@ -73,7 +72,7 @@ hf auth login [YOUR_KEY_HERE]
 
 ## Project structure
 
-```
+```text
 src/
 ├── cold_start/          # Cold-start mask methods (Fisher, CAV, SNIP; partial)
 ├── full_training/       # Full training pipelines (DPO, GRPO) + sparse DPO
@@ -134,9 +133,9 @@ python src/full_training/GRPO_train.py --model_name "Qwen/Qwen2.5-0.5B-Instruct"
 
 **Outputs:** Default `--output_base_dir` is `{RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense` (see `scratch_paths.py`). Each run uses `run_slug/` (default `{model}_{dataset}_grpo_dense`): HuggingFace checkpoints in `run_slug/checkpoints/`, optional deltas in `run_slug/deltas/` when `--delta_log_interval` is set, `run_manifest.json`, and `wandb_run_id.txt` for resumed W&B runs. Use `--resume_from_checkpoint auto` (or a path) to continue training.
 
-**Open-R1 + Llama 3.1 8B (Slurm):** [`scripts/grpo_openr1_llama31_slurm.sh`](scripts/grpo_openr1_llama31_slurm.sh) — runbook [`docs/GRPO_OPEN_R1_RUNBOOK.md`](docs/GRPO_OPEN_R1_RUNBOOK.md), canonical hyperparameters [`docs/hyperparams/open_r1_llama31.yaml`](docs/hyperparams/open_r1_llama31.yaml).
+**Open-R1 + Llama 3.1 8B (Slurm):** `scripts/grpo_openr1_llama31_slurm.sh` — runbook `docs/GRPO_OPEN_R1_RUNBOOK.md`, canonical hyperparameters `docs/hyperparams/open_r1_llama31.yaml`.
 
-**vLLM / import errors:** If `trl` fails to import `GRPOTrainer` due to a broken `vllm` install, see [docs/TROUBLESHOOTING_GRPO.md](docs/TROUBLESHOOTING_GRPO.md). By default we skip loading vLLM (HF generation only); set `TRL_SKIP_VLLM_IMPORT=0` only when using a compatible vLLM build.
+**vLLM / import errors:** If `trl` fails to import `GRPOTrainer` due to a broken `vllm` install, see `docs/TROUBLESHOOTING_GRPO.md`. By default we skip loading vLLM (HF generation only); set `TRL_SKIP_VLLM_IMPORT=0` only when using a compatible vLLM build.
 
 ### Sparse DPO (efficiency)
 
@@ -282,14 +281,14 @@ python src/magic/sparse_GRPO_v2.py --model_name "google/gemma-3-270m-it" --check
 
 **Argument setup:**
 
-- **`--delta_log_dir`** — Must match the delta log dir produced by `DPO_train.py` for the same model. Format: `./delta_logs_{sanitized}/` where `{sanitized}` is the model name with slashes/dashes lowercased and replaced by underscores (e.g. `./delta_logs_google_gemma_3_270m_it`).
-- **`--target_step`** — Step at which to compute the mask. Must be a step where DPO_train saved deltas (default schedule: 10, 20, 30, 40, 100, 150, 200). Omit to use all available steps up to the latest.
+- `--delta_log_dir` — Must match the delta log dir produced by `DPO_train.py` for the same model. Format: `./delta_logs_{sanitized}/` where `{sanitized}` is the model name with slashes/dashes lowercased and replaced by underscores (e.g. `./delta_logs_google_gemma_3_270m_it`).
+- `--target_step` — Step at which to compute the mask. Must be a step where `DPO_train.py` saved deltas (default schedule: 10, 20, 30, 40, 100, 150, 200). Omit to use all available steps up to the latest.
 
-**Mask pooling (defaults):** Warm/cold paths that call `create_mask_from_scores_gpu_efficient` now use **hybrid global pooling** by default — one global ranking over all scored weights plus a small per-tensor keep floor (`min_layer_keep_ratio=0.0025`, metadata `pooling_mode`: `"global_with_layer_floor"`). Pass **`--min_layer_keep_ratio 0.0`** for pure global masking (`"global"`). Use **`--local_pool`** for **per-weight-matrix** top-k (`"local_per_tensor"`); local pooling ignores the floor by construction. Both **`src/warm_start/random_mask_baseline.py`** and **`src/utils/generate_random_mask.py`** are aligned with the same hybrid-global semantics. Large global/hybrid masks now use an **exact chunked CPU-first selector** instead of flattening the full model into one giant score vector, so they preserve global-competition semantics without the previous `torch.cat(...)->topk(...)` memory spike.
+**Mask pooling (defaults):** Warm/cold paths that call `create_mask_from_scores_gpu_efficient` now use **hybrid global pooling** by default—one global ranking over all scored weights plus a small per-tensor keep floor (`min_layer_keep_ratio=0.0025`, metadata `pooling_mode`: `"global_with_layer_floor"`). Pass `--min_layer_keep_ratio 0.0` for pure global masking (`"global"`). Use `--local_pool` for **per-weight-matrix** top-k (`"local_per_tensor"`); local pooling ignores the floor by construction. Both `src/warm_start/random_mask_baseline.py` and `src/utils/generate_random_mask.py` are aligned with the same hybrid-global semantics. Large global/hybrid masks now use an **exact chunked CPU-first selector** instead of flattening the full model into one giant score vector, so they preserve global-competition semantics without the previous `torch.cat(...)->topk(...)` memory spike.
 
-Script: `src/warm_start/even_better_mask_finder.py`.
+**Script:** `src/warm_start/even_better_mask_finder.py`.
 
-### Warm-start: Magnitude-based
+### Warm-start: magnitude-based
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
@@ -300,9 +299,10 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard \
   --debug
 ```
+
 *Output:* `masks/warm_magnitude_google_gemma_3_270m_it_sparsity97.5pct_step50.pt`
 
-### Warm-start: Momentum-based
+### Warm-start: momentum-based
 
 ```bash
 python src/warm_start/even_better_mask_finder.py \
@@ -313,6 +313,7 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard \
   --debug
 ```
+
 *Output:* `masks/warm_momentum_w5_meta_llama_llama_3_1_8b_instruct_sparsity97.5pct_step40.pt`
 
 ### Warm-start: Fisher-based
@@ -326,6 +327,7 @@ python src/warm_start/even_better_mask_finder.py \
   --compute_jaccard \
   --debug
 ```
+
 *Output:* `masks/warm_fisher_meta_llama_llama_3_2_3b_instruct_sparsity97.5pct_step100.pt`
 
 ### Cold-start mask finder
@@ -333,6 +335,7 @@ python src/warm_start/even_better_mask_finder.py \
 All cold-start methods use a single unified script (`src/cold_start/inference_mask_finder.py`). Select the scoring method with `--method`. Uses `--sparsity` (percent weights zeroed) and `--n_samples` for calibration size.
 
 **Fisher** — diagonal Fisher Information:
+
 ```bash
 python src/cold_start/inference_mask_finder.py \
   --model_name "google/gemma-3-270m-it" \
@@ -343,6 +346,7 @@ python src/cold_start/inference_mask_finder.py \
 ```
 
 **CAV** — linear-probe discriminative scores:
+
 ```bash
 python src/cold_start/inference_mask_finder.py \
   --model_name "google/gemma-3-270m-it" \
@@ -353,6 +357,7 @@ python src/cold_start/inference_mask_finder.py \
 ```
 
 **SNIP** — gradient saliency:
+
 ```bash
 python src/cold_start/inference_mask_finder.py \
   --model_name "google/gemma-3-270m-it" \
@@ -420,18 +425,19 @@ Scripts sanitize HuggingFace model names for paths:
 - `google/gemma-3-270m-it` → `google_gemma_3_270m_it`
 - `meta-llama/Llama-3.1-8B` → `meta_llama_llama_3_1_8b`
 
-## Notes
+## General notes
 
 - **Delta logging:** Training scripts can save parameter deltas (vs initial state) instead of full checkpoints to save disk.
 - **Checkpoint schedules:** Configurable step schedules control when deltas are written.
-- **Wandb:** Runs log to Wandb with model-specific project names when enabled.
+- **Weights & Biases:** Runs log to Wandb with model-specific project names when enabled.
 - **Sparse training:** Triton kernels only update non-zero mask elements for speed at high sparsity.
 
 ## Evaluation
 
 The project includes a comprehensive evaluation harness based on `lm-evaluation-harness`.
 
-### Supported Benchmarks
+### Supported benchmarks
+
 - **MMLU**: General knowledge and reasoning.
 - **MATH**: Advanced mathematical problem solving (Standard MATH task).
 - **GSM8K**: Grade school math word problems.
@@ -442,8 +448,10 @@ The project includes a comprehensive evaluation harness based on `lm-evaluation-
 
 ### Execution
 
-#### Unified Runner
+#### Unified runner
+
 Run all or specific benchmarks using the unified runner:
+
 ```bash
 python src/evaluation/run_all_benchmarks.py \
   --model_path "meta-llama/Llama-3.1-8B-Instruct" \
@@ -452,23 +460,30 @@ python src/evaluation/run_all_benchmarks.py \
   --use_vllm
 ```
 
-#### Environment Variables
+#### Environment variables
+
 Certain benchmarks and models require environment variables:
-- **`HF_TOKEN`**: Required for gated models like Llama 3.1.
-- **`HF_ALLOW_CODE_EVAL=1`**: Required for HumanEval and MBPP to execute model-generated code.
 
-### Speed Optimizations
+- `HF_TOKEN`: Required for gated models like Llama 3.1.
+- `HF_ALLOW_CODE_EVAL=1`: Required for HumanEval and MBPP to execute model-generated code.
+
+### Speed optimizations
+
 Evaluation can be slow. To maximize throughput:
-1. **Use vLLM**: Pass `--use_vllm` to use the vLLM backend (requires `pip install vllm`). This is significantly faster than the default `hf` backend.
-2. **Auto Batching**: Use `--batch_size auto` to automatically find the largest batch size that fits in GPU memory.
-3. **Limit Samples**: Use `--limit N` (e.g., `--limit 100`) to run a representative subset for faster iteration.
 
-### Slurm Integration
+1. **Use vLLM:** Pass `--use_vllm` to use the vLLM backend (requires `pip install vllm`). This is significantly faster than the default `hf` backend.
+2. **Auto batching:** Use `--batch_size auto` to automatically find the largest batch size that fits in GPU memory.
+3. **Limit samples:** Use `--limit N` (e.g., `--limit 100`) to run a representative subset for faster iteration.
+
+### Slurm integration
+
 Submit a full evaluation job to a GPU cluster:
+
 ```bash
 sbatch scripts/run_evals_slurm.sh --model_path "meta-llama/Llama-3.1-8B-Instruct"
 ```
-*Note: The eval scripts use `ENV_PATH=/scratch/biggs.s/conda_envs/rl_casino_eval` by default. If needed, edit `scripts/run_evals_slurm.sh` / `scripts/verify_coding.sh` and ensure `HF_TOKEN` is exported.*
+
+*Note:* The eval scripts use `ENV_PATH=/scratch/biggs.s/conda_envs/rl_casino_eval` by default. If needed, edit `scripts/run_evals_slurm.sh` / `scripts/verify_coding.sh` and ensure `HF_TOKEN` is exported.
 
 ### Full single-GPU pipeline
 
@@ -479,9 +494,10 @@ cd /path/to/rl_casino
 sbatch scripts/run_full_pipeline.sh
 ```
 
-The script requests **`gpu:h200:1`** on the `gpu` partition (Explorer-style headers in `scripts/run_full_pipeline.sh`). Edit `#SBATCH` lines there if your queue uses different GPU types or limits.
+The script requests `gpu:h200:1` on the `gpu` partition (Explorer-style headers in `scripts/run_full_pipeline.sh`). Edit the `#SBATCH` lines there if your queue uses different GPU types or limits.
 
 This will:
+
 - Run dense DPO training on `light-r1` for a small number of steps (default base model: `meta-llama/Llama-3.1-8B-Instruct`; set `HF_TOKEN` for gated downloads).
 - Build warm-start (magnitude, momentum, Fisher) and cold-start (Fisher, CAV) masks.
 - Run sparse DPO training for each mask.
@@ -489,65 +505,62 @@ This will:
 
 The masking jobs in `scripts/` now pass `MIN_LAYER_KEEP_RATIO="0.0025"` explicitly. Change that to `0.0` inside a script if you need pure global pooling for a controlled comparison against older runs.
 
-### Model Loading Examples
+### Model loading examples
 
-The evaluation harness supports loading models "naturally" via standard HuggingFace paths or local checkpoint directories.
+The evaluation harness supports loading models naturally via standard HuggingFace paths or local checkpoint directories.
 
-#### 1. Stock HuggingFace Models
+#### 1. Stock HuggingFace models
+
 To evaluate a base model directly from HuggingFace:
+
 ```bash
 python src/evaluation/run_all_benchmarks.py \
   --model_path "meta-llama/Llama-3.1-8B-Instruct" \
   --use_vllm
 ```
 
-#### 2. Sparse-Tuned Models (Natural Loading)
+#### 2. Sparse-tuned models (natural loading)
+
 Models trained with `sparse_dpo_bsr.py` or `sparse_dpo_efficiency.py` automatically save a full, HF-compatible checkpoint to `{run_dir}/final_model` upon completion. You can evaluate these just like any other model:
+
 ```bash
 python src/evaluation/run_all_benchmarks.py \
   --model_path "./results/sparse_dpo_run/final_model" \
   --use_vllm
 ```
 
-#### 3. DPO Evaluation (Diagnostic & Comparison)
-The dedicated `DPO_evaluation.py` utility allows for direct comparison between a base model and a fine-tuned checkpoint. It now defaults to natural loading of "single unit" checkpoints:
+#### 3. DPO evaluation (diagnostic & comparison)
+
+The dedicated `DPO_evaluation.py` utility allows for direct comparison between a base model and a fine-tuned checkpoint. It defaults to natural loading of "single unit" checkpoints:
+
 ```bash
-# Evaluate a full sparse checkpoint directly
 python src/evaluation/DPO_evaluation.py \
   --model_name_or_path "google/gemma-3-270m-it" \
   --checkpoint_path "./results/run_name/final_model"
 ```
+
 If you specifically want to verify the sparsity logic, you can still pass a `--mask_path` to dynamically reconstruct the masked model for diagnostic comparison.
 
+## Appendix: cluster snippet (Tulu3, H200)
 
-# Scratch
+This is an example cluster submission / environment block for a Tulu3-style DPO run on a single H200. It is **not** required for basic usage but documents the core paper hyperparameters.
 
-```bash 
+```bash
 sbatch scripts/run_evals_slurm.sh \
   --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
   --trust_remote_code \
-  --output_dir "/scratch/biggs.s/rl_casino_eval_runs/manual_$(date +%Y%m%d_%H%M%S)"
-
-  # Warm Fisher
+  --output_dir "/scratch/biggs.s/rl_casino_eval_runs/manual_$(date +%Y%m%d_%H%M%S)" \
   --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_fisher_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_fisher_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
-
-  # Warm Magnitude
   --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_magnitude_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_magnitude_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
-
-  # Warm Momentum
   --model_path /scratch/biggs.s/rl_casino_sparse_train/20260329_185704_manual/warm_momentum_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200/fullpipe_sparse_warm_momentum_meta_llama_llama_3_1_8b_instruct_tulu3_sparsity97.5pct_step200_20260329_185704_manual/final_model \
+  --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500
 
-  # Dense Baseline
-  --model_path /scratch/biggs.s/rl_casino_train/20260329_185704_manual/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500 \
-
-```
-
-# Core paper hyperparameters matching (Tulu3 DPO settings scaled for a single H200)
+# Core paper hyperparameters (Tulu3 DPO, single H200)
 export NUM_STEPS_DPO=1000
 export DPO_LEARNING_RATE=5e-7
 export DPO_WARMUP_RATIO=0.1
 export DPO_MAX_LENGTH=1024
-export DPO_MAX_PROMPT_LENGTH=512  
+export DPO_MAX_PROMPT_LENGTH=512
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE=2
 export DPO_GRADIENT_ACCUMULATION_STEPS=64
 export DPO_GRADIENT_CHECKPOINTING=1
@@ -562,3 +575,4 @@ export EXPORT_LAYER_METRICS_SKIP_EFFECTIVE_RANK=0
 # Standardized launch
 export PIPELINE_RUN_ID="tulu3_1000_h200_fresh_0408"
 bash scripts/submit_pipeline_chain.sh
+```

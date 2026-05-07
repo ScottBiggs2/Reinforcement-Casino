@@ -226,7 +226,7 @@ def main() -> None:
             "No magnitude_raw_step*_counts in npz — if this is intentional, regenerate analysis with milestones."
         )
 
-    # ---------------- overlays: raw (log-x)
+    # ---------------- overlays: raw (log-x), side-by-side PDF | ECDF
     if milestones:
         raw_series_lo = [(data[f"magnitude_raw_step{s}_counts"], data[f"magnitude_raw_step{s}_log_edges"]) for s in milestones]
         if seed_primary:
@@ -243,56 +243,122 @@ def main() -> None:
             if args.raw_xmax is not None
             else _tight_union_log_xlim(raw_series_lo, cdf_mass=cm)
         )
+        # Trim heavy small-x tail: clamp left edge to 1e-12 for legibility.
+        x_lo_disp = max(float(xlim_raw_u[0]), 1e-14)
+        x_hi_disp = float(xlim_raw_u[1])
 
-        fig, axes = plt.subplots(2, 1, figsize=(10, 9))
-        for s in milestones:
-            c_k = f"magnitude_raw_step{s}_counts"
-            e_k = f"magnitude_raw_step{s}_log_edges"
-            lin_c, dens = _hist_density_from_log_bins(data[c_k], data[e_k])
-            axes[0].plot(lin_c, dens, label=f"|mag@≤{s} − oracle|", color=cols[f"step{s}"], lw=2, alpha=0.9)
+        # Bigger figure + bigger fonts for paper-ready legibility.
+        with plt.rc_context(
+            {
+                "font.size": 16,
+                "axes.titlesize": 18,
+                "axes.labelsize": 17,
+                "xtick.labelsize": 14,
+                "ytick.labelsize": 14,
+                "legend.fontsize": 12,
+                "mathtext.fontset": "cm",
+            }
+        ):
+            fig, axes = plt.subplots(1, 2, figsize=(18, 7.5))
+            ax_pdf, ax_ecdf = axes[0], axes[1]
 
-        if seed_primary:
-            c_k = f"random_raw_seed{seed_primary}_counts"
-            e_k = f"random_raw_seed{seed_primary}_log_edges"
-            lin_c, dens = _hist_density_from_log_bins(data[c_k], data[e_k])
-            axes[0].plot(
-                lin_c, dens, label=f"random (seed {seed_primary})", color=cols["random"], lw=2.2, ls="--"
-            )
-        if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
-            lin_c, dens = _hist_density_from_log_bins(
-                align["alignment_gap_oracle_raw_counts"], align["alignment_gap_oracle_raw_log_edges"]
-            )
-            axes[0].plot(lin_c, dens, label="|s* - oracle| (alignment)", color="#000000", lw=2.4, ls="-.")
+            # ----- PDF / density panel (left)
+            for s in milestones:
+                c_k = f"magnitude_raw_step{s}_counts"
+                e_k = f"magnitude_raw_step{s}_log_edges"
+                lin_c, dens = _hist_density_from_log_bins(data[c_k], data[e_k])
+                ax_pdf.plot(
+                    lin_c,
+                    dens,
+                    label=rf"$|\,w^{{\mathrm{{warm}}}}_{{\le {s}}} - w^{{*}}\,|$",
+                    color=cols[f"step{s}"],
+                    lw=2.2,
+                    alpha=0.9,
+                )
+            if seed_primary:
+                c_k = f"random_raw_seed{seed_primary}_counts"
+                e_k = f"random_raw_seed{seed_primary}_log_edges"
+                lin_c, dens = _hist_density_from_log_bins(data[c_k], data[e_k])
+                ax_pdf.plot(
+                    lin_c,
+                    dens,
+                    label=rf"random (seed {seed_primary})",
+                    color=cols["random"],
+                    lw=2.4,
+                    ls="--",
+                )
+            if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
+                lin_c, dens = _hist_density_from_log_bins(
+                    align["alignment_gap_oracle_raw_counts"], align["alignment_gap_oracle_raw_log_edges"]
+                )
+                ax_pdf.plot(
+                    lin_c,
+                    dens,
+                    label=r"$|\,s^{*} - w^{*}\,|$ (alignment)",
+                    color="#000000",
+                    lw=2.6,
+                    ls="-.",
+                )
 
-        axes[0].set_xscale("log")
-        axes[0].set_title("Raw gap densities vs oracle (warm mag @ intermediate steps)")
-        axes[0].set_xlabel("gap (linear, log axis)")
-        axes[0].set_ylabel("density")
-        axes[0].set_xlim(xlim_raw_u[0], xlim_raw_u[1])
-        axes[0].legend(loc="best", fontsize=8)
+            ax_pdf.set_xscale("log")
+            ax_pdf.set_title(r"PDF of raw gap $|s_i - w^{*}_i|$")
+            ax_pdf.set_xlabel(r"gap $|s_i - w^{*}_i|$")
+            ax_pdf.set_ylabel(r"density $\hat f(x)$")
+            ax_pdf.set_xlim(x_lo_disp, x_hi_disp)
+            ax_pdf.grid(True, which="both", ls=":", alpha=0.35)
+            ax_pdf.legend(loc="best")
 
-        for s in milestones:
-            ck, ek = f"magnitude_raw_step{s}_counts", f"magnitude_raw_step{s}_log_edges"
-            x, y = _ecdf_log_edges(data[ck], data[ek])
-            axes[1].step(x, y, where="mid", label=f"mag ≤ {s}", color=cols[f"step{s}"], lw=2)
-        if seed_primary:
-            ck, ek = f"random_raw_seed{seed_primary}_counts", f"random_raw_seed{seed_primary}_log_edges"
-            x, y = _ecdf_log_edges(data[ck], data[ek])
-            axes[1].step(x, y, where="mid", label=f"random s{seed_primary}", color=cols["random"], lw=2, ls="--")
-        if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
-            x, y = _ecdf_log_edges(align["alignment_gap_oracle_raw_counts"], align["alignment_gap_oracle_raw_log_edges"])
-            axes[1].step(x, y, where="mid", label="alignment |s* - oracle|", color="#000000", lw=2.2, ls="-.")
-        axes[1].set_xscale("log")
-        axes[1].set_xlim(xlim_raw_u[0], xlim_raw_u[1])
-        axes[1].set_ylim(0, 1)
-        axes[1].set_xlabel("gap (linear)")
-        axes[1].set_ylabel("fraction gap ≤ x")
-        axes[1].set_title("ECDF overlays (raw)")
-        axes[1].legend(loc="lower right", fontsize=8)
-        fig.tight_layout()
-        for ext in ("png", "pdf"):
-            fig.savefig(out_dir / f"combined_raw_logx.{ext}", dpi=175)
-        plt.close(fig)
+            # ----- ECDF panel (right)
+            for s in milestones:
+                ck, ek = f"magnitude_raw_step{s}_counts", f"magnitude_raw_step{s}_log_edges"
+                x, y = _ecdf_log_edges(data[ck], data[ek])
+                ax_ecdf.step(
+                    x,
+                    y,
+                    where="mid",
+                    label=rf"warm mag, step $\le {s}$",
+                    color=cols[f"step{s}"],
+                    lw=2.2,
+                )
+            if seed_primary:
+                ck, ek = f"random_raw_seed{seed_primary}_counts", f"random_raw_seed{seed_primary}_log_edges"
+                x, y = _ecdf_log_edges(data[ck], data[ek])
+                ax_ecdf.step(
+                    x,
+                    y,
+                    where="mid",
+                    label=rf"random (seed {seed_primary})",
+                    color=cols["random"],
+                    lw=2.2,
+                    ls="--",
+                )
+            if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
+                x, y = _ecdf_log_edges(
+                    align["alignment_gap_oracle_raw_counts"],
+                    align["alignment_gap_oracle_raw_log_edges"],
+                )
+                ax_ecdf.step(
+                    x,
+                    y,
+                    where="mid",
+                    label=r"alignment $|s^{*} - w^{*}|$",
+                    color="#000000",
+                    lw=2.4,
+                    ls="-.",
+                )
+            ax_ecdf.set_xscale("log")
+            ax_ecdf.set_xlim(x_lo_disp, x_hi_disp)
+            ax_ecdf.set_ylim(0, 1)
+            ax_ecdf.set_xlabel(r"gap $|s_i - w^{*}_i|$")
+            ax_ecdf.set_ylabel(r"$\Pr[\,|s_i - w^{*}_i| \le x\,]$")
+            ax_ecdf.set_title(r"ECDF of raw gap $|s_i - w^{*}_i|$")
+            ax_ecdf.grid(True, which="both", ls=":", alpha=0.35)
+            ax_ecdf.legend(loc="lower right")
+
+            fig.tight_layout()
+            for ext in ("png", "pdf"):
+                fig.savefig(out_dir / f"combined_raw_logx.{ext}", dpi=200, bbox_inches="tight")
+            plt.close(fig)
 
         # ---------------- normalized: log x via display floor (small gaps dominate)
         norm_series = [(data[f"magnitude_norm_step{s}_counts"], data[f"magnitude_norm_step{s}_edges"]) for s in milestones]
