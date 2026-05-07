@@ -332,3 +332,16 @@ Active fraction (subset): **0.02499** (≈2.5% active).
 
 
 sbatch --time=04:00:00 --mem=196G --export=ALL,HISTOGRAM_BINS=512 scripts/slurm_mask_score_gap_light_r1.slurm
+
+
+(base) [biggs.s@explorer-02 rl_casino]$ squeue -u $USER
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+           6604883     short h200_mas  biggs.s PD       0:00      1 (Resources)
+           6604884     short h200_mas  biggs.s PD       0:00      1 (Priority)
+     6604705_[0-3]     short mgap_par  biggs.s PD       0:00      1 (Dependency)
+           6604706     short mgap_par  biggs.s PD       0:00      1 (Dependency)
+           6604704     short mgap_par  biggs.s  R       6:34      1 d0147
+           6604881     short h200_mas  biggs.s  R       2:31      1 c0652
+           6604882     short h200_mas  biggs.s  R       2:31      1 c0680
+           6604880     short h200_mas  biggs.s  R       4:32      1 c0604
+           6601185     short mask_sco  biggs.s  R    2:57:01      1 d0147
