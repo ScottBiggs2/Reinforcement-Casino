@@ -235,14 +235,32 @@ Submitted batch job 6592410
 
 Goal: isolate optimizer kernel memory/speed savings (no forward/backward).
 
-- **Run**:
+- **Run** (paste on Explorer login — repo root; matches `.out` from job **6593156**):
 
 ```bash
-export ELEM_MASK="/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch   # or your checkout path
+mkdir -p logs
+
+export SCRATCH_USER_ROOT="/scratch/${USER}"
+
+# Element mask (same file as run 6593156)
+export ELEM_MASK="/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+
+# Defaults echoed in logs/h200_optstep_mb_<JOBID>.out — set explicitly if you want an exact rerun
+export STEPS=50
+export TRIM_FRAC=0.10
+export LR=5e-7
+export BLOCK_SIZE=32
+
+# Element-only (no block column); equivalent to BLOCK_MASK= RUN_BLOCK=0 in the .out
+unset BLOCK_MASK
+export RUN_BLOCK=0
+
 sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
 ```
 
-- **What to open**: `/scratch/$USER/rl_casino_optstep_microbench/<JOBID>/elem/optimizer_step_microbench.md`
+- **What to open**: `/scratch/biggs.s/rl_casino_optstep_microbench/<JOBID>/elem/optimizer_step_microbench.md`  
+  (replace `biggs.s` with `${USER}` if you did not override `OUT_BASE`; Slurm sets `OUT_BASE=/scratch/$USER/rl_casino_optstep_microbench/$JOBID` by default.)
 - **Defaults (designed for fairness + speed)**:
   - steps: 50, trim: 10% (drop first/last 5)
   - dtype: bf16, CUDA sync: on

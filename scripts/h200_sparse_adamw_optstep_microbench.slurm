@@ -1,8 +1,12 @@
 #!/bin/bash
 # Dedicated job: optimizer.step() microbench (no fwd/bwd, no checkpoints, no deltas).
 #
-# Example (element-only):
+# Example (element-only — reproduces scratch.md / job 6593156-style .out):
+#   cd /scratch/$USER/rl_casino/<repo> && mkdir -p logs
+#   export SCRATCH_USER_ROOT="/scratch/$USER"
 #   export ELEM_MASK="/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+#   export STEPS=50 TRIM_FRAC=0.10 LR=5e-7 BLOCK_SIZE=32
+#   unset BLOCK_MASK; export RUN_BLOCK=0
 #   sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
 #
 # Example (element + block):
