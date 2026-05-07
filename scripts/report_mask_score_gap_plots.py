@@ -459,32 +459,146 @@ def main() -> None:
                 if args.raw_xmax is not None
                 else _tight_union_log_xlim(margin_series_lo, cdf_mass=cm)
             )
-            fig, ax = plt.subplots(figsize=(10, 5.5))
-            for s in m_steps:
-                ck, ek = f"magnitude_margin_raw_step{s}_counts", f"magnitude_margin_raw_step{s}_log_edges"
-                if ck not in data.files or float(data[ck].sum()) <= 0:
-                    continue
-                x, y = _ecdf_log_edges(data[ck], data[ek])
-                ax.step(x, y, where="mid", label=f"|mag@<={s} - tau|", color=cols[f"step{s}"], lw=2)
-            if seed_primary:
-                cmr, emr = f"random_margin_raw_seed{seed_primary}_counts", f"random_margin_raw_seed{seed_primary}_log_edges"
-                if cmr in data.files and float(data[cmr].sum()) > 0:
-                    x, y = _ecdf_log_edges(data[cmr], data[emr])
-                    ax.step(x, y, where="mid", label=f"random margin (seed {seed_primary})", color=cols["random"], lw=2, ls="--")
-            if "oracle_margin_raw_counts" in data.files and float(data["oracle_margin_raw_counts"].sum()) > 0:
-                x, y = _ecdf_log_edges(data["oracle_margin_raw_counts"], data["oracle_margin_raw_log_edges"])
-                ax.step(x, y, where="mid", label="|oracle - tau*|", color="#2ca02c", lw=2, ls=":")
-            ax.set_xscale("log")
-            ax.set_xlim(xlim_m[0], xlim_m[1])
-            ax.set_ylim(0, 1)
-            ax.set_xlabel("margin (linear)")
-            ax.set_ylabel("fraction margin <= x")
-            ax.set_title("ECDF certifiability margins m_i(s) = |s_i - tau_rho(s)| (global top-k)")
-            ax.legend(loc="lower right", fontsize=8)
-            fig.tight_layout()
-            for ext in ("png", "pdf"):
-                fig.savefig(out_dir / f"combined_margin_ecdf_logx.{ext}", dpi=175)
-            plt.close(fig)
+            # Trim heavy small-x tail: clamp displayed left edge to 1e-12 for legibility.
+            xm_lo = max(float(xlim_m[0]), 1e-12)
+            xm_hi = float(xlim_m[1])
+
+            margin_rc = {
+                "font.size": 16,
+                "axes.titlesize": 18,
+                "axes.labelsize": 17,
+                "xtick.labelsize": 14,
+                "ytick.labelsize": 14,
+                "legend.fontsize": 12,
+                "mathtext.fontset": "cm",
+            }
+
+            def _draw_margin_curves(ax, kind: str) -> None:
+                """kind: 'ecdf' or 'pdf'."""
+                for s in m_steps:
+                    ck = f"magnitude_margin_raw_step{s}_counts"
+                    ek = f"magnitude_margin_raw_step{s}_log_edges"
+                    if ck not in data.files or float(data[ck].sum()) <= 0:
+                        continue
+                    if kind == "ecdf":
+                        x, y = _ecdf_log_edges(data[ck], data[ek])
+                        ax.step(
+                            x, y, where="mid",
+                            label=rf"warm mag, step $\leq {s}$",
+                            color=cols[f"step{s}"], lw=2.4,
+                        )
+                    else:
+                        lin_c, dens = _hist_density_from_log_bins(data[ck], data[ek])
+                        ax.plot(
+                            lin_c, dens,
+                            label=rf"warm mag, step $\leq {s}$",
+                            color=cols[f"step{s}"], lw=2.4, alpha=0.95,
+                        )
+                if seed_primary:
+                    cmr = f"random_margin_raw_seed{seed_primary}_counts"
+                    emr = f"random_margin_raw_seed{seed_primary}_log_edges"
+                    if cmr in data.files and float(data[cmr].sum()) > 0:
+                        if kind == "ecdf":
+                            x, y = _ecdf_log_edges(data[cmr], data[emr])
+                            ax.step(
+                                x, y, where="mid",
+                                label=rf"random (seed {seed_primary})",
+                                color=cols["random"], lw=2.4, ls="--",
+                            )
+                        else:
+                            lin_c, dens = _hist_density_from_log_bins(data[cmr], data[emr])
+                            ax.plot(
+                                lin_c, dens,
+                                label=rf"random (seed {seed_primary})",
+                                color=cols["random"], lw=2.4, ls="--",
+                            )
+                if (
+                    "oracle_margin_raw_counts" in data.files
+                    and float(data["oracle_margin_raw_counts"].sum()) > 0
+                ):
+                    if kind == "ecdf":
+                        x, y = _ecdf_log_edges(
+                            data["oracle_margin_raw_counts"],
+                            data["oracle_margin_raw_log_edges"],
+                        )
+                        ax.step(
+                            x, y, where="mid",
+                            label=r"oracle $|w^{*}_i - \tau^{*}|$",
+                            color="#2ca02c", lw=2.6, ls=":",
+                        )
+                    else:
+                        lin_c, dens = _hist_density_from_log_bins(
+                            data["oracle_margin_raw_counts"],
+                            data["oracle_margin_raw_log_edges"],
+                        )
+                        ax.plot(
+                            lin_c, dens,
+                            label=r"oracle $|w^{*}_i - \tau^{*}|$",
+                            color="#2ca02c", lw=2.6, ls=":",
+                        )
+
+            xlabel_m = r"margin $m_i(s) = |\,s_i - \tau_\rho(s)\,|$"
+            title_root = r"Certifiability margins $m_i(s) = |\,s_i - \tau_\rho(s)\,|$ (global top-$k$)"
+
+            with plt.rc_context(margin_rc):
+                # Side-by-side: PDF (left) | ECDF (right)
+                fig, axes = plt.subplots(1, 2, figsize=(18, 7.5))
+                ax_pdf, ax_ecdf = axes[0], axes[1]
+
+                _draw_margin_curves(ax_pdf, "pdf")
+                ax_pdf.set_xscale("log")
+                ax_pdf.set_xlim(xm_lo, xm_hi)
+                ax_pdf.set_xlabel(xlabel_m)
+                ax_pdf.set_ylabel(r"density $\hat f(m)$")
+                ax_pdf.set_title("PDF: " + title_root)
+                ax_pdf.grid(True, which="both", ls=":", alpha=0.35)
+                ax_pdf.legend(loc="best")
+
+                _draw_margin_curves(ax_ecdf, "ecdf")
+                ax_ecdf.set_xscale("log")
+                ax_ecdf.set_xlim(xm_lo, xm_hi)
+                ax_ecdf.set_ylim(0, 1)
+                ax_ecdf.set_xlabel(xlabel_m)
+                ax_ecdf.set_ylabel(r"$\mathrm{Pr}[\,m_i(s) \leq x\,]$")
+                ax_ecdf.set_title("ECDF: " + title_root)
+                ax_ecdf.grid(True, which="both", ls=":", alpha=0.35)
+                ax_ecdf.legend(loc="lower right")
+
+                fig.tight_layout()
+                for ext in ("png", "pdf"):
+                    fig.savefig(out_dir / f"combined_margin_ecdf_logx.{ext}", dpi=200, bbox_inches="tight")
+                plt.close(fig)
+
+                # Standalone polished ECDF (also kept for flexibility in the paper)
+                fig_e, ax_e = plt.subplots(figsize=(11, 7))
+                _draw_margin_curves(ax_e, "ecdf")
+                ax_e.set_xscale("log")
+                ax_e.set_xlim(xm_lo, xm_hi)
+                ax_e.set_ylim(0, 1)
+                ax_e.set_xlabel(xlabel_m)
+                ax_e.set_ylabel(r"$\mathrm{Pr}[\,m_i(s) \leq x\,]$")
+                ax_e.set_title("ECDF: " + title_root)
+                ax_e.grid(True, which="both", ls=":", alpha=0.35)
+                ax_e.legend(loc="lower right")
+                fig_e.tight_layout()
+                for ext in ("png", "pdf"):
+                    fig_e.savefig(out_dir / f"margin_ecdf_logx.{ext}", dpi=200, bbox_inches="tight")
+                plt.close(fig_e)
+
+                # Standalone polished PDF / density companion
+                fig_d, ax_d = plt.subplots(figsize=(11, 7))
+                _draw_margin_curves(ax_d, "pdf")
+                ax_d.set_xscale("log")
+                ax_d.set_xlim(xm_lo, xm_hi)
+                ax_d.set_xlabel(xlabel_m)
+                ax_d.set_ylabel(r"density $\hat f(m)$")
+                ax_d.set_title("PDF: " + title_root)
+                ax_d.grid(True, which="both", ls=":", alpha=0.35)
+                ax_d.legend(loc="best")
+                fig_d.tight_layout()
+                for ext in ("png", "pdf"):
+                    fig_d.savefig(out_dir / f"margin_pdf_logx.{ext}", dpi=200, bbox_inches="tight")
+                plt.close(fig_d)
 
     if summary_path.is_file():
         rows = load_summary_csv(summary_path)
