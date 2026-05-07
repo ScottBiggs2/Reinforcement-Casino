@@ -96,7 +96,24 @@ def _make_params_from_mask(
     dtype: torch.dtype,
     max_total_numel: int,
     max_tensors: int,
+    selection_order: str = "model_order",
+    cap_behavior: str = "break",
 ) -> Tuple[List[Tuple[str, torch.nn.Parameter]], Dict[str, torch.Tensor]]:
+    """
+    Subset selection policy for the synthetic optimizer.step() microbench.
+
+    selection_order:
+      - "model_order"   : keep ``mm.masks`` insertion order (named_parameters order at save time).
+      - "largest_first" : sort by tensor numel descending.
+
+    cap_behavior:
+      - "break" : iterate in selected order. **Always include the first eligible tensor**, then break
+                  the moment another tensor would push total numel past ``max_total_numel``.
+                  This matches the historical commit b9d6ba2 behavior used to produce the 97.5% row.
+      - "skip"  : skip any single tensor whose numel > ``max_total_numel``; otherwise pack greedily
+                  until adding another would exceed the cap. This is the previous (post-b9d6ba2)
+                  default which yielded the 16.78M-element subset under cap=25M.
+    """
     named: List[Tuple[str, torch.nn.Parameter]] = []
     bool_masks: Dict[str, torch.Tensor] = {}
     mm = SparseMaskManager(mask_path, device=device)
@@ -105,18 +122,27 @@ def _make_params_from_mask(
         if m.dim() != 2:
             continue
         items.append((k, m, int(m.numel())))
-    items.sort(key=lambda x: x[2], reverse=True)
+    if selection_order == "largest_first":
+        items.sort(key=lambda x: x[2], reverse=True)
+    elif selection_order != "model_order":
+        raise ValueError(f"Unknown selection_order: {selection_order!r}")
 
     total = 0
+    cap = int(max_total_numel)
     for k, m, n in items:
         if len(named) >= int(max_tensors):
             break
-        cap = int(max_total_numel)
-        # If a single tensor exceeds the cap, skip it (avoid accidental 0.5B+ tensor allocations).
-        if n > cap:
-            continue
-        if total + n > cap:
-            break
+        if cap_behavior == "skip":
+            if n > cap:
+                continue
+            if total + n > cap:
+                break
+        elif cap_behavior == "break":
+            # Always allow the first eligible tensor through; only stop on subsequent overage.
+            if len(named) > 0 and (total + n > cap):
+                break
+        else:
+            raise ValueError(f"Unknown cap_behavior: {cap_behavior!r}")
         total += n
         p = torch.nn.Parameter(torch.randn(tuple(m.shape), device=device, dtype=dtype))
         p.grad = torch.randn_like(p)
@@ -146,6 +172,21 @@ def main() -> int:
     ap.add_argument("--run_sparse", type=int, default=1)
     ap.add_argument("--max_total_numel", type=int, default=25_000_000, help="Cap total elements across tensors.")
     ap.add_argument("--max_tensors", type=int, default=64, help="Cap number of tensors selected from mask.")
+    ap.add_argument(
+        "--selection_order",
+        choices=["model_order", "largest_first"],
+        default="model_order",
+        help="Order in which 2-D mask tensors are considered for inclusion in the synthetic subset.",
+    )
+    ap.add_argument(
+        "--cap_behavior",
+        choices=["break", "skip"],
+        default="break",
+        help=(
+            "How to honor --max_total_numel. 'break' always includes the first tensor and stops on "
+            "the next overage (matches historical 97.5%% row). 'skip' skips per-tensor overflows."
+        ),
+    )
     args = ap.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -167,6 +208,8 @@ def main() -> int:
                 dtype=dtype,
                 max_total_numel=int(args.max_total_numel),
                 max_tensors=int(args.max_tensors),
+                selection_order=str(args.selection_order),
+                cap_behavior=str(args.cap_behavior),
             )
             params = [p for _, p in named_params]
             opt = build_opt_fn(named_params, params)
@@ -293,7 +336,10 @@ def main() -> int:
     lines.append(f"- **lr:** `{args.lr}`  **block_size:** `{args.block_size}`")
     lines.append(f"- **steps_total:** `{args.steps}`  **trim_frac:** `{args.trim_frac}` (excludes first/last 10%)")
     lines.append(f"- **sync_cuda:** `{bool(args.sync_cuda)}`")
-    lines.append(f"- **max_total_numel:** `{int(args.max_total_numel)}`  **max_tensors:** `{int(args.max_tensors)}`")
+    lines.append(
+        f"- **max_total_numel:** `{int(args.max_total_numel)}`  **max_tensors:** `{int(args.max_tensors)}`  "
+        f"**selection_order:** `{args.selection_order}`  **cap_behavior:** `{args.cap_behavior}`"
+    )
     lines.append("")
 
     lines.append("## Timing summary (trimmed mid-window)")

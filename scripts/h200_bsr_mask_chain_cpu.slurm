@@ -13,6 +13,14 @@
 # Optional:
 #   CHAIN_MASK_TYPES     default element,block  (microbench needs element; include block for block/ column)
 #   MODEL, CHAIN_GPU_PARTITION, H200_BSR_BLOCK_SIZE, STEPS, TRIM_FRAC, LR, BLOCK_SIZE (microbench)
+#   MAX_TOTAL_NUMEL, MAX_TENSORS, SELECTION_ORDER, CAP_BEHAVIOR
+#                        Forwarded to the dependent GPU microbench job. Set these to lock the tensor
+#                        subset policy across sparsities (matched-policy reruns set
+#                        MAX_TOTAL_NUMEL=525000000, SELECTION_ORDER=model_order, CAP_BEHAVIOR=break).
+#   CHAIN_SKIP_CPU_IF_EXISTS=1
+#                        If set, skip the CPU mask-gen call when the expected element (and block, when
+#                        requested) mask file already exists; the GPU dependency still chains on this
+#                        CPU job, but it returns immediately so the GPU job can start sooner.
 #
 #SBATCH --partition=short
 #SBATCH --nodes=1
@@ -93,25 +101,44 @@ export WANDB_SILENT="true"
 echo "CHAIN_CPU_JOB=${SLURM_JOB_ID}  CHAIN_SPARSITY=${CHAIN_SPARSITY}  H200_BSR_MASK_CACHE=${H200_BSR_MASK_CACHE}"
 echo "CHAIN_MASK_TYPES=${CHAIN_MASK_TYPES}"
 
-"$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
-  --prefetch_masks_only \
-  --mask_cache_dir "${H200_BSR_MASK_CACHE}" \
-  --output_dir "${PREFETCH_OUT}" \
-  --model_name "${MODEL}" \
-  "${CHK_ARGS[@]}" \
-  --benchmark_sparsities "${CHAIN_SPARSITY}" \
-  --phase_mask_types "${CHAIN_MASK_TYPES}" \
-  "${BLOCK_ARGS[@]}" \
-  "${MLP_ARGS[@]}" \
-  "${FLOOR_ARGS[@]}"
-
 PATH_ARGS=( --mask-cache-dir "${H200_BSR_MASK_CACHE}" --sparsity "${CHAIN_SPARSITY}" )
 [[ -n "${H200_BSR_BLOCK_SIZE:-}" ]] && PATH_ARGS+=( --block-size-bsr "${H200_BSR_BLOCK_SIZE}" )
 [[ "${H200_BSR_MLP_ONLY:-0}" != "0" ]] && PATH_ARGS+=( --mlp-only )
 [[ -n "${H200_BSR_MIN_LAYER_KEEP_RATIO:-}" ]] && PATH_ARGS+=( --min-layer-keep-ratio "${H200_BSR_MIN_LAYER_KEEP_RATIO}" )
 
-ELEM_PT="$("$TRAIN_PY" "${REPO_ROOT}/scripts/print_bsr_mask_path.py" "${PATH_ARGS[@]}" --mask-type element)"
-export ELEM_MASK="${ELEM_PT}"
+# Compute expected mask paths up front so we can short-circuit CPU work if the user asked for it.
+ELEM_EXPECTED="$("$TRAIN_PY" "${REPO_ROOT}/scripts/print_bsr_mask_path.py" "${PATH_ARGS[@]}" --mask-type element)"
+BLOCK_EXPECTED=""
+if [[ "${CHAIN_MASK_TYPES}" == *block* ]]; then
+  BLOCK_EXPECTED="$("$TRAIN_PY" "${REPO_ROOT}/scripts/print_bsr_mask_path.py" "${PATH_ARGS[@]}" --mask-type block)"
+fi
+
+CPU_NEEDED=1
+if [ "${CHAIN_SKIP_CPU_IF_EXISTS:-0}" != "0" ]; then
+  if [ -f "${ELEM_EXPECTED}" ] && { [ -z "${BLOCK_EXPECTED}" ] || [ -f "${BLOCK_EXPECTED}" ]; }; then
+    CPU_NEEDED=0
+    echo "CHAIN_SKIP_CPU_IF_EXISTS=1 and expected masks already present:"
+    echo "  ELEM_EXPECTED=${ELEM_EXPECTED}"
+    [ -n "${BLOCK_EXPECTED}" ] && echo "  BLOCK_EXPECTED=${BLOCK_EXPECTED}"
+    echo "Skipping CPU mask generation."
+  fi
+fi
+
+if [ "${CPU_NEEDED}" = "1" ]; then
+  "$TRAIN_PY" src/full_training/h200_sparse_dpo_bsr_benchmark.py \
+    --prefetch_masks_only \
+    --mask_cache_dir "${H200_BSR_MASK_CACHE}" \
+    --output_dir "${PREFETCH_OUT}" \
+    --model_name "${MODEL}" \
+    "${CHK_ARGS[@]}" \
+    --benchmark_sparsities "${CHAIN_SPARSITY}" \
+    --phase_mask_types "${CHAIN_MASK_TYPES}" \
+    "${BLOCK_ARGS[@]}" \
+    "${MLP_ARGS[@]}" \
+    "${FLOOR_ARGS[@]}"
+fi
+
+export ELEM_MASK="${ELEM_EXPECTED}"
 if [ ! -f "${ELEM_MASK}" ]; then
   echo "ERROR: missing element mask ${ELEM_MASK}" >&2
   exit 1
@@ -120,8 +147,7 @@ fi
 RUN_BLOCK=0
 export BLOCK_MASK=""
 if [[ "${CHAIN_MASK_TYPES}" == *block* ]]; then
-  BLOCK_PT="$("$TRAIN_PY" "${REPO_ROOT}/scripts/print_bsr_mask_path.py" "${PATH_ARGS[@]}" --mask-type block)"
-  export BLOCK_MASK="${BLOCK_PT}"
+  export BLOCK_MASK="${BLOCK_EXPECTED}"
   if [ ! -f "${BLOCK_MASK}" ]; then
     echo "ERROR: missing block mask ${BLOCK_MASK}" >&2
     exit 1
@@ -134,6 +160,13 @@ export STEPS="${STEPS:-50}"
 export TRIM_FRAC="${TRIM_FRAC:-0.10}"
 export LR="${LR:-5e-7}"
 export BLOCK_SIZE="${BLOCK_SIZE:-32}"
+
+# Tensor subset selection (forwarded to GPU microbench). Defaults match the historical 97.5% row.
+export MAX_TOTAL_NUMEL="${MAX_TOTAL_NUMEL:-525000000}"
+export MAX_TENSORS="${MAX_TENSORS:-64}"
+export SELECTION_ORDER="${SELECTION_ORDER:-model_order}"
+export CAP_BEHAVIOR="${CAP_BEHAVIOR:-break}"
+echo "GPU microbench policy: MAX_TOTAL_NUMEL=${MAX_TOTAL_NUMEL} MAX_TENSORS=${MAX_TENSORS} SELECTION_ORDER=${SELECTION_ORDER} CAP_BEHAVIOR=${CAP_BEHAVIOR}"
 
 SP_TAG="${CHAIN_SPARSITY//./p}"
 CHAIN_GPU_PARTITION="${CHAIN_GPU_PARTITION:-multigpu}"

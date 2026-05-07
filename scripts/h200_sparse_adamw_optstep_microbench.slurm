@@ -6,6 +6,8 @@
 #   export SCRATCH_USER_ROOT="/scratch/$USER"
 #   export ELEM_MASK="/scratch/$USER/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
 #   export STEPS=50 TRIM_FRAC=0.10 LR=5e-7 BLOCK_SIZE=32
+#   # Tensor subset selection (matches the historical 97.5% row at ~525M params / ~1050MB BF16):
+#   export MAX_TOTAL_NUMEL=525000000 MAX_TENSORS=64 SELECTION_ORDER=model_order CAP_BEHAVIOR=break
 #   unset BLOCK_MASK; export RUN_BLOCK=0
 #   sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
 #
@@ -17,6 +19,11 @@
 #
 # Artifacts land in:
 #   /scratch/$USER/rl_casino_optstep_microbench/$JOBID/{elem,block}/optimizer_step_microbench.(csv|md)
+#
+# IMPORTANT: matched-policy reruns must export MAX_TOTAL_NUMEL/MAX_TENSORS/SELECTION_ORDER/CAP_BEHAVIOR
+# explicitly. Older runs that did not set these used the prior microbench defaults and produced a
+# different effective parameter subset. The .out logs each run's effective settings so future tables
+# cannot quietly mix policies.
 
 # Explorer: multigpu usually shorter wait than gpu for single H200 (same as BSR bench scripts).
 # Override: sbatch --partition=gpu scripts/h200_sparse_adamw_optstep_microbench.slurm
@@ -65,12 +72,20 @@ TRIM_FRAC="${TRIM_FRAC:-0.10}"
 LR="${LR:-5e-7}"
 BLOCK_SIZE="${BLOCK_SIZE:-32}"
 
+# Tensor subset selection (defaults match the historical 97.5% row policy: model_order + break,
+# MAX_TOTAL_NUMEL=525M ~= one 4096x128256 lm_head/embedding tensor in BF16 ≈ 1050MB).
+MAX_TOTAL_NUMEL="${MAX_TOTAL_NUMEL:-525000000}"
+MAX_TENSORS="${MAX_TENSORS:-64}"
+SELECTION_ORDER="${SELECTION_ORDER:-model_order}"
+CAP_BEHAVIOR="${CAP_BEHAVIOR:-break}"
+
 ELEM_MASK="${ELEM_MASK:?set ELEM_MASK to an element mask .pt}"
 BLOCK_MASK="${BLOCK_MASK:-}"
 RUN_BLOCK="${RUN_BLOCK:-0}"
 
 echo "OUT_BASE=$OUT_BASE"
 echo "STEPS=$STEPS TRIM_FRAC=$TRIM_FRAC LR=$LR BLOCK_SIZE=$BLOCK_SIZE"
+echo "MAX_TOTAL_NUMEL=$MAX_TOTAL_NUMEL MAX_TENSORS=$MAX_TENSORS SELECTION_ORDER=$SELECTION_ORDER CAP_BEHAVIOR=$CAP_BEHAVIOR"
 echo "ELEM_MASK=$ELEM_MASK"
 echo "BLOCK_MASK=$BLOCK_MASK RUN_BLOCK=$RUN_BLOCK"
 
@@ -83,7 +98,11 @@ echo "BLOCK_MASK=$BLOCK_MASK RUN_BLOCK=$RUN_BLOCK"
   --lr "$LR" \
   --block_size "$BLOCK_SIZE" \
   --device cuda --dtype bf16 --sync_cuda 1 \
-  --run_dense_torch 1 --run_dense_8bit 1 --run_sparse 1
+  --run_dense_torch 1 --run_dense_8bit 1 --run_sparse 1 \
+  --max_total_numel "$MAX_TOTAL_NUMEL" \
+  --max_tensors "$MAX_TENSORS" \
+  --selection_order "$SELECTION_ORDER" \
+  --cap_behavior "$CAP_BEHAVIOR"
 
 if [ "$RUN_BLOCK" = "1" ] && [ -n "$BLOCK_MASK" ]; then
   "$TRAIN_PY" scripts/microbench_optimizer_step.py \
@@ -95,7 +114,11 @@ if [ "$RUN_BLOCK" = "1" ] && [ -n "$BLOCK_MASK" ]; then
     --lr "$LR" \
     --block_size "$BLOCK_SIZE" \
     --device cuda --dtype bf16 --sync_cuda 1 \
-    --run_dense_torch 1 --run_dense_8bit 1 --run_sparse 1
+    --run_dense_torch 1 --run_dense_8bit 1 --run_sparse 1 \
+    --max_total_numel "$MAX_TOTAL_NUMEL" \
+    --max_tensors "$MAX_TENSORS" \
+    --selection_order "$SELECTION_ORDER" \
+    --cap_behavior "$CAP_BEHAVIOR"
 fi
 
 echo "DONE. Results in: $OUT_BASE"

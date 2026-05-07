@@ -283,7 +283,7 @@ Narrow the glob if you have many experiments under the same dir (e.g. `s*_elemen
 
 ### 3) One-off microbench with a **fixed** external mask (not a sparsity sweep)
 
-Example: GraSP **single** mask at ~97.5% — reproduces `.out` from job **6593156**:
+Example: random-mask single point at ~97.5% — reproduces `.out` from job **6593156**:
 
 ```bash
 cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch
@@ -298,10 +298,68 @@ sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
 
 - **What to open**: `/scratch/$USER/rl_casino_optstep_microbench/<JOBID>/elem/optimizer_step_microbench.md`  
   (`OUT_BASE` defaults to `/scratch/$USER/rl_casino_optstep_microbench/$JOBID`.)
-- **Defaults (designed for fairness + speed)**:
+- **Defaults (matched-policy: same policy as the historical 97.5% row)**:
   - steps: 50, trim: 10% (drop first/last 5)
   - dtype: bf16, CUDA sync: on
-  - caps: `max_total_numel=25_000_000`, `max_tensors=64`
+  - caps: `max_total_numel=525_000_000`, `max_tensors=64`
+  - selection: `selection_order=model_order`, `cap_behavior=break`
+
+### 4) Matched-policy sparsity sweep — **manual independent launches, no CPU stage**
+
+All target masks are already on disk. Submit one **multigpu** microbench per sparsity directly;
+no `short` partition, no chain CPU job, no global prefetch dependency. Every job carries the same
+`MAX_TOTAL_NUMEL=525000000` / `model_order` / `break` policy so all rows are comparable to the
+historical 97.5% row.
+
+```bash
+cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch
+mkdir -p logs
+export SCRATCH_USER_ROOT="/scratch/${USER}"
+
+# Microbench timing (same as job 6593156)
+export STEPS=50 TRIM_FRAC=0.10 LR=5e-7 BLOCK_SIZE=32
+
+# Tensor subset policy locked to the historical 97.5% row
+export MAX_TOTAL_NUMEL=525000000
+export MAX_TENSORS=64
+export SELECTION_ORDER=model_order
+export CAP_BEHAVIOR=break
+
+# Element-only microbench (no block column for this rerun)
+unset BLOCK_MASK
+export RUN_BLOCK=0
+
+MASK_BANK="/scratch/${USER}/rl_casino_h200_bsr/random_mask_blob/masks"
+
+# 0.25%
+ELEM_MASK="${MASK_BANK}/s0p25_element_b16_mlp0_floor0.0025.pt"   sbatch --export=ALL,ELEM_MASK="${MASK_BANK}/s0p25_element_b16_mlp0_floor0.0025.pt" scripts/h200_sparse_adamw_optstep_microbench.slurm
+# 50%
+sbatch --export=ALL,ELEM_MASK="${MASK_BANK}/s50p0_element_b16_mlp0_floor0.0025.pt"  scripts/h200_sparse_adamw_optstep_microbench.slurm
+# 75%
+sbatch --export=ALL,ELEM_MASK="${MASK_BANK}/s75p0_element_b16_mlp0_floor0.0025.pt"  scripts/h200_sparse_adamw_optstep_microbench.slurm
+# 90%
+sbatch --export=ALL,ELEM_MASK="${MASK_BANK}/s90p0_element_b16_mlp0_floor0.0025.pt"  scripts/h200_sparse_adamw_optstep_microbench.slurm
+# 97.5%  (legacy mask path — not under random_mask_blob)
+sbatch --export=ALL,ELEM_MASK="/scratch/${USER}/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt" scripts/h200_sparse_adamw_optstep_microbench.slurm
+# 99.75%
+sbatch --export=ALL,ELEM_MASK="${MASK_BANK}/s99p75_element_b16_mlp0_floor0.0025.pt" scripts/h200_sparse_adamw_optstep_microbench.slurm
+```
+
+Each `.out` echoes `MAX_TOTAL_NUMEL=525000000 MAX_TENSORS=64 SELECTION_ORDER=model_order CAP_BEHAVIOR=break`,
+and the resulting `optimizer_step_microbench.md` should report `param_MB ≈ 1050` (one ~525M `embed_tokens`
+or `lm_head` tensor in BF16). Reject any row that does not match before aggregating.
+
+After every job finishes:
+
+```bash
+ROOT="/scratch/${USER}/rl_casino_optstep_microbench"
+OUT="${ROOT}/aggregate_matched_$(date +%Y%m%d_%H%M%S)"
+python scripts/aggregate_optstep_microbench_sweep.py \
+  --root "${ROOT}" \
+  --out-dir "${OUT}" \
+  --jobid <0p25_JOBID> --jobid <50_JOBID> --jobid <75_JOBID> \
+  --jobid <90_JOBID>  --jobid <97p5_JOBID> --jobid <99p75_JOBID>
+```
 
 ### Latest result snapshot (elem mask, job 6593156)
 

@@ -13,7 +13,13 @@
 #   export CHAIN_SPARSITIES="${CHAIN_SPARSITIES:-50,75,90,99.75}"
 #   ./scripts/submit_independent_mask_gpu_chains.sh
 #
-# Optional: CHAIN_MASK_TYPES=element,block  STEPS TRIM_FRAC LR BLOCK_SIZE for GPU stage
+# Optional:
+#   CHAIN_MASK_TYPES (default element,block)
+#   STEPS TRIM_FRAC LR BLOCK_SIZE         (microbench timing settings)
+#   MAX_TOTAL_NUMEL MAX_TENSORS SELECTION_ORDER CAP_BEHAVIOR
+#       Tensor subset policy. Defaults reproduce the 97.5% paper row:
+#         MAX_TOTAL_NUMEL=525000000  MAX_TENSORS=64  SELECTION_ORDER=model_order  CAP_BEHAVIOR=break
+#   CHAIN_SKIP_CPU_IF_EXISTS=1            Reuse existing masks already in MASK_CHAIN_ROOT/masks/.
 
 set -euo pipefail
 
@@ -30,16 +36,25 @@ mkdir -p "${H200_BSR_MASK_CACHE}/masks"
 CHAIN_SPARSITIES="${CHAIN_SPARSITIES:-50,75,90,99.75}"
 CHAIN_MASK_TYPES="${CHAIN_MASK_TYPES:-element,block}"
 
+# Tensor subset selection — defaults match the historical 97.5% row policy.
+MAX_TOTAL_NUMEL="${MAX_TOTAL_NUMEL:-525000000}"
+MAX_TENSORS="${MAX_TENSORS:-64}"
+SELECTION_ORDER="${SELECTION_ORDER:-model_order}"
+CAP_BEHAVIOR="${CAP_BEHAVIOR:-break}"
+CHAIN_SKIP_CPU_IF_EXISTS="${CHAIN_SKIP_CPU_IF_EXISTS:-0}"
+
 IFS=',' read -ra _SP_LIST <<< "${CHAIN_SPARSITIES}"
 echo "MASK_CHAIN_ROOT=${MASK_CHAIN_ROOT}"
 echo "CHAIN_SPARSITIES=${CHAIN_SPARSITIES}"
 echo "CHAIN_MASK_TYPES=${CHAIN_MASK_TYPES}"
+echo "MAX_TOTAL_NUMEL=${MAX_TOTAL_NUMEL} MAX_TENSORS=${MAX_TENSORS} SELECTION_ORDER=${SELECTION_ORDER} CAP_BEHAVIOR=${CAP_BEHAVIOR}"
+echo "CHAIN_SKIP_CPU_IF_EXISTS=${CHAIN_SKIP_CPU_IF_EXISTS}"
 
 for raw in "${_SP_LIST[@]}"; do
   sp="${raw//[[:space:]]/}"
   [[ -z "${sp}" ]] && continue
   jid=$(sbatch --parsable \
-    --export=ALL,CHAIN_SPARSITY="${sp}",H200_BSR_MASK_CACHE="${H200_BSR_MASK_CACHE}",CHAIN_MASK_TYPES="${CHAIN_MASK_TYPES}" \
+    --export=ALL,CHAIN_SPARSITY="${sp}",H200_BSR_MASK_CACHE="${H200_BSR_MASK_CACHE}",CHAIN_MASK_TYPES="${CHAIN_MASK_TYPES}",MAX_TOTAL_NUMEL="${MAX_TOTAL_NUMEL}",MAX_TENSORS="${MAX_TENSORS}",SELECTION_ORDER="${SELECTION_ORDER}",CAP_BEHAVIOR="${CAP_BEHAVIOR}",CHAIN_SKIP_CPU_IF_EXISTS="${CHAIN_SKIP_CPU_IF_EXISTS}" \
     "${REPO_ROOT}/scripts/h200_bsr_mask_chain_cpu.slurm")
   echo "Submitted chain sp=${sp}  CPU_JOB=${jid}"
 done
