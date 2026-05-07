@@ -3,6 +3,10 @@
 # microbench each, linked only by per-chain `afterok`. Does **not** submit one giant prefetch that
 # blocks every GPU.
 #
+# ``MASK_CHAIN_ROOT`` (maps to ``H200_BSR_MASK_CACHE``) is **only** a directory you choose on scratch so
+# the driver can write ``masks/*.pt``. Default below is fine; rename to anything under ``/scratch/$USER``.
+# Independent chains do not require a shared path — one root per sweep is just convenient.
+#
 # Usage (login node, repo root):
 #   export SCRATCH_USER_ROOT="/scratch/${USER}"
 #   export MASK_CHAIN_ROOT="/scratch/${USER}/rl_casino_h200_bsr/mask_chains_${USER}_$(date +%Y%m%d_%H%M%S)"

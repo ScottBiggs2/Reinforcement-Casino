@@ -5,7 +5,10 @@
 #
 # Required env (via sbatch --export=ALL,...):
 #   CHAIN_SPARSITY       e.g. 50  or 99.75
-#   H200_BSR_MASK_CACHE  parent dir; masks go to <dir>/masks/*.pt (shared across chains is OK)
+#   H200_BSR_MASK_CACHE  **You pick** any writable scratch folder — there is no system registry.
+#                        Masks are written to <dir>/masks/<canonical_tag>.pt. Using one folder for every
+#                        chain in a sweep is optional (names don’t collide across sparsities); giving each
+#                        chain its own dir is also fine — Slurm does not care.
 #
 # Optional:
 #   CHAIN_MASK_TYPES     default element,block  (microbench needs element; include block for block/ column)
