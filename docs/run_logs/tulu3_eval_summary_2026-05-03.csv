@@ -1,0 +1,8 @@
+model_tag,model_display,mmlu,ifeval,gsm8k,math,squad,coding
+base_llama31_8b_instruct,Base (no train),0.6874,0.7375,0.8203,0.4322,0.6887,0.6020
+dense_dpo_tulu3_ckpt500,Dense DPO ckpt-500,0.6874,0.7431,0.8150,0.4344,0.6880,0.6030
+sparse_warm_mag_step200,Sparse · warm-mag,0.6874,0.7468,0.8135,0.4376,0.6900,0.6030
+sparse_oracle_dpo_tulu3,Sparse · oracle DPO Tulu3 (in-task),0.6877,0.7505,0.8165,0.4356,0.6877,0.6030
+sparse_oracle_dpo_lightr1,Sparse · oracle DPO Light-R1,0.6873,0.7449,0.8165,0.4362,0.6883,0.6020
+sparse_oracle_grpo_math,Sparse · oracle GRPO Math,0.6871,0.7394,0.8165,0.4332,0.6893,0.6020
+sparse_random,Sparse · random mask,0.6872,0.7375,0.8180,0.4306,0.6873,0.6030
