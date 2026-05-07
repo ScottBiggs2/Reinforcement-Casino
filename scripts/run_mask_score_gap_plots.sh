@@ -2,7 +2,7 @@
 # Run matplotlib report for an analysis directory (local machine or HPC login node).
 #
 # Usage:
-#   ANALYSIS_DIR=$HOME/rl-casino/results/run2_parallel bash scripts/run_mask_score_gap_plots.sh
+#   ANALYSIS_DIR=$HOME/rl_casino/results/run2_parallel bash scripts/run_mask_score_gap_plots.sh
 #
 set -euo pipefail
 
@@ -24,6 +24,7 @@ else
 fi
 
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
+export MPLBACKEND="${MPLBACKEND:-Agg}"
 
 ARGS=(scripts/report_mask_score_gap_plots.py --analysis-dir "${ANALYSIS_DIR}")
 if [ -n "${OUT_DIR_PLOTS}" ]; then

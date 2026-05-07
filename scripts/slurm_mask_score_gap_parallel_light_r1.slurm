@@ -63,6 +63,8 @@ fi
 export PATH="${TRAIN_ENV}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
+# Headless nodes: default Qt/GTK backends often yield no PNGs; Agg writes figures reliably.
+export MPLBACKEND="${MPLBACKEND:-Agg}"
 
 export HF_TOKEN="${HF_TOKEN:-}"
 export HF_HOME="${HF_HOME:-${SCRATCH_USER_ROOT}/hf_cache/hub}"

@@ -4,16 +4,16 @@
 #
 # Usage (Explorer login node):
 #   bash scripts/copy_mask_score_gap_results_to_home.sh /scratch/$USER/rl_casino_analysis/mask_score_gap_parallel/run2_parallel
-#   RESULTS_ROOT=$HOME/rl-casino/results bash scripts/copy_mask_score_gap_results_to_home.sh "$OUT_DIR" run2_parallel
+#   RESULTS_ROOT=$HOME/rl_casino/results bash scripts/copy_mask_score_gap_results_to_home.sh "$OUT_DIR" run2_parallel
 #
 # Then regenerate plots if needed:
-#   PYTHONPATH=. python scripts/report_mask_score_gap_plots.py --analysis-dir "$HOME/rl-casino/results/run2_parallel"
+#   PYTHONPATH=. python scripts/report_mask_score_gap_plots.py --analysis-dir "$HOME/rl_casino/results/run2_parallel"
 #
 set -euo pipefail
 
 SRC="${1:?Usage: $0 OUT_DIR_ON_SCRATCH [DEST_NAME]}"
 NAME="${2:-$(basename "$SRC")}"
-RESULTS_ROOT="${RESULTS_ROOT:-${HOME}/rl-casino/results}"
+RESULTS_ROOT="${RESULTS_ROOT:-${HOME}/rl_casino/results}"
 DEST="${RESULTS_ROOT}/${NAME}"
 MAX_BYTES=$((1024 * 1024 * 1024)) # 1 GiB
 
@@ -55,4 +55,5 @@ done
 
 echo ""
 du -sh "$DEST"
-echo "Done. Plot: PYTHONPATH=. python scripts/report_mask_score_gap_plots.py --analysis-dir ${DEST}"
+echo "Done. If figures/ is missing, cluster matplotlib often needs Agg backend — after git pull run:"
+echo "  MPLBACKEND=Agg ANALYSIS_DIR=${DEST} bash scripts/run_mask_score_gap_plots.sh"

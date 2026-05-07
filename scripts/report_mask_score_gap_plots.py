@@ -17,10 +17,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import matplotlib
+
+matplotlib.use(os.environ.get("MPLBACKEND", "Agg"))
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -425,4 +429,5 @@ def main() -> None:
                 fig.savefig(out_dir / f"certifiability_frac_bar.{ext}", dpi=150)
             plt.close(fig)
 
-    print(f"Wrote figures under {out_dir}")
+    n_png = len(list(out_dir.glob("*.png")))
+    print(f"Wrote {n_png} PNG file(s) under {out_dir}")
