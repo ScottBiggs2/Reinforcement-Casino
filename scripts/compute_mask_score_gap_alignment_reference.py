@@ -20,11 +20,17 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
+
+# Ensure imports work when invoked from arbitrary cwd / sbatch --wrap.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from src.analysis.alignment_optimal_scores import fixed_point_B_star, s_star_tensor
 from src.analysis.mask_score_gap_analysis import (  # reuse histogram helpers
