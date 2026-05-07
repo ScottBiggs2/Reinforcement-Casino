@@ -121,6 +121,15 @@ def _parse_milestone_steps(npz_keys: Sequence[str]) -> List[int]:
     return sorted(set(steps))
 
 
+def _load_optional_npz(path: Path) -> Optional["np.lib.npyio.NpzFile"]:
+    try:
+        if path.is_file():
+            return np.load(path)
+    except Exception:
+        return None
+    return None
+
+
 def _margin_milestone_steps(npz_keys: Sequence[str], milestones: Sequence[int]) -> List[int]:
     out: List[int] = []
     for s in milestones:
@@ -185,6 +194,7 @@ def main() -> None:
 
     npz_path = analysis_dir / "mask_score_gap_histograms.npz"
     summary_path = analysis_dir / "mask_score_gap_summary.csv"
+    align_npz_path = analysis_dir / "mask_score_gap_alignment_histograms.npz"
 
     if not npz_path.is_file():
         raise FileNotFoundError(
@@ -205,6 +215,8 @@ def main() -> None:
             seed_tags.append(k.replace("random_raw_seed", "").replace("_counts", ""))
     seed_primary = sorted(seed_tags, key=lambda x: int(x) if x.isdigit() else 0)[0] if seed_tags else ""
 
+    align = _load_optional_npz(align_npz_path)
+
     # ---------------- legacy single magnitude_raw_counts (optional)
     if "magnitude_raw_counts" in data.files:
         _plot_legacy(data, out_dir, args)
@@ -224,6 +236,8 @@ def main() -> None:
                     data[f"random_raw_seed{seed_primary}_log_edges"],
                 )
             )
+        if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
+            raw_series_lo.append((align["alignment_gap_oracle_raw_counts"], align["alignment_gap_oracle_raw_log_edges"]))
         xlim_raw_u = (
             (1e-30, float(args.raw_xmax))
             if args.raw_xmax is not None
@@ -244,6 +258,11 @@ def main() -> None:
             axes[0].plot(
                 lin_c, dens, label=f"random (seed {seed_primary})", color=cols["random"], lw=2.2, ls="--"
             )
+        if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
+            lin_c, dens = _hist_density_from_log_bins(
+                align["alignment_gap_oracle_raw_counts"], align["alignment_gap_oracle_raw_log_edges"]
+            )
+            axes[0].plot(lin_c, dens, label="|s* - oracle| (alignment)", color="#000000", lw=2.4, ls="-.")
 
         axes[0].set_xscale("log")
         axes[0].set_title("Raw gap densities vs oracle (warm mag @ intermediate steps)")
@@ -260,6 +279,9 @@ def main() -> None:
             ck, ek = f"random_raw_seed{seed_primary}_counts", f"random_raw_seed{seed_primary}_log_edges"
             x, y = _ecdf_log_edges(data[ck], data[ek])
             axes[1].step(x, y, where="mid", label=f"random s{seed_primary}", color=cols["random"], lw=2, ls="--")
+        if align is not None and "alignment_gap_oracle_raw_counts" in align.files:
+            x, y = _ecdf_log_edges(align["alignment_gap_oracle_raw_counts"], align["alignment_gap_oracle_raw_log_edges"])
+            axes[1].step(x, y, where="mid", label="alignment |s* - oracle|", color="#000000", lw=2.2, ls="-.")
         axes[1].set_xscale("log")
         axes[1].set_xlim(xlim_raw_u[0], xlim_raw_u[1])
         axes[1].set_ylim(0, 1)
