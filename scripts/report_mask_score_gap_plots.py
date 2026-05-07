@@ -431,3 +431,7 @@ def main() -> None:
 
     n_png = len(list(out_dir.glob("*.png")))
     print(f"Wrote {n_png} PNG file(s) under {out_dir}")
+
+
+if __name__ == "__main__":
+    main()
