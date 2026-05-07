@@ -56,4 +56,11 @@ Hypothesis: 1024-token cap on OpenR1-Math-220k CoTs is the dominant reason accur
 - `clipped_ratio` still ≥ 0.7 with 3072 cap → CoTs in math-220k are even longer than that; revisit dataset filtering or further raise cap.
 
 ## Job ID
-TBD (filled in after sbatch submit)
+6521291 (submitted 2026-05-03, cancelled — 1.5h queue)
+6521364 (resubmitted with `--time=00:50:00` for backfill; cancelled at step 10 — walltime too tight, 48s/step needs 80min)
+6521435 (resubmitted with `--time=01:30:00` — full 100 steps + buffer)
+
+## Early signal (from 6521364, first 10 steps)
+- step 2: `acc_reward=0.375`, `reward_std=0.75` — 3/8 group samples got the math right
+- mean completion length 1500–3072 with terminated lengths 700–2700 → CoTs genuinely need >1024 tokens
+- still get occasional "all-clip" dead steps (5, 8) where reward_std=0 → format-only ceiling, but much rarer than 1024 baseline
