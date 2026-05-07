@@ -274,3 +274,6 @@ Active fraction (subset): **0.02499** (≈2.5% active).
 | `dense_elem` | 1050 | 1050 | 4200 | 105 | 1470 |
 | `dense8bit_elem` | 1050 | 1050 | 4200 | 105 | 1470 |
 | `sparse_elem` | 1050 | 1050 | 4200 | 105 | 1470 |
+
+
+sbatch --time=04:00:00 --mem=196G --export=ALL,HISTOGRAM_BINS=512 scripts/slurm_mask_score_gap_light_r1.slurm

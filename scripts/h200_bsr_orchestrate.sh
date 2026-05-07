@@ -27,6 +27,8 @@
 #   export RUN_ID="bsr_orch_${USER}_$(date +%Y%m%d_%H%M%S)"
 #   export BENCHMARK_SPARSITIES=0,50,75,90,99.75
 #   export H200_BSR_SLURM_PARTITION=multigpu   # default (shorter queue); use gpu to force gpu partition instead
+#   export H200_BSR_BENCH_AFTER_MASK=0         # GPU jobs do not wait on CPU prefetch (see troubleshooting below)
+#   export H200_BSR_SKIP_PREFETCH=1            # do not submit the short-partition prefetch job at all
 #
 # Single manual GPU bench shard (same multigpu default as embedded in scripts/h200_sparse_dpo_bsr_benchmark.sh):
 #
@@ -48,6 +50,25 @@
 #   export RUN_ID=my_experiment
 #   export BENCHMARK_SPARSITIES=0,50,75,90,99.75   # default includes 0 → dense shard
 #   export H200_BSR_BENCH_AFTER_MASK=0             # do not wait for mask job (default 1)
+#
+# --- If ``short`` prefetch blocks everything (GPU jobs stuck PD / Dependency) ---
+#
+# 1) Start GPU shards immediately (recommended): masks are still written under RUN_ROOT/masks/ **inside**
+#    each bench job on cache miss — duplicate CPU mask generation per shard, but no idle GPU: training
+#    uses the H200 for hours.
+#       export H200_BSR_BENCH_AFTER_MASK=0
+#       ./scripts/h200_bsr_orchestrate.sh
+#
+# 2) Do **not** submit prefetch on ``multigpu`` without training: mask generation is CPU/meta-model
+#    work; holding an allocated GPU idle for tens of minutes violates typical Explorer GPU-use policies.
+#
+# 3) Precompute masks once when ``short`` is quiet (standalone prefetch), then reuse RUN_ROOT for later
+#    bench submits; or generate masks from another machine and rsync RUN_ROOT/masks/ onto scratch.
+#
+# 4) Cancel stuck orchestrator + relaunch ASAP (reuse same RUN_ID so RUN_ROOT matches):
+#       scancel <prefetch_jid> <bench_jid...>
+#       export RUN_ID=<same_as_before>  H200_BSR_BENCH_AFTER_MASK=0  H200_BSR_SKIP_PREFETCH=1
+#       ./scripts/h200_bsr_orchestrate.sh
 #
 set -euo pipefail
 
@@ -98,10 +119,14 @@ echo "Sparse prefetch / bench levels: ${JOIN_SPARSE_MASK:-<none>}"
 
 MASK_JID=""
 if ((${#SPARSE_MASK_LIST[@]} > 0)); then
-  MASK_JID=$(sbatch --parsable \
-    --export=ALL,H200_BSR_MASK_CACHE="${RUN_ROOT}",BENCHMARK_SPARSITIES="${JOIN_SPARSE_MASK}",H200_BSR_PREFETCH_OUT="${RUN_ROOT}/prefetch_log" \
-    "${REPO_ROOT}/scripts/h200_bsr_prefetch_masks.slurm")
-  echo "Submitted mask prefetch job: ${MASK_JID}"
+  if [[ "${H200_BSR_SKIP_PREFETCH:-0}" != "0" ]]; then
+    echo "Skipping mask prefetch Slurm job (H200_BSR_SKIP_PREFETCH=${H200_BSR_SKIP_PREFETCH}); benches build masks on demand under RUN_ROOT/masks/."
+  else
+    MASK_JID=$(sbatch --parsable \
+      --export=ALL,H200_BSR_MASK_CACHE="${RUN_ROOT}",BENCHMARK_SPARSITIES="${JOIN_SPARSE_MASK}",H200_BSR_PREFETCH_OUT="${RUN_ROOT}/prefetch_log" \
+      "${REPO_ROOT}/scripts/h200_bsr_prefetch_masks.slurm")
+    echo "Submitted mask prefetch job: ${MASK_JID}"
+  fi
 else
   echo "No nonzero sparsities; skipping mask prefetch job."
 fi

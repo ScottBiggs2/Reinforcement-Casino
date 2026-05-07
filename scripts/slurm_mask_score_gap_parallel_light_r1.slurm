@@ -18,15 +18,17 @@
 #
 # Do not rsync magnitude_caches/ into $HOME/repo — copy only CSV/NPZ/JSON/figures after merge.
 #
-# Walltime matches scripts/slurm_mask_score_gap_light_r1.slurm (raise with e.g. sbatch --time=12:00:00 ...).
-# Default HISTOGRAM_BINS=1024 below saves CPU vs 2048; override with export HISTOGRAM_BINS=512|2048.
+# Baseline #SBATCH (manual sbatch only). scripts/submit_mask_score_gap_parallel_light_r1.sh passes per-stage
+# --mem/--time/--cpus-per-task so merge_shards does not request heavy-node RAM; see MGAP_SBATCH_* there.
+# Raise limits if sacct shows OOM or TIMEOUT (checkpoint-heavy stages may need 256G like the monolithic script).
+# Default HISTOGRAM_BINS=1024 saves CPU vs 2048; export HISTOGRAM_BINS=512|2048 to tune.
 #
 #SBATCH --partition=short
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=256G
-#SBATCH --time=08:00:00
+#SBATCH --mem=192G
+#SBATCH --time=06:00:00
 #SBATCH --job-name=mgap_par
 #SBATCH --output=logs/mask_score_gap_parallel_%j.out
 #SBATCH --error=logs/mask_score_gap_parallel_%j.err
