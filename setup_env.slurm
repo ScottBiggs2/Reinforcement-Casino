@@ -16,9 +16,9 @@ echo "Node: $SLURMD_NODENAME"
 echo "Started: $(date)"
 echo "========================================"
 
-CONDA_BASE=/shared/EL9/explorer/miniconda3/24.11.1/miniconda3
-ENV_PREFIX=/scratch/xie.yiyi/conda_envs/rl_casino
-REPO=/home/xie.yiyi/Reinforcement-Casino
+CONDA_BASE="${CONDA_BASE:-/shared/EL9/explorer/miniconda3/24.11.1/miniconda3}"
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+ENV_PREFIX="${ENV_PREFIX:-${SCRATCH_USER_ROOT}/conda_envs/rl_casino}"
 
 source $CONDA_BASE/etc/profile.d/conda.sh
 

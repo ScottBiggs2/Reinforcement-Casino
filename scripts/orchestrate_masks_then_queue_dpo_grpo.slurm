@@ -161,10 +161,10 @@ export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/
 
 ########################################
 # Oracle checkpoint directory for Light-R1
-export ORACLE_FINAL_CKPT_DIR="${ORACLE_FINAL_CKPT_DIR:-/scratch/biggs.s/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
+export ORACLE_FINAL_CKPT_DIR="${ORACLE_FINAL_CKPT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_light-r1/checkpoints/meta_llama_llama_3_1_8b_instruct_light_r1/checkpoint-500}"
 
 # Oracle checkpoint directory for Tulu3
-export ORACLE_FINAL_CKPT_DIR_TULU3="${ORACLE_FINAL_CKPT_DIR_TULU3:-/scratch/biggs.s/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500}"
+export ORACLE_FINAL_CKPT_DIR_TULU3="${ORACLE_FINAL_CKPT_DIR_TULU3:-${SCRATCH_USER_ROOT}/rl_casino_train/dpo5k_dense_tulu3/checkpoints/meta_llama_llama_3_1_8b_instruct_tulu3/checkpoint-500}"
 
 # Downstream run ids (stable names recommended for resume)
 export DPO_DENSE_RUN_ID="${DPO_DENSE_RUN_ID:-dpo5k_dense_${DPO_DS_KEY}}"

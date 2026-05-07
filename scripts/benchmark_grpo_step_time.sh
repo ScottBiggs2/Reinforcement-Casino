@@ -3,7 +3,7 @@
 # Does not submit Slurm; run on an allocated GPU session or wrap with sbatch.
 #
 # Usage (after: salloc ... or on login with GPU):
-#   SCRATCH_USER_ROOT=/scratch/biggs.s ./scripts/benchmark_grpo_step_time.sh
+#   SCRATCH_USER_ROOT=/scratch/$USER ./scripts/benchmark_grpo_step_time.sh
 #
 # Env:
 #   MODEL, GRPO_BENCH_STEPS (default 20), GRPO_DATASET, HF_DATASETS_CACHE,

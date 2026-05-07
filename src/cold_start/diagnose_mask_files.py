@@ -5,7 +5,7 @@ Use after a pipeline mask stage when comparisons look "stuck" or Jaccard repeats
 
 Example (cluster):
   python src/cold_start/diagnose_mask_files.py \\
-    /scratch/biggs.s/rl_casino_masks/20260329_185704_manual
+    /scratch/$USER/rl_casino_masks/<run_id>
 
 Or compare two files:
   python src/cold_start/diagnose_mask_files.py --mask-a PATH --mask-b PATH

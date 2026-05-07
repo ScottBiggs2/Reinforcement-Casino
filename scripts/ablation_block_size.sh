@@ -36,8 +36,8 @@ echo "Node:     $(hostname)"
 echo "Job ID:   ${SLURM_JOB_ID:-local}"
 
 # ── Environment ─────────────────────────────────────────────────────────────
-CONDA_ENV_PRIMARY="/scratch/xie.yiyi/conda_envs/rl_casino"
-CONDA_ENV_FALLBACK="/home/xie.yiyi/.conda/envs/rl_casino"
+CONDA_ENV_PRIMARY="${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
+CONDA_ENV_FALLBACK="${CONDA_ENV_FALLBACK:-${HOME:-/tmp}/.conda/envs/rl_casino}"
 
 if [ -d "$CONDA_ENV_PRIMARY" ]; then
     ENV_PATH="$CONDA_ENV_PRIMARY"
@@ -50,7 +50,9 @@ fi
 PYTHON="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 export PYTHONPATH=.
-export PYTHONPATH="/scratch/xie.yiyi/pip_packages:$PYTHONPATH"
+if [ -n "${EXTRA_PYTHONPATH:-}" ]; then
+    export PYTHONPATH="${EXTRA_PYTHONPATH}:${PYTHONPATH}"
+fi
 
 # ── Shared Config ───────────────────────────────────────────────────────────
 MODEL="google/gemma-3-270m-it"
@@ -67,8 +69,9 @@ OPTIMIZER="sparse_adamw"
 MASK_PATH="masks/grpo_verify/fisher_grpo.pt"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-OUTPUT_DIR="/scratch/xie.yiyi/rl_casino_outputs/ablation_blocksize_${TIMESTAMP}"
-CACHE_DIR="/scratch/xie.yiyi/hf_cache/datasets"
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_outputs/ablation_blocksize_${TIMESTAMP}}"
+CACHE_DIR="${CACHE_DIR:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 mkdir -p "$OUTPUT_DIR"
 
 PASS=0

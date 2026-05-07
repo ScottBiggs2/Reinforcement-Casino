@@ -5,7 +5,7 @@
 # Logs always under repo logs/ (Slurm directives — same pattern as run_dpo_grasp_masks_only.slurm).
 #
 # Submit from repo root (optionally pin scratch + run id from login):
-#   sbatch --export=ALL,SCRATCH_USER_ROOT=/scratch/biggs.s,MASK_RUN_ID=my_run_001 \
+#   sbatch --export=ALL,SCRATCH_USER_ROOT=/scratch/$USER,MASK_RUN_ID=my_run_001 \
 #     scripts/run_light_r1_grasp_elem_base_mask.slurm
 #
 # Explorer: use multigpu when gpu is drained (matches scripts/sbatch_grpo_llama31_mask_interpretation_suite.sh).

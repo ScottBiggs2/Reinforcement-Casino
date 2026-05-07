@@ -150,7 +150,7 @@ def main() -> None:
     plt.close(fig2)
     print(f"Wrote {line_path}")
 
-    # --- Heatmap: mask × dataset (calibration + Irene builtins) ---
+    # --- Heatmap: mask × dataset (calibration + builtin probes) ---
     breakdown_keys: Optional[List[str]] = None
     for _lb, data in series:
         bd = data.get("breakdown_by_dataset")

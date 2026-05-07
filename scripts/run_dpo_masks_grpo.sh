@@ -30,8 +30,8 @@ echo "GPU: ${CUDA_VISIBLE_DEVICES:-none}"
 echo "Working dir: $(pwd)"
 
 # ── Environment ──────────────────────────────────────────────────────────────
-CONDA_ENV_PRIMARY="/scratch/xie.yiyi/conda_envs/rl_casino"
-CONDA_ENV_FALLBACK="/home/xie.yiyi/.conda/envs/rl_casino"
+CONDA_ENV_PRIMARY="${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
+CONDA_ENV_FALLBACK="${CONDA_ENV_FALLBACK:-${HOME:-/tmp}/.conda/envs/rl_casino}"
 
 if [ -d "$CONDA_ENV_PRIMARY" ]; then
     ENV_PATH="$CONDA_ENV_PRIMARY"
@@ -64,8 +64,9 @@ GRAD_ACCUM=8
 NUM_GENERATIONS=8
 GEN_BATCH_SIZE=8
 LR=5e-6
-OUTPUT_DIR="/home/xie.yiyi/Reinforcement-Casino/mask_swapping"
-CACHE_DIR="/scratch/xie.yiyi/hf_cache/datasets"
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_outputs/mask_swapping}"
+CACHE_DIR="${CACHE_DIR:-${SCRATCH_USER_ROOT}/hf_cache/datasets}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 mkdir -p "$OUTPUT_DIR"

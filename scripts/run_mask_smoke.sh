@@ -27,7 +27,7 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs masks/smoke
 
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+ENV_PATH="${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
 PYTHON_BIN="${ENV_PATH}/bin/python"
 export PATH="${ENV_PATH}/bin:${PATH}"
 export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}"

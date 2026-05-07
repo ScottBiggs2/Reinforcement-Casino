@@ -21,4 +21,4 @@ We care about **RL-oriented subnetworks** in LLMs: binary masks over weights, fo
 ## Operational gotchas
 
 - Submit **`sbatch` from the repo root** so `SLURM_SUBMIT_DIR` resolves (see `pipeline_common.sh`).
-- Paths like `/scratch/biggs.s/...` and conda prefixes in `pipeline_common.sh` are **site-specific**—replace for your cluster.
+- Paths like `/scratch/$USER/...` and conda prefixes in `pipeline_common.sh` are **site-specific**—replace for your cluster.

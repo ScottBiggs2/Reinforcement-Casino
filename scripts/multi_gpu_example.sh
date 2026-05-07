@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=qwen3-scaling
-#SBATCH --reservation=biggs.s_test
+#SBATCH --reservation=your_reservation
 #SBATCH --partition=reservation
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:4
@@ -31,7 +31,7 @@ source "$HOME/miniconda/etc/profile.d/conda.sh"
 conda activate /scratch/$USER/project_envs/qwen3_dllm
 
 echo "Starting Scaling Efficiency Test Suite"
-echo "Reservation: biggs.s_test"
+echo "Reservation: your_reservation"
 echo "Node: $SLURMD_NODENAME"
 echo "Project: $WANDB_PROJECT"
 

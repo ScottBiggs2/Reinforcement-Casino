@@ -53,7 +53,8 @@ export PYTHONUNBUFFERED=1
 export HF_TOKEN="${HF_TOKEN:-}"
 
 BASE_MODEL="${BASE_MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
-LOCAL_RUN_DIR="${LOCAL_RUN_DIR:-/scratch/biggs.s/rl_casino_sparse_train/dpo200_sparse_lr1_random_elem_rerun_orch_lr1_grasp6_6376972_0428_1356/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42/fullpipe_sparse_random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42_dpo200_sparse_lr1_random_elem_rerun_orch_lr1_grasp6_6376972_0428_1356}"
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+LOCAL_RUN_DIR="${LOCAL_RUN_DIR:-${SCRATCH_USER_ROOT}/rl_casino_sparse_train/<your_run_dir_here>}"
 
 SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"

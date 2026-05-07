@@ -96,7 +96,7 @@ def cka_value_for_layer_row(
     canonical: str,
     raw_cka: Dict[str, float],
 ) -> float:
-    """CKA scalar for one CSV row: hook/broadcast resolution, then Irene-style direct lookup."""
+    """CKA scalar for one CSV row: hook/broadcast resolution, then robust direct lookup."""
     v = resolve_cka_for_canonical_layer(canonical, raw_cka)
     if v == v:  # not NaN
         return v
@@ -161,7 +161,7 @@ def effective_rank(mask_tensor: torch.Tensor, eps: float = 1e-12) -> Tuple[Optio
     if mask_tensor.ndim < 2:
         return None, None
 
-    # Match RL-irene: full `svdvals` on the 2D mask slice (plots + behavior validated there).
+    # Use full `svdvals` on the 2D mask slice (matches prior validated behavior).
     W = mask_tensor.float().reshape(mask_tensor.shape[0], -1)
     m, n = W.shape
     max_rank = min(m, n)

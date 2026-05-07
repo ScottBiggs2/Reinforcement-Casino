@@ -1,8 +1,8 @@
 """Builtin linguistic / factual probe corpora for linear probes on MLP hooks.
 
-Sourced from ``integrate/scott-irene-2026`` ``src/analysis/probe_analysis.py`` (Irene
-reporting infra), kept as a standalone module so ``mask_probe_report`` and
-``src/analysis/probe_analysis.py`` can share one definition of ``PROBE_DATASETS``.
+Sourced from a prior integration branch's probe-analysis utilities and kept as a
+standalone module so ``mask_probe_report`` and ``src/analysis/probe_analysis.py``
+can share one definition of ``PROBE_DATASETS``.
 """
 
 from __future__ import annotations
@@ -342,7 +342,7 @@ def train_linear_probes_cv(
 ) -> Tuple[Dict[str, float], Dict[str, Any]]:
     """Train one L2 logistic probe per layer; return (mean_cv_by_layer, diagnostics).
 
-    Uses StratifiedKFold (same spirit as Irene ``probe_analysis.train_probes``).
+    Uses StratifiedKFold (same spirit as prior probe-analysis utilities).
     """
     results: Dict[str, float] = {}
     skipped: List[str] = []

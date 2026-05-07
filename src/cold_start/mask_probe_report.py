@@ -79,7 +79,7 @@ def _builtin_linear_probes(
     cv_folds: int,
     layer_stride: int,
 ) -> Dict[str, Any]:
-    """Irene-style builtin properties (syntax, semantics, …) on the **current** model weights."""
+    """Builtin probe properties (syntax, semantics, …) on the **current** model weights."""
     validate_probe_datasets()
     all_texts, prop_slices, labels_by_prop = build_concatenated_texts_and_slices(property_names)
     print(f"[probe-builtin] One forward over {len(all_texts)} texts across {len(property_names)} properties...")
@@ -268,7 +268,7 @@ def main() -> None:
         "--probe-builtin-datasets",
         type=str,
         default="all",
-        help="Builtin Irene corpora: 'all' | 'none' | comma keys (syntax,semantics,history,geography,math).",
+        help="Builtin probe corpora: 'all' | 'none' | comma keys (syntax,semantics,history,geography,math).",
     )
     p.add_argument("--probe-builtin-cv-folds", type=int, default=3)
     p.add_argument("--probe-builtin-layer-stride", type=int, default=1)

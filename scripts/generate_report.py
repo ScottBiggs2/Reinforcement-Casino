@@ -224,7 +224,8 @@ def main():
 
     if sys.argv[1] == "auto":
         # Find most recent benchmark and ablation dirs
-        base = "/scratch/xie.yiyi/rl_casino_outputs"
+        scratch_user_root = os.environ.get("SCRATCH_USER_ROOT") or f"/scratch/{os.environ.get('USER', 'unknown')}"
+        base = os.environ.get("RL_CASINO_OUTPUTS_DIR") or os.path.join(scratch_user_root, "rl_casino_outputs")
         bench_dirs = sorted(glob.glob(os.path.join(base, "benchmark_*")))
         ablation_dirs = sorted(glob.glob(os.path.join(base, "ablation_blocksize_*")))
 

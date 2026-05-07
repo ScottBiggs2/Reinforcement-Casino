@@ -21,6 +21,10 @@ venv/
 */__pycache__/
 *.pyc
 *.cpython-*
+
+# Cursor / editor artifacts
+.cursor/
+
 wandb/
 coding_assistant_notes.md
 
@@ -30,7 +34,7 @@ results/
 *.json
 *.log
 
-# Training runs / checkpoints / artifacts (RL-irene safety)
+# Training runs / checkpoints / artifacts
 logs/
 checkpoints*/
 delta_logs*/
@@ -56,3 +60,7 @@ current_tex.md
 
 # Local pip test deps (agent / CI scratch)
 _py_testdeps/
+
+# Local scratch / notes
+scratch.md
+paper_snippets.md

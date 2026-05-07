@@ -188,7 +188,8 @@ def visualize_cka(cka_data, sorted_layers, output_path=None):
 
 if __name__ == "__main__":
     # Find and analyze all CKA files
-    cka_files = list(Path('/home/xie.yiyi/Reinforcement-Casino').rglob('*cka*.json'))
+    repo_root = Path(os.environ.get("REPO_ROOT", Path.cwd()))
+    cka_files = list(repo_root.rglob("*cka*.json"))
     
     if not cka_files:
         print("No CKA files found!")

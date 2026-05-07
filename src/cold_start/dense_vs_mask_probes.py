@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dense-trained builtin probes evaluated on dense vs masked subnetworks.
 
-This script is intentionally Irene-style but adapted for the mask suite:
+This script follows a legacy probe-report layout but is adapted for the mask suite:
 
 * Train one L2 logistic probe per MLP layer on **dense** activations only.
 * For each builtin probe property (syntax/semantics/factual/math):
@@ -397,7 +397,7 @@ def main() -> None:
         "--builtin-datasets",
         type=str,
         default="all",
-        help="Builtin Irene corpora: 'all'|'none'|comma keys (syntax,semantics,math,...)",
+        help="Builtin probe corpora: 'all'|'none'|comma keys (syntax,semantics,math,...)",
     )
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--max-length", type=int, default=512)

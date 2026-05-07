@@ -67,8 +67,8 @@ Explorer-style example (clone eval env to scratch):
 conda create -n rl_casino_eval python=3.11.14 -y
 conda activate rl_casino_eval
 
-conda create --prefix /scratch/biggs.s/conda_envs/rl_casino_eval --clone /home/biggs.s/miniconda/envs/rl_casino_eval
-conda activate /scratch/biggs.s/conda_envs/rl_casino_eval
+conda create --prefix /scratch/$USER/conda_envs/rl_casino_eval --clone "$HOME/miniconda/envs/rl_casino_eval"
+conda activate /scratch/$USER/conda_envs/rl_casino_eval
 ```
 
 Authentication:

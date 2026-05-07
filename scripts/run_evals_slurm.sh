@@ -63,7 +63,7 @@ fi
 # Activate environment using the full path to the environment's python
 # This is much more robust on Slurm than 'conda activate'
 # Dedicated env for eval harness (lm-eval + benchmark runners); override with EVAL_ENV
-ENV_PATH="${EVAL_ENV:-/scratch/biggs.s/conda_envs/rl_casino_eval}"
+ENV_PATH="${EVAL_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino_eval}"
 PYTHON_BIN="$ENV_PATH/bin/python"
 
 # Export PATH to ensure sub-scripts use the environment's binaries

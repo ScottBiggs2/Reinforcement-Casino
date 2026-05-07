@@ -10,7 +10,7 @@
 #SBATCH --mem=32G
 #SBATCH --time=00:15:00
 
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+ENV_PATH="${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
 PYTHON_BIN="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 

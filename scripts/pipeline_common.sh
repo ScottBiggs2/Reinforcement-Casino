@@ -28,9 +28,9 @@ export PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$RUN_ID}"
 echo "Full pipeline RUN_ID=${RUN_ID}"
 echo "Repo root: ${REPO_ROOT}"
 
-# Scratch layout: default /scratch/$USER/... for portable HPC. Override for a fixed netid tree, e.g.:
-#   export SCRATCH_USER_ROOT=/scratch/biggs.s
-#   export TRAIN_ENV=/scratch/biggs.s/conda_envs/rl_casino   # optional full-path overrides
+# Scratch layout: default /scratch/$USER/... for portable HPC. Override for a fixed per-account tree, e.g.:
+#   export SCRATCH_USER_ROOT=/scratch/$USER
+#   export TRAIN_ENV=/scratch/$USER/conda_envs/rl_casino   # optional full-path overrides
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-${LOGNAME:-unknown}}}"
 # sbatch --export=ALL can pull SCRATCH_USER_ROOT="" from a login shell; :default fixes unset/null.
 # If it is still empty or "/", every ${SCRATCH_USER_ROOT}/rl_casino_* becomes /rl_casino_* (root) — mkdir then fails.

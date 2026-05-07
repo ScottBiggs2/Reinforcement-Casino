@@ -66,7 +66,7 @@ else
 fi
 
 # --- Analysis-specific defaults (override via sbatch --export or shell env) ---
-MASK_ANALYSIS_DIR="${MASK_ANALYSIS_DIR:-/scratch/biggs.s/rl_casino_masks/tulu3_500_h200_fresh_0409_again}"
+MASK_ANALYSIS_DIR="${MASK_ANALYSIS_DIR:-/scratch/${USER:-unknown}/rl_casino_masks/<run_id>}"
 GROUND_TRUTH_BASENAME="${GROUND_TRUTH_BASENAME:-checkpoint_diff_ground_truth_checkpoint-500_sparsity97.5pct.pt}"
 
 # RUN_ID only for log naming / provenance; outputs live under MASK_ANALYSIS_DIR.

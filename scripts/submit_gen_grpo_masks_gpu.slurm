@@ -18,7 +18,12 @@ echo "Node     : ${SLURMD_NODENAME:-N/A}"
 echo "Started  : $(date)"
 echo "========================================"
 
-REPO_DIR="${SLURM_SUBMIT_DIR:-/home/xie.yiyi/Reinforcement-Casino}"
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+    REPO_DIR="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+    _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_DIR="$(cd "${_HERE}/.." && pwd)"
+fi
 MASK_SCRIPT="$REPO_DIR/scripts/gen_grpo_masks_and_plot.sh"
 CONTAINER_IMAGE="${CONTAINER_IMAGE:-}"
 

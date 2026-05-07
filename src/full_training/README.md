@@ -78,7 +78,7 @@ python src/full_training/sparse_dpo_efficiency.py \
   ```
 
 ## Common Features
-- **Scratch Storage:** Default output path is `/scratch/biggs.s/rl_casino_outputs` and dataset cache is `/scratch/biggs.s/hf_cache/datasets` to reduce home directory quota usage. Override with `--output_base_dir` and `--dataset_cache_dir`.
+- **Scratch Storage:** Default output path is `/scratch/$USER/rl_casino_outputs` and dataset cache is `/scratch/$USER/hf_cache/datasets` to reduce home directory quota usage. Override with `--output_base_dir` and `--dataset_cache_dir`.
 - **Flexible Checkpointing:** Saves deltas on a schedule (10, 20... 50, 100...).
 - **Logging:** 
     - WandB: Metrics + Subnetwork statistics.

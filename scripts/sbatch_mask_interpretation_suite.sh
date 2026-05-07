@@ -31,7 +31,7 @@
 #   MASK_SUITE_CKA_MAX_LENGTH=384          # shorter CKA forwards (speed)
 #   MASK_SUITE_SUITE_FAST=1               # cap CKA/probe samples at 32 + skip effective rank
 #   MASK_SUITE_NO_PROBE_PLOTS=1           # skip probe_plots/*.png (default: probe plots on with probes)
-#   MASK_SUITE_PROBE_BUILTIN=all        # Irene corpora: all|none|syntax,semantics,math
+#   MASK_SUITE_PROBE_BUILTIN=all        # builtin corpora: all|none|syntax,semantics,math
 #   MASK_SUITE_PROBE_BUILTIN_CV_FOLDS=3
 #   MASK_SUITE_PROBE_BUILTIN_LAYER_STRIDE=1   # >1 subsamples MLP layers for builtin pass (speed)
 #   MASK_SUITE_PROBE_DENSE_CHECKPOINT=/scratch/$USER/.../checkpoint-500

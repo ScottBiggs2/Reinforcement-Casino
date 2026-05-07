@@ -23,8 +23,12 @@ echo "Started  : $(date)"
 echo "========================================"
 
 # --- Activate conda env ---
-source /shared/EL9/explorer/miniconda3/24.11.1/miniconda3/etc/profile.d/conda.sh
-conda activate /scratch/xie.yiyi/conda_envs/rl_casino
+CONDA_SH="${CONDA_SH:-/shared/EL9/explorer/miniconda3/24.11.1/miniconda3/etc/profile.d/conda.sh}"
+if [ -f "$CONDA_SH" ]; then
+  # shellcheck source=/dev/null
+  source "$CONDA_SH"
+fi
+conda activate "${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
 
 echo "Python   : $(python --version)"
 echo "Torch    : $(python -c 'import torch; print(torch.__version__)')"
@@ -32,7 +36,13 @@ echo "CUDA     : $(python -c 'import torch; print(torch.cuda.is_available(), tor
 echo ""
 
 # --- Working directory ---
-cd /home/xie.yiyi/Reinforcement-Casino
+if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
+  REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+else
+  _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${_HERE}" && pwd)"
+fi
+cd "$REPO_ROOT"
 mkdir -p logs
 
 # --- Run experiment ---

@@ -35,7 +35,7 @@ if [ -z "$1" ]; then
 fi
 
 # Dedicated env for eval harness (lm-eval + coding benchmarks)
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino_eval"
+ENV_PATH="${EVAL_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino_eval}"
 PYTHON_BIN="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 

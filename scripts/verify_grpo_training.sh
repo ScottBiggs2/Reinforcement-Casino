@@ -27,7 +27,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "GPU: $CUDA_VISIBLE_DEVICES"
 echo "Working dir: $(pwd)"
 
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+ENV_PATH="${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
 PYTHON_BIN="$ENV_PATH/bin/python"
 export PATH="$ENV_PATH/bin:$PATH"
 
@@ -53,8 +53,9 @@ while [[ "$#" -gt 0 ]]; do
 done
 NUM_STEPS=10
 SUBSET=64
-VERIFY_OUT_DIR="/scratch/biggs.s/rl_casino_verify_outputs"
-VERIFY_CACHE_DIR="/scratch/biggs.s/hf_cache_verify"
+SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
+VERIFY_OUT_DIR="${VERIFY_OUT_DIR:-${SCRATCH_USER_ROOT}/rl_casino_verify_outputs}"
+VERIFY_CACHE_DIR="${VERIFY_CACHE_DIR:-${SCRATCH_USER_ROOT}/hf_cache_verify}"
 MIN_LAYER_KEEP_RATIO="0.0025" # set to 0.0 for pure global masking
 
 DATASETS=("math-220k")

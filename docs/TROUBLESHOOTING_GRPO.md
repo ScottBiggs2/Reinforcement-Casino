@@ -13,7 +13,7 @@ or vLLM errors such as `undefined symbol` in `vllm/_core_C.abi3.so`.
 
 TRL 0.24’s `GRPOTrainer` loads optional vLLM integration when the `vllm` package is importable. A vLLM wheel built for a **different PyTorch** than the one in your conda env can fail during import, **before** any `use_vllm` flag is read. That breaks all GRPO entrypoints.
 
-This is an environment issue, not a branch-specific code difference versus `RL-irene` (same `trl` / `torch` pins in `requirements.txt`).
+This is an environment issue, not a branch-specific code difference (same `trl` / `torch` pins in `requirements.txt`).
 
 ## Fix (pick one)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Irene-style multi-panel heatmaps for dense-vs-mask builtin probe reports.
+"""Multi-panel heatmaps for dense-vs-mask builtin probe reports.
 
 Consumes ``dense_vs_mask_probes.json`` written by ``dense_vs_mask_probes.py`` and
 produces two paper-ready figures:
@@ -213,7 +213,7 @@ def _plot_delta_panels(
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Plot Irene-style dense-vs-mask builtin probe heatmaps.")
+    p = argparse.ArgumentParser(description="Plot dense-vs-mask builtin probe heatmaps.")
     p.add_argument("--input-json", type=str, required=True, help="Path to dense_vs_mask_probes.json")
     p.add_argument(
         "--output-dir",

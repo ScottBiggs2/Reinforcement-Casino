@@ -398,8 +398,8 @@ tail -f logs/pipeline_${J1}_p1_dense_mgpu.out
 tail -f logs/full_pipeline_dpo_multigpu_tulu3_${RUN_ID}.log
 
 # After stage 1, verify warm-start artifacts exist:
-ls -lh /scratch/biggs.s/rl_casino_train/${RUN_ID}/deltas/*/base_state.pt
-ls -lh /scratch/biggs.s/rl_casino_train/${RUN_ID}/deltas/*/deltas_step_*.pt | head
+ls -lh /scratch/$USER/rl_casino_train/${RUN_ID}/deltas/*/base_state.pt
+ls -lh /scratch/$USER/rl_casino_train/${RUN_ID}/deltas/*/deltas_step_*.pt | head
 ```
 
 ### Interactive allocation (debug)
@@ -415,7 +415,7 @@ export HF_TOKEN="hf_xxxxxxxx"
 export MODEL="meta-llama/Llama-3.1-8B-Instruct"
 
 export MULTIGPU_NGPUS=4
-/scratch/biggs.s/conda_envs/rl_casino/bin/torchrun --standalone --nproc_per_node="$MULTIGPU_NGPUS" \
+/scratch/$USER/conda_envs/rl_casino/bin/torchrun --standalone --nproc_per_node="$MULTIGPU_NGPUS" \
   src/full_training/DPO_train.py \
     --model_name "$MODEL" \
     --dataset "tulu3" \
@@ -429,8 +429,8 @@ export MULTIGPU_NGPUS=4
     --max_prompt_length 2048 \
     --delta_log_interval 50 \
     --delta_log_end_step 200 \
-    --output_base_dir "/scratch/biggs.s/rl_casino_train/manual_${SLURM_JOB_ID:-local}" \
-    --dataset_cache_dir "/scratch/biggs.s/hf_cache/datasets" \
+    --output_base_dir "/scratch/$USER/rl_casino_train/manual_${SLURM_JOB_ID:-local}" \
+    --dataset_cache_dir "/scratch/$USER/hf_cache/datasets" \
     --use_wandb \
     --run_name "manual_multigpu_dpo_${SLURM_JOB_ID:-local}"
 ```

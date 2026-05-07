@@ -427,7 +427,7 @@ def main() -> None:
         "--probe-builtin-datasets",
         type=str,
         default="all",
-        help="Irene builtin corpora for mask_probe_report: 'all'|'none'|comma keys (syntax,semantics,...).",
+        help="Builtin probe corpora for mask_probe_report: 'all'|'none'|comma keys (syntax,semantics,...).",
     )
     parser.add_argument("--probe-builtin-cv-folds", type=int, default=3)
     parser.add_argument("--probe-builtin-layer-stride", type=int, default=1)
@@ -736,7 +736,7 @@ def _run_dense_vs_mask_probes(
         print("[probe] dense_vs_mask_probes failed (non-fatal)", file=sys.stderr)
         return
 
-    # Also produce Irene-style heatmaps for the 4 builtin tasks.
+    # Also produce probe heatmaps for the builtin tasks.
     plot_py = _REPO_ROOT / "src" / "cold_start" / "plot_dense_vs_mask_probes.py"
     plot_out_dir = out_dir / "probe_plots"
     cmd2 = [py, str(plot_py), "--input-json", str(out_json), "--output-dir", str(plot_out_dir)]

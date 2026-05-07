@@ -21,7 +21,7 @@ fi
 cd "$REPO_ROOT"
 mkdir -p logs
 
-ENV_PATH="/scratch/biggs.s/conda_envs/rl_casino"
+ENV_PATH="${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
 export PATH="$ENV_PATH/bin:$PATH"
 
 # Set up PYTHONPATH

@@ -200,7 +200,8 @@ def create_visualization(cka_data, sorted_layers, layer_groups):
     
     plt.tight_layout()
     
-    output_path = '/home/xie.yiyi/Reinforcement-Casino/masks/cka_analysis_visualization.png'
+    repo_root = os.environ.get("REPO_ROOT") or os.getcwd()
+    output_path = os.path.join(repo_root, "masks", "cka_analysis_visualization.png")
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"\n✓ Visualization saved to: {output_path}")
     
@@ -208,7 +209,15 @@ def create_visualization(cka_data, sorted_layers, layer_groups):
 
 
 if __name__ == "__main__":
-    filepath = '/home/xie.yiyi/Reinforcement-Casino/masks/cka_mask_vs_mask_cold_start_cav_90pct_vs_cold_start_snip_90pct.json'
+    repo_root = os.environ.get("REPO_ROOT") or os.getcwd()
+    filepath = os.environ.get(
+        "CKA_JSON",
+        os.path.join(
+            repo_root,
+            "masks",
+            "cka_mask_vs_mask_cold_start_cav_90pct_vs_cold_start_snip_90pct.json",
+        ),
+    )
     
     cka_data, sorted_layers, layer_groups = analyze_cka_file(filepath)
     create_visualization(cka_data, sorted_layers, layer_groups)

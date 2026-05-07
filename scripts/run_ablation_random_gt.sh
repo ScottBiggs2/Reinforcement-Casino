@@ -12,7 +12,7 @@
 
 # Source conda and activate environment
 source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
-conda activate /scratch/biggs.s/conda_envs/rl_casino
+conda activate "${TRAIN_ENV:-/scratch/${USER:-unknown}/conda_envs/rl_casino}"
 
 # Set up PYTHONPATH
 export PYTHONPATH=.
