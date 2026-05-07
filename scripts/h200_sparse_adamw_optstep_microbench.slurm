@@ -18,7 +18,9 @@
 # Artifacts land in:
 #   /scratch/$USER/rl_casino_optstep_microbench/$JOBID/{elem,block}/optimizer_step_microbench.(csv|md)
 
-#SBATCH --partition=gpu
+# Explorer: multigpu usually shorter wait than gpu for single H200 (same as BSR bench scripts).
+# Override: sbatch --partition=gpu scripts/h200_sparse_adamw_optstep_microbench.slurm
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:h200:1

@@ -2,6 +2,8 @@
 # Parallel mask score-gap pipeline (milestone shards). Does NOT modify slurm_mask_score_gap_light_r1.slurm.
 #
 # Submit stages from the login node with scripts/submit_mask_score_gap_parallel_light_r1.sh (one-shot DAG).
+# That script skips the cache_only Slurm job when OUT_DIR/magnitude_caches/mag_aggregate_step_*.pt are all present
+# (e.g. built by slurm_mask_score_gap_light_r1.sh); export OUT_DIR before invoking it on the login node.
 #
 # Or run a single stage manually (examples):
 #   export MASK_GAP_STAGE=cache_only OUT_DIR=/scratch/$USER/mgap_par

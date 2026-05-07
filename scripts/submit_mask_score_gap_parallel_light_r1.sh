@@ -2,12 +2,25 @@
 # One-shot submit: cache → baseline_shard → milestone array → merge+plots.
 # Run from the cluster login node (not inside a batch job), after exporting paths/tokens like the non-parallel script.
 #
-# Required: cd to repo root (contains scripts/ and src/). Optional: export OUT_DIR, MAGNITUDE_MILESTONES, CERT_*, etc.
+# Required: cd to repo root (contains scripts/ and src/). Export OUT_DIR (and CKPT500_DIR, DELTA_LOG_DIR, HF token, etc.).
 #
-#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_parallel/run1
+# --- Quick relaunch after the monolithic job built magnitude caches (same milestones) ---
+# Use the SAME OUT_DIR as the sequential run so baseline/milestone stages find magnitude_caches/.
+# Wait until the monolithic job has finished OR use a different OUT_DIR and copy magnitude_caches/ there—
+# do not run parallel baseline+milestone writers against the same OUT_DIR while monolithic is still writing.
+#
+#   cd /scratch/$USER/rl_casino   # repo root with scripts/ + src/
+#   export OUT_DIR=/scratch/$USER/rl_casino_analysis/mask_score_gap_parallel/run2_parallel
+#   scancel <old_mgap_par_jobids>   # optional: cancel stale parallel DAG
 #   bash scripts/submit_mask_score_gap_parallel_light_r1.sh
 #
-# Skip cache stage if magnitude_caches/ already exist:
+# If every mag_aggregate_step_<milestone>.pt exists under OUT_DIR/magnitude_caches/, this script SKIPS the
+# cache_only Slurm job automatically (no need for SKIP_CACHE_STAGE=1). Override with:
+#   SKIP_CACHE_STAGE=0    — always submit cache_only (even if caches exist; wastes a queue slot if Python exits fast)
+#   SKIP_CACHE_STAGE=1    — always skip cache_only without checking files
+#   DISABLE_AUTO_SKIP_CACHE=1 — same as SKIP_CACHE_STAGE=0 when unset
+#
+# Example (explicit skip):
 #   SKIP_CACHE_STAGE=1 bash scripts/submit_mask_score_gap_parallel_light_r1.sh
 #
 # --- Scheduler tuning (optional env overrides) ---
@@ -58,8 +71,52 @@ LAST_IDX=$((N_MILE - 1))
 EXP_COMMON="ALL"
 # Caller should already export OUT_DIR, HF_TOKEN, CKPT500_DIR, DELTA_LOG_DIR, CERT_*, etc.; --export=ALL forwards them.
 
-if [ "${SKIP_CACHE_STAGE:-0}" = "1" ]; then
-  echo "SKIP_CACHE_STAGE=1: submitting baseline_shard without cache job"
+RUN_CACHE_JOB=1
+SKIP_NOTE=""
+if [ "${SKIP_CACHE_STAGE:-}" = "1" ]; then
+  RUN_CACHE_JOB=0
+  SKIP_NOTE="SKIP_CACHE_STAGE=1"
+elif [ "${SKIP_CACHE_STAGE:-}" = "0" ]; then
+  RUN_CACHE_JOB=1
+  SKIP_NOTE=""
+elif [ "${DISABLE_AUTO_SKIP_CACHE:-0}" = "1" ]; then
+  RUN_CACHE_JOB=1
+  SKIP_NOTE=""
+elif [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}/magnitude_caches" ]; then
+  _ALL_MAG_OK=1
+  for _s in "${_MS[@]}"; do
+    _s="${_s// /}"
+    [ -z "${_s}" ] && continue
+    if [ ! -f "${OUT_DIR}/magnitude_caches/mag_aggregate_step_${_s}.pt" ]; then
+      _ALL_MAG_OK=0
+      break
+    fi
+  done
+  if [ "${_ALL_MAG_OK}" = "1" ]; then
+    RUN_CACHE_JOB=0
+    SKIP_NOTE="AUTO: all mag_aggregate_step_*.pt present under ${OUT_DIR}/magnitude_caches"
+  fi
+fi
+
+if [ "${RUN_CACHE_JOB}" = "1" ] && [ -n "${OUT_DIR:-}" ] && [ -d "${OUT_DIR}/magnitude_caches" ]; then
+  _ANY_MAG=0
+  _ALL_MAG_OK=1
+  for _s in "${_MS[@]}"; do
+    _s="${_s// /}"
+    [ -z "${_s}" ] && continue
+    if [ -f "${OUT_DIR}/magnitude_caches/mag_aggregate_step_${_s}.pt" ]; then
+      _ANY_MAG=1
+    else
+      _ALL_MAG_OK=0
+    fi
+  done
+  if [ "${_ANY_MAG}" = "1" ] && [ "${_ALL_MAG_OK}" = "0" ]; then
+    echo "WARN: OUT_DIR has partial magnitude_caches/ — cache_only will re-stream deltas from scratch (Python has no partial resume)." >&2
+  fi
+fi
+
+if [ "${RUN_CACHE_JOB}" = "0" ]; then
+  echo "cache_only Slurm stage: skipped (${SKIP_NOTE:-SKIP_CACHE_STAGE})"
   # shellcheck disable=SC2086
   J_BASE=$(sbatch --parsable ${MGAP_SBATCH_EXTRA} ${MGAP_SBATCH_BASE} --export="${EXP_COMMON}",MASK_GAP_STAGE=baseline_shard "${SBATCH_SCRIPT}")
   echo "baseline_shard job_id=${J_BASE}"

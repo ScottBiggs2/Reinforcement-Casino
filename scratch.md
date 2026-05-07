@@ -235,32 +235,69 @@ Submitted batch job 6592410
 
 Goal: isolate optimizer kernel memory/speed savings (no forward/backward).
 
-- **Run** (paste on Explorer login — repo root; matches `.out` from job **6593156**):
+**Important:** To compare **multiple target sparsities**, you must **generate one random global mask per sparsity** (and optionally per mask family). The GraSP path below is only a **single-mask** sanity check; it does **not** substitute for a multi-sparsity sweep.
+
+### 1) Generate random global masks (one `.pt` per sparsity × mask type)
+
+Uses the same generator as the H200 BSR benchmark (`--prefetch_masks_only`). Files land under  
+`<H200_BSR_MASK_CACHE>/masks/` with tags derived from **float** sparsities (e.g. `50` → `s50p0_…`, `99.75` → `s99p75_…`). Inspect with `ls masks/`.
 
 ```bash
-cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch   # or your checkout path
+cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch
 mkdir -p logs
 
 export SCRATCH_USER_ROOT="/scratch/${USER}"
+# Parent directory only — script creates ./masks/*.pt
+export H200_BSR_MASK_CACHE="/scratch/${USER}/rl_casino_h200_bsr/mask_gen_${USER}_$(date +%Y%m%d_%H%M%S)"
+# Match your BSR sweep / paper grid (comma-separated; no “0” — dense has no mask file)
+export BENCHMARK_SPARSITIES="50,75,90,99.75"
+export MODEL="${MODEL:-meta-llama/Llama-3.1-8B-Instruct}"
+# defaults: element+block; full-model masks; BSR block size 16 (same as h200_sparse_dpo_bsr_benchmark.py)
+export H200_BSR_PHASE_MASK_TYPES="${H200_BSR_PHASE_MASK_TYPES:-element,block}"
 
-# Element mask (same file as run 6593156)
-export ELEM_MASK="/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+sbatch scripts/h200_bsr_prefetch_masks.slurm
+```
 
-# Defaults echoed in logs/h200_optstep_mb_<JOBID>.out — set explicitly if you want an exact rerun
-export STEPS=50
-export TRIM_FRAC=0.10
-export LR=5e-7
-export BLOCK_SIZE=32
+Wait for that job; then `ls "${H200_BSR_MASK_CACHE}/masks/"` and use the **`_element_`** files for the elem microbench column.
 
-# Element-only (no block column); equivalent to BLOCK_MASK= RUN_BLOCK=0 in the .out
+### 2) Submit one microbench job per sparsity (element masks)
+
+```bash
+cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch
+mkdir -p logs
+export SCRATCH_USER_ROOT="/scratch/${USER}"
+
+export STEPS=50 TRIM_FRAC=0.10 LR=5e-7 BLOCK_SIZE=32
 unset BLOCK_MASK
 export RUN_BLOCK=0
 
+MASK_CACHE="/scratch/${USER}/rl_casino_h200_bsr/mask_gen_${USER}_<RUN_SUFFIX>"   # paste the same H200_BSR_MASK_CACHE path as step 1
+
+for f in "${MASK_CACHE}/masks/"*element*.pt; do
+  export ELEM_MASK="$f"
+  sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
+done
+```
+
+Narrow the glob if you have many experiments under the same dir (e.g. `s*_element_b16_mlp0_floor0.0025.pt`). For **block**-mask microbench rows, loop over `*block*.pt` with `export BLOCK_MASK="$f"` and `export RUN_BLOCK=1`.
+
+### 3) One-off microbench with a **fixed** external mask (not a sparsity sweep)
+
+Example: GraSP **single** mask at ~97.5% — reproduces `.out` from job **6593156**:
+
+```bash
+cd /scratch/${USER}/rl_casino/RL_Casino_Working_Branch
+mkdir -p logs
+export SCRATCH_USER_ROOT="/scratch/${USER}"
+export ELEM_MASK="/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt"
+export STEPS=50 TRIM_FRAC=0.10 LR=5e-7 BLOCK_SIZE=32
+unset BLOCK_MASK
+export RUN_BLOCK=0
 sbatch scripts/h200_sparse_adamw_optstep_microbench.slurm
 ```
 
-- **What to open**: `/scratch/biggs.s/rl_casino_optstep_microbench/<JOBID>/elem/optimizer_step_microbench.md`  
-  (replace `biggs.s` with `${USER}` if you did not override `OUT_BASE`; Slurm sets `OUT_BASE=/scratch/$USER/rl_casino_optstep_microbench/$JOBID` by default.)
+- **What to open**: `/scratch/$USER/rl_casino_optstep_microbench/<JOBID>/elem/optimizer_step_microbench.md`  
+  (`OUT_BASE` defaults to `/scratch/$USER/rl_casino_optstep_microbench/$JOBID`.)
 - **Defaults (designed for fairness + speed)**:
   - steps: 50, trim: 10% (drop first/last 5)
   - dtype: bf16, CUDA sync: on
