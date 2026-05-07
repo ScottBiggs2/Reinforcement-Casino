@@ -4,6 +4,7 @@
 # Submit stages from the login node with scripts/submit_mask_score_gap_parallel_light_r1.sh (one-shot DAG).
 # That script skips the cache_only Slurm job when OUT_DIR/magnitude_caches/mag_aggregate_step_*.pt are all present
 # (e.g. built by slurm_mask_score_gap_light_r1.sh); export OUT_DIR before invoking it on the login node.
+# Progress: OUT_DIR=... JOBID=<id> bash scripts/check_mask_score_gap_status.sh
 #
 # Or run a single stage manually (examples):
 #   export MASK_GAP_STAGE=cache_only OUT_DIR=/scratch/$USER/mgap_par
@@ -30,7 +31,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=192G
-#SBATCH --time=06:00:00
+#SBATCH --time=12:00:00
 #SBATCH --job-name=mgap_par
 #SBATCH --output=logs/mask_score_gap_parallel_%j.out
 #SBATCH --error=logs/mask_score_gap_parallel_%j.err

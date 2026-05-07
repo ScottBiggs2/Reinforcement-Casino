@@ -35,13 +35,37 @@
 # MGAP_SBATCH_MILESTONE="--mem=... --time=..."   # milestone_shard array
 # MGAP_SBATCH_MERGE="--mem=... --time=..."       # merge_shards + plots (no checkpoint load — cheap)
 #
+# --- Status / progress (login node) ---
+#   OUT_DIR=... JOBID=<baseline_slurm_id> bash scripts/check_mask_score_gap_status.sh
+# Shows caches, parallel_shards/*.done, final CSV/NPZ, optional sacct + log tail/grep for phase
+# (random loop vs Cert/margins streaming).
+#
+# --- Walltime TIMEOUT recovery ---
+# baseline_shard does: random-vs-oracle pass + multiple full-model cert streaming passes (not just RNG).
+# If sacct shows TIMEOUT on baseline only, resubmit that stage (same OUT_DIR; caches intact):
+#   export OUT_DIR=... MGAP_SBATCH_BASE="--mem=192G --time=12:00:00 --cpus-per-task=8"
+#   sbatch --export=ALL,MASK_GAP_STAGE=baseline_shard scripts/slurm_mask_score_gap_parallel_light_r1.slurm
+# Then wire milestone array + merge with dependencies to that new job id, or run submit script after scanceling stale DAG.
+#
+# --- Tight deadline / reduced scope (tradeoffs: document in paper) ---
+# Faster approximate runs (export before bash scripts/submit_mask_score_gap_parallel_light_r1.sh):
+#   MAX_KEYS=50                     # subset of layers — τ not comparable to full model
+#   MAGNITUDE_MILESTONES=50         # fewer array tasks after baseline
+#   HISTOGRAM_BINS=512              # cheaper histograms (Slurm forwards env into ARGS)
+#   CERT_MATCH_TIE_BREAK=0          # plus --cert_no_match_tie_break below — skips tie-break noise (semantic drift vs mask API)
+# Slurm adds --cert_no_match_tie_break when CERT_MATCH_TIE_BREAK is 0|false (see slurm_mask_score_gap_parallel_light_r1.slurm).
+#
+# --- Avoid duplicate work ---
+# If mask_score_gap_summary.csv + NPZ already exist under OUT_DIR (monolithic finished first), skip rerunning merge.
+# check_mask_score_gap_status.sh lists those files.
+#
 set -euo pipefail
 
 MGAP_SBATCH_EXTRA="${MGAP_SBATCH_EXTRA:-}"
 # Heavy stages: two full state dicts + streaming cert (defaults trimmed from 256G — raise if OOM)
 MGAP_SBATCH_CACHE="${MGAP_SBATCH_CACHE:---mem=192G --time=06:00:00 --cpus-per-task=8}"
-MGAP_SBATCH_BASE="${MGAP_SBATCH_BASE:---mem=192G --time=08:00:00 --cpus-per-task=8}"
-MGAP_SBATCH_MILESTONE="${MGAP_SBATCH_MILESTONE:---mem=192G --time=08:00:00 --cpus-per-task=8}"
+MGAP_SBATCH_BASE="${MGAP_SBATCH_BASE:---mem=192G --time=12:00:00 --cpus-per-task=8}"
+MGAP_SBATCH_MILESTONE="${MGAP_SBATCH_MILESTONE:---mem=192G --time=12:00:00 --cpus-per-task=8}"
 # merge_parallel_shards + matplotlib: small RSS vs loading checkpoints
 MGAP_SBATCH_MERGE="${MGAP_SBATCH_MERGE:---mem=48G --time=01:00:00 --cpus-per-task=2}"
 
