@@ -43,7 +43,8 @@ echo "--- parallel_shards (baseline must finish before milestone array runs) ---
 PSD="${OUT_DIR}/parallel_shards"
 if [ -d "${PSD}" ]; then
   ls -lah "${PSD}" 2>/dev/null || true
-  for f in baseline_shard.done baseline_shard.pt; do
+  # merge_parallel_shards expects baseline_shard.pt + baseline_shard.pt.done (see mask_score_gap_analysis.py)
+  for f in baseline_shard.pt baseline_shard.pt.done; do
     if [ -f "${PSD}/${f}" ]; then
       echo "OK   ${PSD}/${f}"
     else
@@ -51,8 +52,8 @@ if [ -d "${PSD}" ]; then
     fi
   done
   shopt -s nullglob
-  for f in "${PSD}"/milestone_*_shard.done; do
-    echo "OK   $(basename "$f")"
+  for f in "${PSD}"/milestone_*_shard.pt "${PSD}"/milestone_*_shard.pt.done; do
+    [ -e "$f" ] && echo "OK   $(basename "$f")"
   done
   shopt -u nullglob
 else
