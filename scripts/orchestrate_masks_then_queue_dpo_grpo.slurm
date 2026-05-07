@@ -436,7 +436,7 @@ submit_training_job() {
 # Random baseline: one file reused for DPO (Tulu3), DPO (Light-R1), and GRPO sparse-random.
 export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 
-# DPO masks — Tulu3 calibration (scripts/dpo_5k_hpc_copypaste.md)
+# DPO masks — Tulu3 calibration
 export MASK_RANDOM="${MASK_DIR}/random_${MODEL//\//_}_sparsity${SPARSITY_PERCENT}pct_seed${RANDOM_MASK_SEED}.pt"
 export MASK_WANDA="${MASK_DIR}/wanda_owl_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"
 export MASK_ORACLE_TULU3="${MASK_DIR}/ground_truth_ckpt_diff_${MODEL_SANITIZED}_tulu3_sparsity${SPARSITY_PERCENT}pct.pt"

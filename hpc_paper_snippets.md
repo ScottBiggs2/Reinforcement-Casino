@@ -239,7 +239,7 @@ The repository’s \textbf{default} selection mode is a \emph{hybrid}: \emph{glo
 
 ### DPO (dense + sparse) — pipeline-style env knobs
 
-Defaults are primarily set/propagated by `scripts/pipeline_common.sh` (dense stage) and used again by sparse stages; long-run copy/paste blocks also live in `scripts/dpo_5k_hpc_copypaste.md`.
+Defaults are primarily set/propagated by `scripts/pipeline_common.sh` (dense stage) and used again by sparse stages; for long-run launches, prefer the pipeline scripts in `scripts/`.
 
 ```latex
 % Requires: \usepackage{booktabs}

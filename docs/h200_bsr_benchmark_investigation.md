@@ -21,7 +21,7 @@ With **few steps per phase** (historically default 8), a fixed multi-second setu
 
 ## 2. Mask scope: MLP-only vs full model (and why this is not a dig at production GRPO)
 
-The Slurm wrapper **`h200_sparse_dpo_bsr_benchmark.sh` does not pass `--mlp_only`**, so random masks target **all** scored 2D weights the driver assigns; `replace_linear_modules` swaps **every** `nn.Linear` that has a mask—including **attention and embeddings**—for `SparseLinearLayer` where applicable. That matches the **same default** as sparse GRPO in this repo: [`scripts/grpo_openr1_llama31_slurm.sh`](../scripts/grpo_openr1_llama31_slurm.sh) drives [`sparse_GRPO_v2.py`](../src/magic/sparse_GRPO_v2.py) with **`--mlp_only` unset** (`store_true`, default **False**), and [`GRPO_HPC_COPYPASTE.md`](GRPO_HPC_COPYPASTE.md) explicitly says to **omit** `--mlp_only` for full linear coverage. So “no `mlp_only`” is normal, supported production behavior—not a misconfiguration.
+The Slurm wrapper **`h200_sparse_dpo_bsr_benchmark.sh` does not pass `--mlp_only`**, so random masks target **all** scored 2D weights the driver assigns; `replace_linear_modules` swaps **every** `nn.Linear` that has a mask—including **attention and embeddings**—for `SparseLinearLayer` where applicable. That matches the **same default** as sparse GRPO in this repo: [`scripts/grpo_openr1_llama31_slurm.sh`](../scripts/grpo_openr1_llama31_slurm.sh) drives the sparse GRPO entrypoint with **`--mlp_only` unset** (`store_true`, default **False**). So “no `mlp_only`” is normal, supported production behavior—not a misconfiguration.
 
 **Why the benchmark CSV can still look scary while WandB GRPO looks fine**
 

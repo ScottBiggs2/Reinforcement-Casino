@@ -67,7 +67,7 @@ Training scripts already support Hugging Face Trainer resume (`--resume_from_che
 - **Resources**: **`ORCH_TRAIN_PARTITION`**, **`ORCH_TRAIN_GRES`**, **`ORCH_TRAIN_MEM`**, **`ORCH_TRAIN_CPUS`** (GRPO only), **`ORCH_TRAIN_TIME_DPO`**, **`ORCH_TRAIN_TIME_GRPO`** override the cluster without editing the inner scripts.
 - Keep **`DPO_SAVE_STEPS`** / **`GRPO_SAVE_STEPS`** frequent enough relative to **`ORCH_TRAIN_SOFT_SECONDS`** and the requested Slurm wall so checkpoints exist before a soft timeout or scheduler kill.
 
-**Manual resume** (unchanged): re-`sbatch` with **`DPO_RESUME=auto`** or **`GRPO_RESUME=auto`** and the same run identifiers; see [`dpo_5k_hpc_copypaste.md`](dpo_5k_hpc_copypaste.md) and [`docs/GRPO_HPC_COPYPASTE.md`](../docs/GRPO_HPC_COPYPASTE.md).
+**Manual resume** (unchanged): re-`sbatch` with **`DPO_RESUME=auto`** or **`GRPO_RESUME=auto`** and the same run identifiers; see [`docs/GRPO_OPEN_R1_RUNBOOK.md`](../docs/GRPO_OPEN_R1_RUNBOOK.md) for GRPO and the pipeline sections in this file for DPO.
 
 ## Full RL Casino pipeline (Tulu3 / Llama 3.1 8B IT)
 

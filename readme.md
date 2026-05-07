@@ -28,7 +28,6 @@ Operational details (stage breakdown, resume helper, output layout, auto-resume 
 - **Slurm launcher**: `scripts/grpo_openr1_llama31_slurm.sh`
 - **Runbook**: `docs/GRPO_OPEN_R1_RUNBOOK.md`
 - **Canonical hyperparameters**: `docs/hyperparams/open_r1_llama31.yaml`
-- **HPC copy/paste blocks**: `docs/GRPO_HPC_COPYPASTE.md`
 
 Important GRPO notes:
 
@@ -158,7 +157,6 @@ Short dataset pointers live in `src/data/datasets.md`:
 
 - `docs/COLLABORATOR_GRPO_AND_AUTOMATION.md`
 - `docs/GRPO_OPEN_R1_RUNBOOK.md`
-- `docs/GRPO_HPC_COPYPASTE.md`
 - `docs/TROUBLESHOOTING_GRPO.md`
 - `src/full_training/README.md`
 - `src/evaluation/README.md`

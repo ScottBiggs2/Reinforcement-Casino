@@ -22,7 +22,7 @@ dataset:
 # Launched by: scripts/grpo_openr1_llama31_slurm.sh
 #
 # Enforcement: scripts/grpo_training_env_defaults.sh freezes these values at runtime
-# (GRPO_HPARAM_MODE=locked) unless GRPO_HPARAM_OVERRIDE=1. See docs/GRPO_HPC_COPYPASTE.md.
+# (GRPO_HPARAM_MODE=locked) unless GRPO_HPARAM_OVERRIDE=1. See docs/GRPO_OPEN_R1_RUNBOOK.md.
 # -----------------------------------------------------------------------------
 grpo_open_r1:
   learning_rate: 5.0e-6

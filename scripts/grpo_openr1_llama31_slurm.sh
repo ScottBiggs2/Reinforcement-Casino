@@ -13,8 +13,8 @@
 #   export GRPO_MASK="${GRPO_MASK_DIR}/snip_grpo.pt"
 #   export GRPO_MODE=sparse
 #   sbatch scripts/grpo_openr1_llama31_slurm.sh
-# See docs/GRPO_HPC_COPYPASTE.md for --snip-objective lm vs dpo_preference and full paths.
-# Scratch layout (override any): GRPO_MASK_DIR, GRPO_DENSE_OUTPUT_BASE, GRPO_SPARSE_OUTPUT_BASE — see docs/GRPO_HPC_COPYPASTE.md
+# For SNIP objectives (`--snip-objective lm` vs `dpo_preference`) and common env knobs, see docs/GRPO_OPEN_R1_RUNBOOK.md.
+# Scratch layout (override any): GRPO_MASK_DIR, GRPO_DENSE_OUTPUT_BASE, GRPO_SPARSE_OUTPUT_BASE.
 #   GRPO_RESUME=auto GRPO_TARGET_STEPS=1000 sbatch ...   # same run_slug / run_name as prior job
 #
 # Explorer / many sites: the gpu partition requires an explicit --gres; omitting it can yield
@@ -58,7 +58,7 @@ fi
 
 SCRATCH_USER_ROOT="${SCRATCH_USER_ROOT:-/scratch/${USER:-unknown}}"
 export RL_CASINO_SCRATCH_ROOT="${RL_CASINO_SCRATCH_ROOT:-$SCRATCH_USER_ROOT}"
-# GRPO artifacts (separate from DPO pipeline's rl_casino_masks / rl_casino_train); see docs/GRPO_HPC_COPYPASTE.md
+# GRPO artifacts (separate from DPO pipeline's rl_casino_masks / rl_casino_train).
 export GRPO_MASK_DIR="${GRPO_MASK_DIR:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/masks}"
 export GRPO_DENSE_OUTPUT_BASE="${GRPO_DENSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense}"
 export GRPO_SPARSE_OUTPUT_BASE="${GRPO_SPARSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/sparse}"
