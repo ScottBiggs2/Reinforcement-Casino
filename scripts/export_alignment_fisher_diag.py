@@ -17,6 +17,14 @@ from typing import Dict
 
 import torch
 
+import os
+import sys
+
+# Ensure imports work when invoked from sbatch --wrap or any cwd.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from src.cold_start.cold_mask_finder import load_calibration_data, compute_fisher_scores, sanitize_model_name
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
