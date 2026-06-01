@@ -32,6 +32,8 @@ results/
 
 # Training runs / checkpoints / artifacts (RL-irene safety)
 logs/
+.artifacts/
+docs/paper_drafts/
 checkpoints*/
 delta_logs*/
 *.safetensors
