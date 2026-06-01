@@ -40,6 +40,7 @@ reconstructed_checkpoints/
 masks/
 *.out
 *.err
+*.pdf
 
 current_error.txt
 current_out.txt
