@@ -119,6 +119,8 @@ def compute_absolute_magnitude_mask_streaming(
     mlp_only=False,
     local_pool=False,
     min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+    seed=None,
+    jitter_rel=1e-3,
 ):
     """
     Magnitude mask with streaming: accumulate on GPU, never load all checkpoints at once.
@@ -157,7 +159,17 @@ def compute_absolute_magnitude_mask_streaming(
         for idx, name in enumerate(list(aggregated.keys())[:5]):
             score = aggregated[name]
             print(f"  {name}: min={score.min().item():.10f}, max={score.max().item():.10f}, mean={score.mean().item():.10f}")
-    
+
+    if seed is not None:
+        print(f"\nApplying score jitter: seed={seed}, jitter_rel={jitter_rel}")
+        gen = torch.Generator(device="cpu").manual_seed(int(seed))
+        for name in list(aggregated.keys()):
+            sc = aggregated[name]
+            eps = float(sc.std().item()) * jitter_rel
+            noise = torch.randn(sc.shape, generator=gen,
+                                dtype=sc.dtype).to(sc.device) * eps
+            aggregated[name] = sc + noise
+
     masks = create_mask_from_scores_gpu_efficient(
         aggregated,
         sparsity_percent,
@@ -499,6 +511,8 @@ def main(args):
             mlp_only=args.mlp_only,
             local_pool=args.local_pool,
             min_layer_keep_ratio=args.min_layer_keep_ratio,
+            seed=getattr(args, "seed", None),
+            jitter_rel=getattr(args, "jitter_rel", 1e-3),
         )
         method_suffix = "magnitude"
     
@@ -638,7 +652,14 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU execution (slow but works without GPU)")
-    
+    parser.add_argument("--seed", type=int, default=None,
+                        help="If set, add per-tensor randn jitter (eps=std*jitter_rel) "
+                             "to accumulated magnitude scores before topk. Used for "
+                             "variance studies of the otherwise-deterministic mask.")
+    parser.add_argument("--jitter_rel", type=float, default=1e-3,
+                        help="Jitter magnitude as fraction of per-tensor score std "
+                             "(default 1e-3 = 0.1%%). Only used when --seed is set.")
+
     args = parser.parse_args()
     main(args)
 

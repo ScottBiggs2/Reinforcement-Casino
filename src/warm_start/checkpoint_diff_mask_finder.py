@@ -106,7 +106,15 @@ def main(args):
         param_count += 1
 
     print(f"Matched {match_count} parameters for scoring (out of {param_count} total).")
-    
+
+    if getattr(args, "seed", None) is not None:
+        print(f"\nApplying score jitter: seed={args.seed}, jitter_rel={args.jitter_rel}")
+        gen = torch.Generator(device="cpu").manual_seed(int(args.seed))
+        for name, score in scores.items():
+            eps = float(score.std().item()) * args.jitter_rel
+            noise = torch.randn(score.shape, generator=gen, dtype=score.dtype) * eps
+            scores[name] = score + noise
+
     # Clean up to save memory
     del initial_sd
     del final_sd
@@ -140,6 +148,9 @@ def main(args):
         "final_model": args.final_model,
         "mlp_only": args.mlp_only,
         "device": device,
+        "seed": getattr(args, "seed", None),
+        "jitter_rel": (args.jitter_rel
+                       if getattr(args, "seed", None) is not None else None),
         **pooling_metadata(
             local_pool=args.local_pool,
             min_layer_keep_ratio=args.min_layer_keep_ratio,
@@ -160,6 +171,13 @@ if __name__ == "__main__":
     parser.add_argument("--local_pool", action="store_true", help="Use local (per-layer) pooling")
     parser.add_argument("--min_layer_keep_ratio", type=float, default=DEFAULT_MIN_LAYER_KEEP_RATIO, help="Per-layer keep floor")
     parser.add_argument("--force_cpu", action="store_true", help="Force CPU for mask generation")
-    
+    parser.add_argument("--seed", type=int, default=None,
+                        help="If set, add per-tensor randn jitter (eps=std*jitter_rel) "
+                             "to |Δθ| scores before topk. Used for variance studies "
+                             "of the otherwise-deterministic oracle.")
+    parser.add_argument("--jitter_rel", type=float, default=1e-3,
+                        help="Jitter magnitude as a fraction of per-tensor score std "
+                             "(default 1e-3 = 0.1%%). Only used when --seed is set.")
+
     args = parser.parse_args()
     main(args)
