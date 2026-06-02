@@ -10,8 +10,8 @@ os.environ["WANDB_MODE"] = "online"
 os.environ.pop("WANDB_SILENT", None)
 os.environ.setdefault("WANDB_CONSOLE", "off")
 
-import json
 import argparse
+import json
 import torch
 import wandb
 from transformers import (
@@ -137,6 +137,24 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to a checkpoint-* directory, or 'auto' for latest under output_dir.",
+    )
+    parser.add_argument(
+        "--fsdp",
+        type=str,
+        default="",
+        help="FSDP mode string passed to DPOConfig (e.g. 'full_shard auto_wrap').",
+    )
+    parser.add_argument(
+        "--fsdp_config",
+        type=str,
+        default=None,
+        help="JSON string with FSDP config dict (e.g. transformer layer class to wrap).",
+    )
+    parser.add_argument(
+        "--precompute_ref_log_probs",
+        action="store_true",
+        help="Precompute and cache reference model log-probs before training, "
+             "freeing reference model GPU memory during the training loop.",
     )
     return parser.parse_args()
 
@@ -300,6 +318,9 @@ def main() -> None:
         beta=args.dpo_beta,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
+        fsdp=args.fsdp if args.fsdp else "",
+        fsdp_config=json.loads(args.fsdp_config) if args.fsdp_config else {},
+        precompute_ref_log_probs=args.precompute_ref_log_probs,
     )
 
     print(
