@@ -91,6 +91,8 @@ def train(
     use_wandb: bool = True,
     train_dataset=None,
     tokenizer_obj=None,
+    load_in_8bit: bool = False,
+    precompute_ref_log_probs: bool = False,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -155,14 +157,28 @@ def train(
         dpo_dataset = registry_load_dpo(dataset_key, subset_size=subset_size)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        dtype=torch.bfloat16,
-        low_cpu_mem_usage=True,
-        device_map=None,
-    )
+    if load_in_8bit:
+        # int8 weight storage (bitsandbytes): policy ~32 GB for 32B, ref model freed via
+        # precompute_ref_log_probs.  Trainable (unmasked) params will have requires_grad=True;
+        # frozen (masked-out) params have requires_grad=False, so gradients + SparseAdamW
+        # states only exist for the 2.5% active weights.
+        # If SparseAdamW raises a dtype error at the optimizer step, fall back to
+        # --load_in_8bit=false with 2 GPUs.
+        model = AutoModelForCausalLM.from_pretrained(
+            checkpoint_path,
+            load_in_8bit=True,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            checkpoint_path,
+            dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+            device_map=None,
+        )
     model.config.use_cache = False
-    
+
     mask_manager: Optional[SparseMaskManager] = None
     if optimizer_type == "sparse_adamw":
         if mask_path is None or not str(mask_path).strip():
@@ -171,6 +187,18 @@ def train(
         if not os.path.isfile(mask_path_resolved):
             raise FileNotFoundError(f"Mask file not found: {mask_path_resolved}")
         mask_manager = SparseMaskManager(mask_path_resolved, device=device)
+
+    if load_in_8bit and mask_manager is not None:
+        # Enable gradients only on unmasked (trainable) parameters so bitsandbytes'
+        # autograd + SparseAdamW operate on the 2.5% active weight subset.
+        _n_trainable = 0
+        for name, param in model.named_parameters():
+            is_active = name in mask_manager.masks and mask_manager.masks[name].any().item()
+            param.requires_grad_(bool(is_active))
+            if is_active:
+                _n_trainable += 1
+        print(f"int8 mode: {_n_trainable} trainable param tensors (requires_grad=True), "
+              f"rest frozen in int8")
     
     # Optimizer Logic
     print(f"Initializing {optimizer_type}...")
@@ -293,11 +321,12 @@ def train(
         report_to="wandb" if use_wandb else "none",
         run_name=run_name,
         remove_unused_columns=False,
-        bf16=True,
+        bf16=not load_in_8bit,
         gradient_checkpointing=gradient_checkpointing,
         beta=dpo_beta,
         max_length=max_length,
         max_prompt_length=max_prompt_length,
+        precompute_ref_log_probs=precompute_ref_log_probs,
     )
 
     trainer = DPOTrainer(
@@ -401,6 +430,19 @@ if __name__ == "__main__":
         default=None,
         help="Path to checkpoint-* dir, or 'auto' for latest under run_dir/checkpoints.",
     )
+    parser.add_argument(
+        "--load_in_8bit",
+        action="store_true",
+        help="Load model weights in int8 via bitsandbytes (~50%% VRAM reduction). "
+             "Trainable (unmasked) params have requires_grad=True; frozen params stay in int8. "
+             "Combine with --precompute_ref_log_probs to keep peak VRAM below 80 GB for 32B models.",
+    )
+    parser.add_argument(
+        "--precompute_ref_log_probs",
+        action="store_true",
+        help="Precompute reference model log-probs before training; reference model is freed "
+             "from VRAM before the training loop, matching the DPO_train.py option.",
+    )
 
     args = parser.parse_args()
 
@@ -431,4 +473,6 @@ if __name__ == "__main__":
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
         resume_from_checkpoint=args.resume_from_checkpoint,
+        load_in_8bit=args.load_in_8bit,
+        precompute_ref_log_probs=args.precompute_ref_log_probs,
     )
