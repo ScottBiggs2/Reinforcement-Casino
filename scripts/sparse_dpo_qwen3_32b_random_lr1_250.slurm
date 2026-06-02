@@ -25,7 +25,7 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:1
-#SBATCH --time=07:45:00
+#SBATCH --time=05:00:00
 #SBATCH --job-name=sdpo_q332b_rand_lr1
 #SBATCH --mem=192G
 #SBATCH --ntasks=1

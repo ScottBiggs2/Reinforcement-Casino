@@ -24,7 +24,7 @@
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:2
-#SBATCH --time=07:45:00
+#SBATCH --time=05:00:00
 #SBATCH --job-name=dpo_qwen3_32b_lr1_500
 #SBATCH --mem=192G
 #SBATCH --ntasks=1
@@ -66,7 +66,7 @@ export DPO_MAX_PROMPT_LENGTH="${DPO_MAX_PROMPT_LENGTH:-1024}"
 export MULTIGPU_OPTIM="${MULTIGPU_OPTIM:-adamw_8bit}"
 
 # HF checkpoint: save at end of training only
-export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-500}"
+export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-250}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-2}"
 
 # ---------------------------------------------------------------------------
