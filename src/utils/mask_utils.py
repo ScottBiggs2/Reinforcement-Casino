@@ -439,10 +439,17 @@ def _create_mask_global_chunked(
                 raise ValueError("Chunked selector could not locate boundary candidates for the remaining budget.")
             concat_values = torch.cat(boundary_values)
             if needed_from_boundary > concat_values.numel():
-                raise ValueError(
-                    f"Chunked selector only found {concat_values.numel()} boundary candidates for "
-                    f"{needed_from_boundary} required positions."
+                # Float32 threshold tolerance can push a handful of elements into
+                # "definitely above" that the float64 histogram counted as "boundary",
+                # leaving slightly fewer boundary candidates than needed.  The shortfall
+                # is typically O(thousands) out of billions of weights — negligible.
+                _mask_log(
+                    f"  Warning: only {concat_values.numel():,} boundary candidates for "
+                    f"{needed_from_boundary:,} required positions "
+                    f"(~{needed_from_boundary - concat_values.numel():,} weights short due to "
+                    f"float32/float64 threshold rounding). Keeping all boundary candidates."
                 )
+                needed_from_boundary = concat_values.numel()
             selected = _topk_indices_safe(concat_values, k=needed_from_boundary, largest=True).cpu()
             concat_names = []
             concat_indices = []

@@ -4,8 +4,15 @@
 # Memory strategy:
 #   - FSDP full_shard: 64 GB weights sharded across 2 GPUs → 32 GB per GPU
 #   - precompute_ref_log_probs: ref model runs once to cache logprobs, then
-#     freed before training begins (~32 GB recovered per GPU)
-#   - gradient_checkpointing: activations recomputed, not stored
+#     freed before training begins (~32 GB recovered per GPU).
+#     NOTE: fsdp_cpu_ram_efficient_loading is intentionally omitted — it leaves
+#     non-individually-wrapped modules (embed_tokens, final norm) on CPU, which
+#     causes a device mismatch during the precompute forward pass on rank > 0.
+#     Without it, each rank loads the full ~64 GB model to CPU RAM then shards;
+#     with --mem=192G this fits (2 ranks × 64 GB = 128 GB peak RAM).
+#   - activation_checkpointing in fsdp_config: activations recomputed, not stored
+#     (replaces gradient_checkpointing in TrainingArguments, which adds a redundant
+#     AllGather in the FSDP backward pass)
 #   - adamw_8bit: optimizer states 4× smaller (fallback: adamw_torch_fused)
 #   Budget: ~77 GB / 80 GB H200 per GPU during training (2 GPUs)
 #            ~41 GB / 80 GB H200 per GPU during training (4 GPUs)
@@ -71,10 +78,11 @@ export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-2}"
 
 # ---------------------------------------------------------------------------
 # FSDP config — one FSDP unit per Qwen3 decoder layer
-# fsdp_use_orig_params preserves unflattened param views for bitsandbytes compat
-# fsdp_cpu_ram_efficient_loading shards weights at load time (avoids peak OOM)
+# fsdp_use_orig_params: preserves unflattened param views for bitsandbytes compat
+# activation_checkpointing: avoids redundant AllGather that gradient_checkpointing
+#   in TrainingArguments would cause; see memory strategy note above
 # ---------------------------------------------------------------------------
-FSDP_CONFIG='{"fsdp_transformer_layer_cls_to_wrap":"Qwen3DecoderLayer","fsdp_use_orig_params":true,"fsdp_cpu_ram_efficient_loading":true,"fsdp_state_dict_type":"FULL_STATE_DICT","fsdp_backward_prefetch_policy":"BACKWARD_PRE"}'
+FSDP_CONFIG='{"fsdp_transformer_layer_cls_to_wrap":"Qwen3DecoderLayer","fsdp_use_orig_params":true,"fsdp_state_dict_type":"FULL_STATE_DICT","fsdp_backward_prefetch_policy":"BACKWARD_PRE","activation_checkpointing":true}'
 
 # ---------------------------------------------------------------------------
 # Pipeline boilerplate (paths, env check, W&B, etc.)
@@ -97,7 +105,7 @@ echo "===== DPO: Qwen3-32B / light-r1 / ${NUM_STEPS_DPO} steps (RUN_ID=${RUN_ID}
 echo "  model            : ${MODEL}"
 echo "  dataset          : ${DPO_DATASET_KEY}"
 echo "  steps            : ${NUM_STEPS_DPO}"
-echo "  gpus             : ${MULTIGPU_NGPUS}  (FSDP full_shard + precompute_ref_log_probs)"
+echo "  gpus             : ${MULTIGPU_NGPUS}  (FSDP full_shard + precompute_ref_log_probs + activation_checkpointing)"
 echo "  lr               : ${DPO_LEARNING_RATE}  warmup: ${DPO_WARMUP_RATIO}"
 echo "  batch/device     : ${DPO_PER_DEVICE_TRAIN_BATCH_SIZE}  grad_accum: ${DPO_GRADIENT_ACCUMULATION_STEPS}  effective: ${EFF_BATCH}"
 echo "  dpo_beta         : ${DPO_BETA}  max_length: ${DPO_MAX_LENGTH}"
@@ -119,7 +127,6 @@ torchrun --standalone --nproc_per_node="${MULTIGPU_NGPUS}" \
     --max_prompt_length            "$DPO_MAX_PROMPT_LENGTH" \
     --save_steps                   "$DPO_SAVE_STEPS" \
     --save_total_limit             "$DPO_SAVE_TOTAL_LIMIT" \
-    --gradient_checkpointing \
     --optim                        "$MULTIGPU_OPTIM" \
     --fsdp                         "full_shard auto_wrap" \
     --fsdp_config                  "$FSDP_CONFIG" \

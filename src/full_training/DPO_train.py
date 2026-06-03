@@ -281,6 +281,19 @@ def main() -> None:
     if args.no_gradient_checkpointing:
         _grad_ckpt = False
 
+    fsdp_cfg = json.loads(args.fsdp_config) if args.fsdp_config else {}
+    using_fsdp = bool(args.fsdp)
+
+    # gradient_checkpointing in TrainingArguments introduces a redundant AllGather in the
+    # FSDP backward pass.  Use activation_checkpointing in fsdp_config instead.
+    if _grad_ckpt and using_fsdp:
+        print(
+            "Warning: --gradient_checkpointing with FSDP full_shard causes a redundant AllGather "
+            "in backward. Switching to fsdp_config activation_checkpointing."
+        )
+        _grad_ckpt = False
+        fsdp_cfg.setdefault("activation_checkpointing", True)
+
     save_steps_arg = args.save_steps
     save_total_limit_arg = args.save_total_limit if args.save_total_limit is not None else 3
     use_hf_rolling = save_steps_arg is not None and save_steps_arg > 0 and save_steps_arg < 10**9
@@ -319,7 +332,7 @@ def main() -> None:
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
         fsdp=args.fsdp if args.fsdp else "",
-        fsdp_config=json.loads(args.fsdp_config) if args.fsdp_config else {},
+        fsdp_config=fsdp_cfg,
         precompute_ref_log_probs=args.precompute_ref_log_probs,
     )
 
