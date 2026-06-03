@@ -134,20 +134,31 @@ def main(args):
     scores = {}
     param_count = 0
     match_count = 0
-    
-    for name in final_sd:
-        if name in initial_sd:
-            if args.mlp_only and not is_mlp_param(name):
-                continue
-            
-            # Use float32 for scores to maintain precision during subtraction
-            diff = (final_sd[name].to(torch.float32) - initial_sd[name].to(torch.float32)).abs()
-            scores[name] = diff
-            match_count += 1
-        param_count += 1
+    skipped_non2d = 0
 
-    print(f"Matched {match_count} parameters for scoring (out of {param_count} total).")
-    print(f"Key coverage (final ∩ initial): {100.0 * match_count / max(param_count, 1):.2f}%")
+    for name in final_sd:
+        param_count += 1
+        if name not in initial_sd:
+            continue
+        if args.mlp_only and not is_mlp_param(name):
+            continue
+        # Mirror generate_random_mask.py: score only 2D named-weight tensors.
+        # This excludes 1D LayerNorm/QK-norm vectors, bias terms, and any
+        # other non-matrix parameters, matching the random-mask parameter universe.
+        # 2D matrices (linear projections, embeddings) are scored normally.
+        t = final_sd[name]
+        if "weight" not in name or t.dim() != 2:
+            skipped_non2d += 1
+            continue
+
+        # Use float32 for scores to maintain precision during subtraction
+        diff = (t.to(torch.float32) - initial_sd[name].to(torch.float32)).abs()
+        scores[name] = diff
+        match_count += 1
+
+    print(f"Matched {match_count} 2-D weight tensors for scoring (out of {param_count} total keys).")
+    print(f"Skipped {skipped_non2d} non-2D or non-weight tensors (embeds, norms, biases).")
+    print(f"Key coverage (2-D weights, final ∩ initial): {100.0 * match_count / max(param_count, 1):.2f}%")
     
     # Clean up to save memory
     del initial_sd

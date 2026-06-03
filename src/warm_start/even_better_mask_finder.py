@@ -89,10 +89,15 @@ def compute_ground_truth_mask_streaming(
     print(f"Loading final deltas on: {score_device}")
     final_deltas = torch.load(final_path, map_location=score_device)
     
-    # Compute scores directly on GPU
+    # Compute scores directly on GPU — restrict to 2D named-weight tensors to match
+    # generate_random_mask.py and avoid 1D norm/bias parameters (e.g. Qwen3 QK-norms)
+    # dominating the global budget. Backwards-compatible: Llama's 1D norms were
+    # already negligible (<0.003% of parameters); now they're consistently excluded.
     scores = {}
     for name, delta in final_deltas.items():
         if mlp_only and not is_mlp_param(name):
+            continue
+        if "weight" not in name or delta.dim() != 2:
             continue
         scores[name] = delta.abs()
     
@@ -136,9 +141,14 @@ def compute_absolute_magnitude_mask_streaming(
         
         deltas = torch.load(delta_path, map_location=score_device)
         
-        # Initialize aggregated dict on first pass
+        # Initialize aggregated dict on first pass — 2D named-weight tensors only.
         if param_names is None:
-            param_names = [name for name in deltas.keys() if not mlp_only or is_mlp_param(name)]
+            param_names = [
+                name for name in deltas.keys()
+                if (not mlp_only or is_mlp_param(name))
+                and "weight" in name
+                and deltas[name].dim() == 2
+            ]
             for name in param_names:
                 aggregated[name] = torch.zeros_like(deltas[name], device=score_device)
         
@@ -213,8 +223,13 @@ def compute_momentum_mask_streaming(
         curr_deltas = torch.load(delta_path, map_location=score_device)
         
         if param_names is None:
-            param_names = [name for name in curr_deltas.keys() if not mlp_only or is_mlp_param(name)]
-        
+            param_names = [
+                name for name in curr_deltas.keys()
+                if (not mlp_only or is_mlp_param(name))
+                and "weight" in name
+                and curr_deltas[name].dim() == 2
+            ]
+
         if prev_deltas is not None:
             # Compute velocity: v_t = delta_t - delta_{t-1}
             for name in param_names:
@@ -320,7 +335,12 @@ def compute_fisher_mask_streaming(
         deltas = torch.load(delta_path, map_location=score_device)
         
         if param_names is None:
-            param_names = [name for name in deltas.keys() if not mlp_only or is_mlp_param(name)]
+            param_names = [
+                name for name in deltas.keys()
+                if (not mlp_only or is_mlp_param(name))
+                and "weight" in name
+                and deltas[name].dim() == 2
+            ]
             for name in param_names:
                 sum_delta[name] = torch.zeros_like(deltas[name], device=score_device)
                 sum_delta_sq[name] = torch.zeros_like(deltas[name], device=score_device)
