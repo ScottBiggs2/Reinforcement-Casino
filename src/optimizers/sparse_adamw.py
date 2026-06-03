@@ -38,9 +38,26 @@ class SparseAdamW(torch.optim.Optimizer):
     ):
         self.param_to_name = {}
         params = []
+        _seen_ptrs: set = set()
+        _n_tied_skipped = 0
         for name, param in named_params:
+            ptr = param.data_ptr()
+            if ptr in _seen_ptrs:
+                # Tied weight (same underlying storage, different name).
+                # Skipping avoids (a) double Adam updates per step and (b) the
+                # embedding norm being counted twice in _clip_grads_sparse, which
+                # would inflate total_norm_sq and clip ALL gradients toward zero.
+                # The first-encountered name is kept; its mask entry will be used.
+                _n_tied_skipped += 1
+                continue
+            _seen_ptrs.add(ptr)
             params.append(param)
             self.param_to_name[id(param)] = name
+        if _n_tied_skipped:
+            slurm_safe_print(
+                f"SparseAdamW: skipped {_n_tied_skipped} tied-weight duplicate(s) "
+                f"(tie_word_embeddings or shared storage). Each unique tensor appears once."
+            )
         
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
         super().__init__(params, defaults)

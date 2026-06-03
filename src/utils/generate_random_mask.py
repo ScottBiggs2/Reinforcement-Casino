@@ -74,15 +74,23 @@ def generate_random_mask(
 
     total_params = 0
     scores = {}
+    _seen_ptrs: set = set()
 
-    # Identify target parameters
+    # Identify target parameters — 2D named-weight matrices only, deduplicated by
+    # data_ptr() to skip tied weights (e.g. Qwen3's lm_head == embed_tokens).
+    # Without dedup, tied tensors generate two independent random score tensors that
+    # both compete in the global budget, double-counting the embedding.
     for name, param in model.named_parameters():
         if 'weight' not in name:
             continue
         if mlp_only and 'mlp' not in name.lower():
             continue
-        if param.dim() != 2: # Only linear layers
+        if param.dim() != 2:
             continue
+        ptr = param.data_ptr()
+        if ptr in _seen_ptrs:
+            continue
+        _seen_ptrs.add(ptr)
         total_params += param.numel()
         scores[name] = torch.rand(param.shape, dtype=torch.float32)
 

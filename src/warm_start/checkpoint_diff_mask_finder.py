@@ -130,6 +130,28 @@ def main(args):
     initial_sd = load_state_dict(args.initial_model, device="cpu")
     final_sd = load_state_dict(args.final_model, device="cpu")
 
+    # Detect tied parameters in initial_sd by value equality on 2D weight matrices.
+    # Tied pairs (e.g. embed_tokens.weight == lm_head.weight) share identical initial
+    # weights and identical diffs; scoring both inflates the global budget.
+    # We build a set of names to skip: for every duplicate (same shape AND allclose
+    # initial values), keep only the first-encountered key.
+    print("\nDetecting tied parameters in initial checkpoint...")
+    _tied_skip: set = set()
+    _seen_initial: list = []  # list of (name, tensor) to compare against
+    for name, t in initial_sd.items():
+        if "weight" not in name or t.dim() != 2:
+            continue
+        skip = False
+        for seen_name, seen_t in _seen_initial:
+            if seen_t.shape == t.shape and torch.allclose(seen_t, t, atol=0.0, rtol=0.0):
+                _tied_skip.add(name)
+                skip = True
+                print(f"  Tied: '{name}' == '{seen_name}' — skipping duplicate")
+                break
+        if not skip:
+            _seen_initial.append((name, t))
+    del _seen_initial
+
     print("\nComputing weight differences (scores)...")
     scores = {}
     param_count = 0
@@ -146,6 +168,9 @@ def main(args):
         # This excludes 1D LayerNorm/QK-norm vectors, bias terms, and any
         # other non-matrix parameters, matching the random-mask parameter universe.
         # 2D matrices (linear projections, embeddings) are scored normally.
+        if name in _tied_skip:
+            skipped_non2d += 1
+            continue
         t = final_sd[name]
         if "weight" not in name or t.dim() != 2:
             skipped_non2d += 1
