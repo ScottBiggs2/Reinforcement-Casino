@@ -14,11 +14,11 @@
 #     (replaces gradient_checkpointing in TrainingArguments, which adds a redundant
 #     AllGather in the FSDP backward pass)
 #   - adamw_8bit: optimizer states 4× smaller (fallback: adamw_torch_fused)
-#   Budget: ~77 GB / 80 GB H200 per GPU during training (2 GPUs)
-#            ~41 GB / 80 GB H200 per GPU during training (4 GPUs)
-#
-# To use 4 GPUs for more headroom:
-#   sbatch --gres=gpu:h200:4 -v MULTIGPU_NGPUS=4 scripts/dpo_qwen3_32b_light_r1_500.slurm
+#   Budget: ~40 GB / 141 GB H200 NVL per GPU during training (4 GPUs)
+#   (2-GPU path OOMs: FSDP retains original bf16 tensor data in FlatParameter
+#   bookkeeping during training, keeping 64 GB + 32 GB shard + 32 GB grads
+#   = ~128 GB active — too close to the 141 GB limit for optimizer state alloc.
+#   4 GPUs reduce each component by 2×, giving comfortable headroom.)
 #
 # Chat template note: Qwen3-32B uses ChatML (<|im_start|>/<|im_end|>).
 # DPO_train.py never calls apply_chat_template — raw text tokenization only —
@@ -30,7 +30,7 @@
 #
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:2
+#SBATCH --gres=gpu:h200:4
 #SBATCH --time=05:00:00
 #SBATCH --job-name=dpo_qwen3_32b_lr1_500
 #SBATCH --mem=192G
@@ -55,16 +55,16 @@ cd "$REPO_ROOT"
 export MODEL="${MODEL:-Qwen/Qwen3-32B}"
 export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
 export NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
-export MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-2}"
+export MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-4}"
 
 # ---------------------------------------------------------------------------
 # Training knobs — match Qwen3-8B baseline where possible
 # ---------------------------------------------------------------------------
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
-# batch=1 (reduced from 2); grad_accum=64 → effective = 1×64×2GPUs = 128 (same as 8B)
+# batch=1; grad_accum=32 → effective = 1×32×4GPUs = 128 (same as 8B baseline)
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE="${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-1}"
-export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-64}"
+export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-32}"
 export DPO_BETA="${DPO_BETA:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export DPO_MAX_PROMPT_LENGTH="${DPO_MAX_PROMPT_LENGTH:-1024}"

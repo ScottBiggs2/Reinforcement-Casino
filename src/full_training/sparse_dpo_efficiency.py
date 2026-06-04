@@ -330,6 +330,14 @@ def train(
         precompute_ref_log_probs=precompute_ref_log_probs,
     )
 
+    if load_in_8bit:
+        # transformers 4.57+ blocks direct int8 fine-tuning without PEFT by checking
+        # is_quantized and not _hf_peft_config_loaded and not is_qat_trainable.
+        # bitsandbytes int8 sets is_trainable=True but is_qat_trainable=False (base class
+        # default), so the guard fires even though training is supported.  Setting
+        # _hf_peft_config_loaded bypasses the check; it is only read at trainer init.
+        model._hf_peft_config_loaded = True
+
     trainer = DPOTrainer(
         model=model,
         args=dpo_config,
