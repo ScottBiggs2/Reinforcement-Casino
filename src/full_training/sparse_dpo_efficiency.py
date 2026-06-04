@@ -194,7 +194,8 @@ def train(
         _n_trainable = 0
         for name, param in model.named_parameters():
             is_active = name in mask_manager.masks and mask_manager.masks[name].any().item()
-            param.requires_grad_(bool(is_active))
+            if param.is_floating_point():
+                param.requires_grad_(bool(is_active))
             if is_active:
                 _n_trainable += 1
         print(f"int8 mode: {_n_trainable} trainable param tensors (requires_grad=True), "

@@ -284,6 +284,15 @@ def main() -> None:
     fsdp_cfg = json.loads(args.fsdp_config) if args.fsdp_config else {}
     using_fsdp = bool(args.fsdp)
 
+    if using_fsdp and args.precompute_ref_log_probs:
+        # transformers Trainer calls get_train_dataloader() (line 2375) before _wrap_model /
+        # accelerator.prepare (line 2449), so TRL's precompute forward pass runs while the
+        # model is still on CPU.  Fix: move the full model to each rank's local GPU now so
+        # embed_tokens and all other params are device-resident for the precompute pass.
+        # 32B × 2 bytes (bf16) = 64 GB < 80 GB H200; FSDP shards to ~32 GB/GPU afterwards.
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        model = model.to(f"cuda:{local_rank}")
+
     # gradient_checkpointing in TrainingArguments introduces a redundant AllGather in the
     # FSDP backward pass.  Use activation_checkpointing in fsdp_config instead.
     if _grad_ckpt and using_fsdp:
