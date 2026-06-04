@@ -233,7 +233,7 @@ def main() -> None:
             p_ids, p_mask = pad_stack("prompt_input_ids")
             c_ids, c_mask = pad_stack("chosen_input_ids")
             r_ids, r_mask = pad_stack("rejected_input_ids")
-            return {
+            result = {
                 "prompt_input_ids": p_ids,
                 "prompt_attention_mask": p_mask,
                 "chosen_input_ids": c_ids,
@@ -241,6 +241,10 @@ def main() -> None:
                 "rejected_input_ids": r_ids,
                 "rejected_attention_mask": r_mask,
             }
+            for key in ("reference_chosen_logps", "reference_rejected_logps"):
+                if key in examples[0]:
+                    result[key] = torch.tensor([ex[key] for ex in examples])
+            return result
 
         prompts = [ex.get("prompt", "") for ex in examples]
         chosens = [ex.get("chosen", "") for ex in examples]
@@ -261,7 +265,7 @@ def main() -> None:
             batch_chosen[k] = batch_chosen[k].to(torch.long)
             batch_reject[k] = batch_reject[k].to(torch.long)
 
-        return {
+        result = {
             "prompt_input_ids": batch_prompt["input_ids"],
             "prompt_attention_mask": batch_prompt["attention_mask"],
             "chosen_input_ids": batch_chosen["input_ids"],
@@ -269,6 +273,10 @@ def main() -> None:
             "rejected_input_ids": batch_reject["input_ids"],
             "rejected_attention_mask": batch_reject["attention_mask"],
         }
+        for key in ("reference_chosen_logps", "reference_rejected_logps"):
+            if key in examples[0]:
+                result[key] = torch.tensor([ex[key] for ex in examples])
+        return result
 
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -423,8 +431,11 @@ def main() -> None:
                 with torch.no_grad():
                     for name, param in train_model.named_parameters():
                         current = param.detach().float().cpu()
-                        diff = current - self.base_state[name]
-                        full_deltas_to_save[name] = diff
+                        # FSDP wrapping prepends "_fsdp_wrapped_module." at each nesting
+                        # level; base_state was built pre-FSDP, so strip all occurrences.
+                        lookup = name.replace("_fsdp_wrapped_module.", "")
+                        diff = current - self.base_state[lookup]
+                        full_deltas_to_save[lookup] = diff
                 delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
                 torch.save(full_deltas_to_save, delta_file)
                 print(f"  ✓ Saved weight deltas at step {step}")

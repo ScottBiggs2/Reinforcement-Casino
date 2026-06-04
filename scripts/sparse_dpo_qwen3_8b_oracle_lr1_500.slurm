@@ -1,18 +1,10 @@
 #!/bin/bash
-# Sparse DPO: Qwen3-8B on Light-R1, 500 steps, oracle (checkpoint-diff) 97.5% mask.
+# Sparse DPO: Qwen3-8B on Light-R1, 500 steps.
+# Mask: warm magnitude (float32 delta files, step ≤250) — pre-computed at:
+#   /scratch/biggs.s/rl_casino_masks/warm_magnitude_qwen3_8b_light_r1_sp97.5pct_step250.pt
 #
-# The oracle mask is built from the diff between the pre-trained Qwen3-8B weights
-# and the final step-500 checkpoint from the dense DPO run.  Parameters that moved
-# most are marked as "active" (top 2.5% by |Δw|); the rest are frozen.
-#
-# Phases (sequential, same GPU allocation):
-#   1. Oracle mask generation — loads both models to CPU RAM via --force_cpu.
-#      8B × 2 × bf16 = ~32 GB RAM; fine with 128G allocation.
-#   2. Sparse DPO training — loads model in bf16 on GPU (~16 GB).
-#
-# Dense DPO checkpoint used as "final" for oracle mask:
-#   /scratch/biggs.s/rl_casino_train/20260601_175443_7366081/
-#     checkpoints/qwen_qwen3_8b_light_r1/checkpoint-500
+# Mask generation phase removed; mask is used directly.
+# To regenerate the mask: sbatch scripts/gen_magnitude_mask_qwen3_8b_lr1.slurm
 #
 # Submit from repo root:
 #   sbatch scripts/sparse_dpo_qwen3_8b_oracle_lr1_500.slurm
@@ -44,11 +36,8 @@ cd "$REPO_ROOT"
 export MODEL="${MODEL:-Qwen/Qwen3-8B}"
 export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
 export NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
-export SPARSITY_PCT="${SPARSITY_PCT:-97.5}"
-export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
-
-# Final checkpoint from the dense Qwen3-8B run (override via env if path changes)
-export ORACLE_FINAL_CKPT="${ORACLE_FINAL_CKPT:-/scratch/biggs.s/rl_casino_train/20260601_175443_7366081/checkpoints/qwen_qwen3_8b_light_r1/checkpoint-500}"
+# Hardcoded pre-computed mask (warm magnitude, float32 deltas, step ≤250)
+MASK_FILE="/scratch/biggs.s/rl_casino_masks/warm_magnitude_qwen3_8b_light_r1_sp97.5pct_step250.pt"
 
 # Training knobs — match dense Qwen3-8B baseline
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
@@ -72,44 +61,23 @@ pipeline_setup
 # Paths
 # ---------------------------------------------------------------------------
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local}}"
-MASK_DIR="${MASK_OUT_BASE}/${RUN_ID}"
 SPARSE_OUT="${SPARSE_OUT_BASE}/${RUN_ID}"
-MODEL_SANITIZED=$(echo "$MODEL" | tr '/' '_' | tr '-' '_' | tr '[:upper:]' '[:lower:]')
-MASK_FILE="${MASK_DIR}/oracle_diff_${MODEL_SANITIZED}_light_r1_sparsity${SPARSITY_PCT}pct.pt"
-RUN_NAME="${RUN_NAME:-sdpo_qwen3_8b_oracle_lr1_${RUN_ID}}"
+RUN_NAME="${RUN_NAME:-sdpo_qwen3_8b_mag_mask_lr1_${RUN_ID}}"
 
-mkdir -p "$MASK_DIR" "$SPARSE_OUT" logs
+mkdir -p "$SPARSE_OUT" logs
 
-# ---------------------------------------------------------------------------
-# Sanity check
-# ---------------------------------------------------------------------------
-if [ ! -d "${ORACLE_FINAL_CKPT}" ]; then
-  echo "ERROR: ORACLE_FINAL_CKPT not found: ${ORACLE_FINAL_CKPT}" >&2
-  echo "       Set ORACLE_FINAL_CKPT to the step-500 checkpoint directory." >&2
+if [ ! -f "${MASK_FILE}" ]; then
+  echo "ERROR: mask not found: ${MASK_FILE}" >&2
+  echo "       Run: sbatch scripts/gen_magnitude_mask_qwen3_8b_lr1.slurm" >&2
   exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 1: Oracle mask (CPU only — both models loaded via --force_cpu)
-# ---------------------------------------------------------------------------
-echo "===== Phase 1: oracle mask (|Δw| from checkpoint diff, ${SPARSITY_PCT}% sparsity) ====="
-echo "  initial : ${MODEL}"
-echo "  final   : ${ORACLE_FINAL_CKPT}"
-
-"$TRAIN_PY" src/warm_start/checkpoint_diff_mask_finder.py \
-  --initial_model        "$MODEL" \
-  --final_model          "$ORACLE_FINAL_CKPT" \
-  --sparsity_percent     "$SPARSITY_PCT" \
-  --min_layer_keep_ratio "$MIN_LAYER_KEEP_RATIO" \
-  --output_file          "$MASK_FILE" \
-  --force_cpu
-echo "  mask → ${MASK_FILE}"
-
-# ---------------------------------------------------------------------------
-# Phase 2: Sparse DPO training
+# Sparse DPO training
 # ---------------------------------------------------------------------------
 EFF_BATCH=$(( DPO_PER_DEVICE_TRAIN_BATCH_SIZE * DPO_GRADIENT_ACCUMULATION_STEPS ))
-echo "===== Phase 2: sparse DPO (${NUM_STEPS_DPO} steps, eff_batch=${EFF_BATCH}) ====="
+echo "===== Sparse DPO: Qwen3-8B / light-r1 / ${NUM_STEPS_DPO} steps (RUN_ID=${RUN_ID}) ====="
+echo "  mask: ${MASK_FILE}"
 
 timeout --signal=TERM --kill-after=60 $((7 * 60 * 60 + 30 * 60)) \
   "$TRAIN_PY" src/full_training/sparse_dpo_efficiency.py \
@@ -136,5 +104,4 @@ timeout --signal=TERM --kill-after=60 $((7 * 60 * 60 + 30 * 60)) \
   2>&1 | tee "logs/sparse_dpo_qwen3_8b_oracle_lr1_${RUN_ID}.log"
 
 echo "===== Done. RUN_ID=${RUN_ID} ====="
-echo "  mask      : ${MASK_FILE}"
-echo "  checkpoint: ${SPARSE_OUT}/$(basename "${MASK_FILE%.pt}")/checkpoints/"
+echo "  checkpoint: ${SPARSE_OUT}/"

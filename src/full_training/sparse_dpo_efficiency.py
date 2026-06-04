@@ -322,7 +322,7 @@ def train(
         report_to="wandb" if use_wandb else "none",
         run_name=run_name,
         remove_unused_columns=False,
-        bf16=not load_in_8bit,
+        bf16=True,
         gradient_checkpointing=gradient_checkpointing,
         beta=dpo_beta,
         max_length=max_length,

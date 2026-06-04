@@ -103,11 +103,15 @@ def dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torc
         p_ids, p_mask = pad_stack("prompt_input_ids")
         c_ids, c_mask = pad_stack("chosen_input_ids")
         r_ids, r_mask = pad_stack("rejected_input_ids")
-        return {
+        result = {
             "prompt_input_ids": p_ids, "prompt_attention_mask": p_mask,
             "chosen_input_ids": c_ids, "chosen_attention_mask": c_mask,
             "rejected_input_ids": r_ids, "rejected_attention_mask": r_mask,
         }
+        for key in ("reference_chosen_logps", "reference_rejected_logps"):
+            if key in examples[0]:
+                result[key] = torch.tensor([ex[key] for ex in examples])
+        return result
 
     # Standard flow: raw strings to tokenized batches
     prompts  = [ex.get("prompt", "")   for ex in examples]
@@ -127,7 +131,7 @@ def dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torc
         batch_chosen[k] = batch_chosen[k].to(torch.long)
         batch_reject[k] = batch_reject[k].to(torch.long)
 
-    return {
+    result = {
         "prompt_input_ids":        batch_prompt["input_ids"],
         "prompt_attention_mask":   batch_prompt["attention_mask"],
         "chosen_input_ids":        batch_chosen["input_ids"],
@@ -135,6 +139,10 @@ def dpo_collator_fn(examples: List[Dict[str, Any]], tokenizer) -> Dict[str, torc
         "rejected_input_ids":      batch_reject["input_ids"],
         "rejected_attention_mask": batch_reject["attention_mask"],
     }
+    for key in ("reference_chosen_logps", "reference_rejected_logps"):
+        if key in examples[0]:
+            result[key] = torch.tensor([ex[key] for ex in examples])
+    return result
 
 
 def make_dpo_collator(
