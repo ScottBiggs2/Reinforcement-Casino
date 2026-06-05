@@ -175,7 +175,7 @@ def train(
             checkpoint_path,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
-            device_map=None,
+            device_map="auto",
         )
     model.config.use_cache = False
 

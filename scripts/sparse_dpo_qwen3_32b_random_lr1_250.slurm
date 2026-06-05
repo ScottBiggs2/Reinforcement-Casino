@@ -1,18 +1,19 @@
 #!/bin/bash
 # Sparse DPO: Qwen3-32B on Light-R1, 250 steps, random 97.5% mask.
 #
-# Memory strategy (single H200, 80 GB VRAM):
+# Memory strategy (2× H200 NVL, 141 GB VRAM each):
 #   - --load_in_8bit: weights stored as int8 (~32 GB for 32B model vs 64 GB in bf16)
+#   - device_map="auto": layers split across 2 GPUs (~16 GB each)
+#   - bitsandbytes dequantizes int8 → fp16 for each matmul and keeps CB copies for
+#     backward for all layers simultaneously (~64 GB fp16, split ~32 GB per GPU)
 #   - --precompute_ref_log_probs: ref model runs one forward pass to cache logprobs,
-#     then freed from VRAM before training begins (eliminates the frozen 32 GB copy)
-#   - SparseAdamW states: only for 2.5% active weights (~0.8B params × 2 states ≈ 6 GB)
-#   - Mask: torch.bool, negligible
-#   Budget: precompute phase ~64 GB (policy + ref, both int8); training ~40 GB
+#     then freed before training begins
+#   - SparseAdamW states: only for 2.5% active weights (sparse, ~1 GB total)
+#   Budget: ~50 GB per GPU during training (well within 141 GB H200 NVL)
 #
-#   Note: bitsandbytes int8 + SparseAdamW is best-effort.  int8 params have
-#   requires_grad=True only for the unmasked 2.5%; bitsandbytes' autograd handles
-#   the forward/backward pass.  If the optimizer step raises a dtype error, resubmit
-#   with MULTIGPU_NGPUS=2 on the dense 32B script as fallback.
+#   Note: bitsandbytes int8 + SparseAdamW is best-effort.  torch.utils.checkpoint
+#   does NOT free bitsandbytes CB tensors (they live in bnb state, not autograd).
+#   Two GPUs are required: single H200 NVL (141 GB) OOMs at ~96 GB base + activations.
 #
 # Phases (sequential):
 #   1. Random mask generation — loads Qwen3-32B to CPU RAM (device_map="cpu"),
@@ -22,9 +23,9 @@
 # Submit from repo root:
 #   sbatch scripts/sparse_dpo_qwen3_32b_random_lr1_250.slurm
 #
-#SBATCH --partition=gpu
+#SBATCH --partition=multigpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:h200:2
 #SBATCH --time=05:00:00
 #SBATCH --job-name=sdpo_q332b_rand_lr1
 #SBATCH --mem=192G
