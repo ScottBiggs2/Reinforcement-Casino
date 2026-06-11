@@ -1,27 +1,27 @@
 #!/bin/bash
-# Dense DPO training: Qwen3-32B on Light-R1, 500 steps, 2× H200 (FSDP).
+# Dense DPO training: Qwen3-32B on Light-R1, 250 steps, 8× H200 (FSDP).
 #
-# Memory strategy:
-#   - FSDP full_shard: 64 GB weights sharded across 2 GPUs → 32 GB per GPU
-#   - precompute_ref_log_probs: ref model runs once to cache logprobs, then
-#     freed before training begins (~32 GB recovered per GPU).
+# Memory strategy — why 8 GPUs:
+#   FSDP full_shard with bf16 mixed precision keeps everything the optimizer needs in
+#   fp32: master weights (128 GB) + grads (128 GB) + adamw_torch_fused m,v (256 GB)
+#   = ~512 GB of fp32 state, sharded evenly across N GPUs = 512/N GB per GPU.
+#     - N=4 → 128 GB/GPU + activations ≈ 139 GB → OOM at step 2 (observed: job 7605118,
+#       fp32 Adam states allocated after step 1's optimizer.step()).
+#     - N=8 → 64 GB/GPU + activations ≈ ~80 GB → comfortable on the 141 GB H200.
+#   The H200 nodes (d4052-d4055) have 8 GPUs + 500 GB RAM each, so one node suffices.
+#   (adamw_8bit would fit on 4 GPUs but is a silent no-op under FSDP full_shard — loss
+#   frozen at ln2=0.6931, rewards exactly 0 — so it is NOT an option here.)
+#   - precompute_ref_log_probs: ref model runs once to cache logprobs, then freed
+#     before training begins.
 #     NOTE: fsdp_cpu_ram_efficient_loading is intentionally omitted — it leaves
 #     non-individually-wrapped modules (embed_tokens, final norm) on CPU, which
 #     causes a device mismatch during the precompute forward pass on rank > 0.
-#     Without it, each rank loads the full ~64 GB model to CPU RAM then shards;
-#     with --mem=192G this fits (2 ranks × 64 GB = 128 GB peak RAM).
+#     Each rank loads the model to CPU RAM (mmap-shared safetensors) then shards;
+#     the H200 node's 500 GB RAM (request --mem=256G) absorbs 8 ranks comfortably.
 #   - activation_checkpointing in fsdp_config: activations recomputed, not stored
 #     (replaces gradient_checkpointing in TrainingArguments, which adds a redundant
 #     AllGather in the FSDP backward pass)
-#   - adamw_torch_fused: full-precision fused AdamW. bitsandbytes adamw_8bit is NOT
-#     used: under FSDP full_shard its optimizer step is a silent no-op (weights never
-#     update → loss frozen at ln2=0.6931), and with 4× H200 the 8-bit memory saving is
-#     unnecessary. fp32 states for 32B ≈ 256 GB sharded over 4 GPUs ≈ 64 GB/GPU.
-#   Budget: ~100 GB / 141 GB H200 NVL per GPU during training (4 GPUs)
-#   (2-GPU path OOMs: FSDP retains original bf16 tensor data in FlatParameter
-#   bookkeeping during training, keeping 64 GB + 32 GB shard + 32 GB grads
-#   = ~128 GB active — too close to the 141 GB limit for optimizer state alloc.
-#   4 GPUs reduce each component by 2×, giving comfortable headroom.)
+#   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation.
 #
 # Chat template note: Qwen3-32B uses ChatML (<|im_start|>/<|im_end|>).
 # DPO_train.py never calls apply_chat_template — raw text tokenization only —
@@ -33,12 +33,14 @@
 #
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:4
-#SBATCH --time=05:00:00
+#SBATCH --gres=gpu:h200:8
+# 250 steps at eff-batch 128 (8-way DP, grad_accum 16) ≈ 2-3h + precompute; 6h is
+# safe headroom under the 24h multigpu cap and is backfill-friendly.
+#SBATCH --time=06:00:00
 #SBATCH --job-name=dpo_qwen3_32b_lr1_500
-#SBATCH --mem=192G
+#SBATCH --mem=256G
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=32
 #SBATCH --output=logs/dpo_qwen3_32b_light_r1_%j.out
 #SBATCH --error=logs/dpo_qwen3_32b_light_r1_%j.err
 
@@ -57,17 +59,19 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 export MODEL="${MODEL:-Qwen/Qwen3-32B}"
 export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
-export NUM_STEPS_DPO="${NUM_STEPS_DPO:-500}"
-export MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-4}"
+export NUM_STEPS_DPO="${NUM_STEPS_DPO:-250}"
+export MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-8}"
+# Reduce CUDA allocator fragmentation (the OOM hint from torch).
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 # ---------------------------------------------------------------------------
 # Training knobs — match Qwen3-8B baseline where possible
 # ---------------------------------------------------------------------------
 export DPO_LEARNING_RATE="${DPO_LEARNING_RATE:-5e-7}"
 export DPO_WARMUP_RATIO="${DPO_WARMUP_RATIO:-0.1}"
-# batch=1; grad_accum=32 → effective = 1×32×4GPUs = 128 (same as 8B baseline)
+# batch=1; grad_accum=16 → effective = 1×16×8GPUs = 128 (same as 8B baseline)
 export DPO_PER_DEVICE_TRAIN_BATCH_SIZE="${DPO_PER_DEVICE_TRAIN_BATCH_SIZE:-1}"
-export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-32}"
+export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-16}"
 export DPO_BETA="${DPO_BETA:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export DPO_MAX_PROMPT_LENGTH="${DPO_MAX_PROMPT_LENGTH:-1024}"
