@@ -2,18 +2,16 @@
 # Sparse DPO: Qwen3-32B on Light-R1, 250 steps, random 97.5% mask.
 #
 # Memory strategy (2× H200 NVL, 141 GB VRAM each):
-#   - --load_in_8bit: weights stored as int8 (~32 GB for 32B model vs 64 GB in bf16)
-#   - device_map="auto": layers split across 2 GPUs (~16 GB each)
-#   - bitsandbytes dequantizes int8 → fp16 for each matmul and keeps CB copies for
-#     backward for all layers simultaneously (~64 GB fp16, split ~32 GB per GPU)
+#   - bf16 weights (~64 GB for 32B). int8 was dropped: bitsandbytes int8 dequant makes
+#     every matmul much slower (a 250-step run could not finish in the old 5h wall), and
+#     with 2× 141 GB H200 (282 GB total) int8's memory saving is unnecessary.
+#   - device_map="auto": layers split across 2 GPUs (~32 GB weights each)
 #   - --precompute_ref_log_probs: ref model runs one forward pass to cache logprobs,
 #     then freed before training begins
 #   - SparseAdamW states: only for 2.5% active weights (sparse, ~1 GB total)
-#   Budget: ~50 GB per GPU during training (well within 141 GB H200 NVL)
+#   Budget: ~70-80 GB per GPU during training (well within 141 GB H200 NVL)
 #
-#   Note: bitsandbytes int8 + SparseAdamW is best-effort.  torch.utils.checkpoint
-#   does NOT free bitsandbytes CB tensors (they live in bnb state, not autograd).
-#   Two GPUs are required: single H200 NVL (141 GB) OOMs at ~96 GB base + activations.
+#   This bf16 path matches the working Qwen3-8B oracle run (sparse_adamw, bf16).
 #
 # Phases (sequential):
 #   1. Random mask generation — loads Qwen3-32B to CPU RAM (device_map="cpu"),
@@ -26,7 +24,9 @@
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:2
-#SBATCH --time=05:00:00
+# 32B on 2-GPU sequential device_map MP is slow (~3-4 min/step at eff-batch 128);
+# 250 steps + precompute needs ~14-15h. multigpu MaxTime is 24h. 18h leaves headroom.
+#SBATCH --time=18:00:00
 #SBATCH --job-name=sdpo_q332b_rand_lr1
 #SBATCH --mem=192G
 #SBATCH --ntasks=1
@@ -63,7 +63,9 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-128}"
 export DPO_BETA="${DPO_BETA:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export DPO_MAX_PROMPT_LENGTH="${DPO_MAX_PROMPT_LENGTH:-1024}"
-export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-250}"
+# Rolling HF checkpoints every 50 steps (limit 2): on a long ~15h run this leaves a
+# resumable checkpoint if the job is interrupted (resume via --resume_from_checkpoint auto).
+export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-50}"
 export DPO_SAVE_TOTAL_LIMIT="${DPO_SAVE_TOTAL_LIMIT:-2}"
 
 # ---------------------------------------------------------------------------
@@ -102,10 +104,12 @@ echo "  mask → ${MASK_FILE}"
 # Phase 2: Sparse DPO training (int8 weights + precomputed ref logprobs)
 # ---------------------------------------------------------------------------
 EFF_BATCH=$(( DPO_PER_DEVICE_TRAIN_BATCH_SIZE * DPO_GRADIENT_ACCUMULATION_STEPS ))
-echo "===== Phase 2: sparse DPO (${NUM_STEPS_DPO} steps, int8 weights, eff_batch=${EFF_BATCH}) ====="
-echo "  VRAM budget: ~32 GB (int8 policy) + ~32 GB (int8 ref, freed after precompute)"
+echo "===== Phase 2: sparse DPO (${NUM_STEPS_DPO} steps, bf16 weights, eff_batch=${EFF_BATCH}) ====="
+echo "  VRAM budget: ~64 GB bf16 policy split across 2 GPUs + ref (freed after precompute)"
 
-timeout --signal=TERM --kill-after=60 $((7 * 60 * 60 + 30 * 60)) \
+# Internal soft timeout 17h30m — sends SIGTERM before the 18h SLURM wall so partial
+# work + the latest rolling checkpoint are flushed cleanly.
+timeout --signal=TERM --kill-after=60 $((17 * 60 * 60 + 30 * 60)) \
   "$TRAIN_PY" src/full_training/sparse_dpo_efficiency.py \
     --model_name    "$MODEL" \
     --checkpoint    None \
@@ -124,7 +128,6 @@ timeout --signal=TERM --kill-after=60 $((7 * 60 * 60 + 30 * 60)) \
     --optimizer     sparse_adamw \
     --block_size    32 \
     --save_csv \
-    --load_in_8bit \
     --precompute_ref_log_probs \
     --output_base_dir  "$SPARSE_OUT" \
     --dataset_cache_dir "$HF_DATASETS_CACHE_ROOT" \

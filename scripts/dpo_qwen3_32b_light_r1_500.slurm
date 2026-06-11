@@ -13,8 +13,11 @@
 #   - activation_checkpointing in fsdp_config: activations recomputed, not stored
 #     (replaces gradient_checkpointing in TrainingArguments, which adds a redundant
 #     AllGather in the FSDP backward pass)
-#   - adamw_8bit: optimizer states 4× smaller (fallback: adamw_torch_fused)
-#   Budget: ~40 GB / 141 GB H200 NVL per GPU during training (4 GPUs)
+#   - adamw_torch_fused: full-precision fused AdamW. bitsandbytes adamw_8bit is NOT
+#     used: under FSDP full_shard its optimizer step is a silent no-op (weights never
+#     update → loss frozen at ln2=0.6931), and with 4× H200 the 8-bit memory saving is
+#     unnecessary. fp32 states for 32B ≈ 256 GB sharded over 4 GPUs ≈ 64 GB/GPU.
+#   Budget: ~100 GB / 141 GB H200 NVL per GPU during training (4 GPUs)
 #   (2-GPU path OOMs: FSDP retains original bf16 tensor data in FlatParameter
 #   bookkeeping during training, keeping 64 GB + 32 GB shard + 32 GB grads
 #   = ~128 GB active — too close to the 141 GB limit for optimizer state alloc.
@@ -68,9 +71,11 @@ export DPO_GRADIENT_ACCUMULATION_STEPS="${DPO_GRADIENT_ACCUMULATION_STEPS:-32}"
 export DPO_BETA="${DPO_BETA:-0.1}"
 export DPO_MAX_LENGTH="${DPO_MAX_LENGTH:-1024}"
 export DPO_MAX_PROMPT_LENGTH="${DPO_MAX_PROMPT_LENGTH:-1024}"
-# Optimizer: adamw_8bit requires fsdp_use_orig_params=true (set below).
-# If bitsandbytes raises a compat error, resubmit with MULTIGPU_OPTIM=adamw_torch_fused
-export MULTIGPU_OPTIM="${MULTIGPU_OPTIM:-adamw_8bit}"
+# Optimizer: adamw_torch_fused (full precision). Do NOT use adamw_8bit here —
+# bitsandbytes 8-bit optimizers do not apply updates under FSDP full_shard (silent
+# no-op → loss stuck at ln2=0.6931, rewards exactly 0). fsdp_use_orig_params=true is
+# kept below (harmless for fused AdamW; was originally added for the bnb path).
+export MULTIGPU_OPTIM="${MULTIGPU_OPTIM:-adamw_torch_fused}"
 
 # HF checkpoint: save at end of training only
 export DPO_SAVE_STEPS="${DPO_SAVE_STEPS:-250}"

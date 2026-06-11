@@ -394,11 +394,13 @@ def main() -> None:
             delta_log_dir: str,
             checkpoint_schedule: List[int],
             wandb_project_name: str,
+            trainer: DPOTrainer,
         ):
-            self.base_state = base_state
+            self.base_state = base_state  # bf16 CPU tensors, clean (pre-wrap) keys
             self.delta_log_dir = delta_log_dir
             self.checkpoint_schedule = set(checkpoint_schedule)
             self.wandb_project_name = wandb_project_name
+            self.trainer = trainer  # for accelerator.get_state_dict (FSDP-safe gather)
             os.makedirs(self.delta_log_dir, exist_ok=True)
             self.wandb_initialized = False
 
@@ -422,23 +424,35 @@ def main() -> None:
                 self.wandb_initialized = True
 
         def on_step_end(self, train_args, state, control, **kwargs):
+            step = state.global_step
+            if step not in self.checkpoint_schedule:
+                return control
+
+            # COLLECTIVE — every rank must call. Under FSDP full_shard,
+            # model.named_parameters() yields each rank's flattened *shard*, so a direct
+            # delta vs the pre-wrap base_state mismatches (RuntimeError: size of tensor
+            # a ... must match b ...). accelerate.get_state_dict gathers the full,
+            # consolidated state dict to CPU on rank 0 (rank0_only, offload_to_cpu);
+            # non-zero ranks only participate in the all-gather and get a param-less dict.
+            # Auto-dispatches FSDP1 / FSDP2 / non-distributed.
+            full_sd = self.trainer.accelerator.get_state_dict(kwargs["model"])
+
             if not state.is_world_process_zero:
                 return control
-            train_model = kwargs["model"]
-            step = state.global_step
-            if step in self.checkpoint_schedule:
-                full_deltas_to_save = {}
-                with torch.no_grad():
-                    for name, param in train_model.named_parameters():
-                        current = param.detach().float().cpu()
-                        # FSDP wrapping prepends "_fsdp_wrapped_module." at each nesting
-                        # level; base_state was built pre-FSDP, so strip all occurrences.
-                        lookup = name.replace("_fsdp_wrapped_module.", "")
-                        diff = current - self.base_state[lookup]
-                        full_deltas_to_save[lookup] = diff
-                delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
-                torch.save(full_deltas_to_save, delta_file)
-                print(f"  ✓ Saved weight deltas at step {step}")
+
+            full_deltas_to_save = {}
+            with torch.no_grad():
+                for name, tensor in full_sd.items():
+                    # FULL_STATE_DICT keys are already clean HF FQNs; strip defensively.
+                    lookup = name.replace("_fsdp_wrapped_module.", "")
+                    base = self.base_state.get(lookup)
+                    if base is None:
+                        continue
+                    diff = tensor.detach().float().cpu() - base.float()
+                    full_deltas_to_save[lookup] = diff.bfloat16()
+            delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
+            torch.save(full_deltas_to_save, delta_file)
+            print(f"  ✓ Saved weight deltas at step {step}")
             return control
 
         def on_train_end(self, train_args, state, control, **kwargs):
@@ -446,11 +460,16 @@ def main() -> None:
                 wandb.finish()
 
     if not resume_ckpt:
+        # Captured pre-trainer.train() (before FSDP wrapping), so named_parameters()
+        # returns full-shaped params. Stored bf16 on rank 0 only: fp32 would be ~128 GB
+        # for 32B; bf16 (~64 GB) + the bf16 full-state-dict gather at each delta step
+        # stays within the 192 GB node RAM. Deltas feed |Δθ| mask selectors, so bf16
+        # precision is sufficient.
         base_state: Dict[str, torch.Tensor] = {}
         if trainer.is_world_process_zero():
             with torch.no_grad():
                 for name, param in trainer.model.named_parameters():
-                    base_state[name] = param.detach().float().cpu().clone()
+                    base_state[name] = param.detach().to(torch.bfloat16).cpu().clone()
             os.makedirs(delta_log_dir, exist_ok=True)
             torch.save(base_state, os.path.join(delta_log_dir, "base_state.pt"))
         trainer.add_callback(
@@ -459,6 +478,7 @@ def main() -> None:
                 delta_log_dir=delta_log_dir,
                 checkpoint_schedule=checkpoint_schedule,
                 wandb_project_name=wandb_project,
+                trainer=trainer,
             )
         )
 
