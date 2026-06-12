@@ -23,6 +23,7 @@ from trl import DPOTrainer, DPOConfig
 from typing import List, Dict, Any
 
 from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
+from src.utils.logging_utils import CSVLoggerCallback
 from src.utils.grpo_checkpoint_utils import (
     maybe_load_wandb_resume_env,
     resolve_resume_checkpoint,
@@ -384,6 +385,13 @@ def main() -> None:
     trainer.add_callback(RunManifestCallback(base_dir, manifest))
 
     trainer.add_callback(WandbRunIdCallback(base_dir))
+
+    # Per-step CSV of the same metrics sent to W&B (loss, grad_norm, rewards/*, logps/*).
+    # Rank-0 only: under FSDP all ranks share the gathered `logs`, so adding the writer on
+    # every rank would have 8 processes clobber one file. Gives a local artifact to plot
+    # without the W&B UI. Written to <output_base>/training_log.csv.
+    if trainer.is_world_process_zero():
+        trainer.add_callback(CSVLoggerCallback(output_dir=base_dir))
 
     class FlexibleCheckpointCallback(TrainerCallback):
         """Saves weight deltas vs θ(0) for warm-start masks (omit when resuming from HF checkpoint)."""

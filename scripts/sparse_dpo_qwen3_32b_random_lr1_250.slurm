@@ -13,12 +13,14 @@
 #       the 18h wall (~6 min/step ≈ 27h).
 #     - bf16 on 4 GPUs: ~16 GB weights + ~16 GB grads per GPU + activations ≈ comfortable;
 #       bf16 matmuls keep ~3-4 min/step so 250 steps fit the wall.
-#   - --precompute_ref_log_probs: ref model runs one forward pass to cache logprobs,
-#     then freed before training begins
+#   - Reference model: LIVE frozen ref (TRL deep-copies the policy). precompute_ref_log_probs
+#     is intentionally NOT used: with this raw-text dataset + custom collator the cached ref
+#     logps never reach the loss, so TRL uses the live policy as its own reference — DPO loss
+#     pins at ln2 / rewards 0 while the model diverges (seen on the dense run, job 7606255).
+#     The live ref deep-copy adds ~16 GB/GPU on 4 GPUs; total ≈ policy 16 + ref 16 + grads 16
+#     + activations per GPU — fits 141 GB. Matches the healthy Qwen3-8B oracle recipe.
 #   - SparseAdamW states: only for 2.5% active weights (sparse, ~1 GB total)
-#   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation
-#     (precompute frees the ref model, leaving fragmented free space).
-#   This bf16 path matches the working Qwen3-8B oracle run (sparse_adamw, bf16).
+#   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation.
 #
 # Phases (sequential):
 #   1. Random mask generation — loads Qwen3-32B to CPU RAM (device_map="cpu"),
@@ -31,9 +33,9 @@
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:4
-# device_map MP is sequential (more GPUs add memory headroom, not speed); ~3-4 min/step
-# at eff-batch 128 → 250 steps + precompute ≈ 14-15h. multigpu MaxTime is 24h.
-#SBATCH --time=18:00:00
+# DEBUG: 50 steps for fast iteration. device_map MP is sequential (~3-4 min/step at
+# eff-batch 128) so 50 steps ≈ 2.5-3h; partial progress in 2h still shows if loss moves.
+#SBATCH --time=03:00:00
 #SBATCH --job-name=sdpo_q332b_rand_lr1
 #SBATCH --mem=400G
 #SBATCH --ntasks=1
@@ -56,9 +58,9 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 export MODEL="${MODEL:-Qwen/Qwen3-32B}"
 export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
-export NUM_STEPS_DPO="${NUM_STEPS_DPO:-250}"        # reduced from 500 per user request
+export NUM_STEPS_DPO="${NUM_STEPS_DPO:-50}"         # DEBUG: 50 steps for fast iteration (was 250)
 export SPARSITY_PCT="${SPARSITY_PCT:-97.5}"
-# Reduce CUDA allocator fragmentation after the precompute ref model is freed.
+# Reduce CUDA allocator fragmentation (policy + live ref deep-copy on device_map).
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
@@ -110,11 +112,11 @@ echo "  Model loads to CPU RAM (~64 GB), no VRAM used"
 echo "  mask → ${MASK_FILE}"
 
 # ---------------------------------------------------------------------------
-# Phase 2: Sparse DPO training (bf16 weights across 4 GPUs + precomputed ref logprobs)
+# Phase 2: Sparse DPO training (bf16 weights across 4 GPUs + live frozen ref)
 # ---------------------------------------------------------------------------
 EFF_BATCH=$(( DPO_PER_DEVICE_TRAIN_BATCH_SIZE * DPO_GRADIENT_ACCUMULATION_STEPS ))
 echo "===== Phase 2: sparse DPO (${NUM_STEPS_DPO} steps, bf16 weights, eff_batch=${EFF_BATCH}) ====="
-echo "  VRAM budget: ~64 GB bf16 policy + ~64 GB grads split across 4 GPUs + ref (freed after precompute)"
+echo "  VRAM budget: ~64 GB bf16 policy + ~64 GB grads + ~64 GB live ref split across 4 GPUs"
 
 # Internal soft timeout 17h30m — sends SIGTERM before the 18h SLURM wall so partial
 # work + the latest rolling checkpoint are flushed cleanly.
@@ -137,7 +139,6 @@ timeout --signal=TERM --kill-after=60 $((17 * 60 * 60 + 30 * 60)) \
     --optimizer     sparse_adamw \
     --block_size    32 \
     --save_csv \
-    --precompute_ref_log_probs \
     --output_base_dir  "$SPARSE_OUT" \
     --dataset_cache_dir "$HF_DATASETS_CACHE_ROOT" \
     --run_name      "$RUN_NAME" \

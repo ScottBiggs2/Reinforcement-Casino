@@ -11,11 +11,14 @@
 #   The H200 nodes (d4052-d4055) have 8 GPUs + 500 GB RAM each, so one node suffices.
 #   (adamw_8bit would fit on 4 GPUs but is a silent no-op under FSDP full_shard — loss
 #   frozen at ln2=0.6931, rewards exactly 0 — so it is NOT an option here.)
-#   - precompute_ref_log_probs: ref model runs once to cache logprobs, then freed
-#     before training begins.
-#     NOTE: fsdp_cpu_ram_efficient_loading is intentionally omitted — it leaves
-#     non-individually-wrapped modules (embed_tokens, final norm) on CPU, which
-#     causes a device mismatch during the precompute forward pass on rank > 0.
+#   - Reference model: LIVE frozen ref (TRL deep-copies the policy). precompute_ref_log_probs
+#     is intentionally NOT used: with this raw-text dataset + custom collator the cached
+#     ref logps never reach the loss, so TRL falls back to using the live policy as its own
+#     reference. That makes DPO logits structurally 0 (loss pinned at ln2, rewards 0) while
+#     the detached-ref gradient still trains — with no KL anchor the model diverges
+#     (logps/rejected → -60000, grad_norm → thousands). Observed in job 7606255.
+#     The live frozen ref adds ~8 GB/GPU on 8-way FSDP (bf16 params, no grads/optimizer)
+#     and matches the healthy Qwen3-8B oracle recipe.
 #     Each rank loads the model to CPU RAM (mmap-shared safetensors) then shards;
 #     the H200 node's 500 GB RAM (request --mem=256G) absorbs 8 ranks comfortably.
 #   - activation_checkpointing in fsdp_config: activations recomputed, not stored
@@ -34,9 +37,8 @@
 #SBATCH --partition=multigpu
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:h200:8
-# 250 steps at eff-batch 128 (8-way DP, grad_accum 16) ≈ 2-3h + precompute; 6h is
-# safe headroom under the 24h multigpu cap and is backfill-friendly.
-#SBATCH --time=06:00:00
+# DEBUG: 50 steps ≈ ~25 min on 8 GPUs (no precompute phase). 2h wall is backfill-friendly.
+#SBATCH --time=02:00:00
 #SBATCH --job-name=dpo_qwen3_32b_lr1_500
 #SBATCH --mem=256G
 #SBATCH --ntasks=1
@@ -59,7 +61,7 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 export MODEL="${MODEL:-Qwen/Qwen3-32B}"
 export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
-export NUM_STEPS_DPO="${NUM_STEPS_DPO:-250}"
+export NUM_STEPS_DPO="${NUM_STEPS_DPO:-50}"   # DEBUG: 50 steps for fast iteration (was 250)
 export MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-8}"
 # Reduce CUDA allocator fragmentation (the OOM hint from torch).
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -139,7 +141,6 @@ torchrun --standalone --nproc_per_node="${MULTIGPU_NGPUS}" \
     --optim                        "$MULTIGPU_OPTIM" \
     --fsdp                         "full_shard auto_wrap" \
     --fsdp_config                  "$FSDP_CONFIG" \
-    --precompute_ref_log_probs \
     --output_base_dir              "$OUT_BASE" \
     --dataset_cache_dir            "$HF_DATASETS_CACHE_ROOT" \
     --run_name                     "$RUN_NAME" \
