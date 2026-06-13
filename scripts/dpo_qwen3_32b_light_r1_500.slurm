@@ -24,7 +24,7 @@
 #   - activation_checkpointing in fsdp_config: activations recomputed, not stored
 #     (replaces gradient_checkpointing in TrainingArguments, which adds a redundant
 #     AllGather in the FSDP backward pass)
-#   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation.
+#   - PYTORCH_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation.
 #
 # Chat template note: Qwen3-32B uses ChatML (<|im_start|>/<|im_end|>).
 # DPO_train.py never calls apply_chat_template — raw text tokenization only —
@@ -64,7 +64,7 @@ export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
 export NUM_STEPS_DPO="${NUM_STEPS_DPO:-50}"   # DEBUG: 50 steps for fast iteration (was 250)
 export MULTIGPU_NGPUS="${MULTIGPU_NGPUS:-8}"
 # Reduce CUDA allocator fragmentation (the OOM hint from torch).
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 
 # ---------------------------------------------------------------------------
 # Training knobs — match Qwen3-8B baseline where possible

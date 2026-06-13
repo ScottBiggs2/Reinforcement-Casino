@@ -8,10 +8,19 @@ class SparseAdamW(torch.optim.Optimizer):
     Custom AdamW optimizer with Triton-accelerated sparse updates.
 
     OPTIMIZATIONS:
-    1. Pre-initialized optimizer states (no lazy init overhead)
+    1. Lazy optimizer-state init, created on each param's own device on first step
+       (see note below — eager init breaks multi-GPU device_map placement)
     2. Indexed sparse kernel using gather/scatter operations
     3. Only processes non-zero mask elements (~2.5% with 97.5% sparsity)
     4. Precomputed bias corrections to avoid kernel recompilation
+
+    NOTE on lazy state init: states (exp_avg/exp_avg_sq) are dense (zeros_like(p)) — for
+    a 32B model that is ~128 GB of state.  They MUST be created lazily inside step() so
+    each lives on its own param's device.  If they are pre-created in __init__, accelerate's
+    AcceleratedOptimizer (used by HF Trainer) calls move_to_device(state, accelerator.device)
+    at prepare() time and tries to consolidate ALL of them onto cuda:0 → OOM on large models
+    spread via device_map.  Lazy init leaves optimizer.state empty at prepare() (a no-op move)
+    and keeps the states distributed across the device_map GPUs.
 
     NOTE: Only the element-wise indexed kernel is used (no BSR).  BSR block
     approximation degrades to near-dense updates when element sparsity is
@@ -63,24 +72,23 @@ class SparseAdamW(torch.optim.Optimizer):
             'nan_warnings': [],
         }
 
-        # Pre-initialize all optimizer states upfront (always eager).
-        print(f"\nPre-initializing optimizer states for all parameters...")
-        init_start = time.time()
-        with torch.no_grad():
-            for group in self.param_groups:
-                for p in group['params']:
-                    state = self.state[p]
-                    state['step'] = 0
-                    state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-                    state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
-
-        init_time = time.time() - init_start
-        print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
-        print(f"✓ SparseAdamW optimizer ready")
+        # Optimizer states are created lazily in step() on each param's own device
+        # (see class docstring) — eager init here would let accelerate consolidate the
+        # full ~128 GB of dense state onto cuda:0 at prepare() time and OOM.
+        print(f"✓ SparseAdamW optimizer ready (states init lazily on first step)")
         print(f"  MLP-only: {mlp_only}")
         print(f"  Block size: {block_size}")
         print(f"  Using indexed sparse kernels: TRUE")
         print(f"  Local Gradient Clipping enabled: max_norm={self.max_grad_norm}")
+
+    def _ensure_state(self, p):
+        """Lazily create AdamW state for p on p's own device (idempotent)."""
+        state = self.state[p]
+        if len(state) == 0:
+            state['step'] = 0
+            state['exp_avg'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+            state['exp_avg_sq'] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        return state
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -137,7 +145,7 @@ class SparseAdamW(torch.optim.Optimizer):
             self._dense_step(param, group)
             return
 
-        state = self.state[param]
+        state = self._ensure_state(param)
         state['step'] += 1
 
         try:
@@ -166,7 +174,7 @@ class SparseAdamW(torch.optim.Optimizer):
     def _dense_step(self, param, group):
         """Standard dense AdamW update (fallback for non-masked params)."""
         grad = param.grad
-        state = self.state[param]
+        state = self._ensure_state(param)
         state['step'] += 1
 
         beta1, beta2 = group['betas']

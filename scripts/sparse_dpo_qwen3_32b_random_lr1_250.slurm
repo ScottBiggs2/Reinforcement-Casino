@@ -4,23 +4,27 @@
 # Memory strategy — why bf16 on 4 GPUs (device_map, NOT FSDP):
 #   The sparse path uses a custom SparseAdamW + Triton kernels that are not FSDP/DDP
 #   compatible, so the model is spread with device_map="auto" (naive model parallelism).
-#   device_map does NOT shard gradients — each GPU holds full grads for its layers — and
-#   a random 2.5% mask leaves almost every weight *tensor* with requires_grad=True, so
-#   gradients are effectively dense (~64 GB) on top of the bf16 weights (~64 GB).
-#     - bf16 on 2 GPUs OOMs at accelerator.prepare: weights + dense grads + the precompute
-#       reference-model copy fill GPU 0 to ~140 GB (observed: job 7605119).
-#     - int8 (32 GB weights) fit on 2 GPUs but dequant is too slow to finish 250 steps in
-#       the 18h wall (~6 min/step ≈ 27h).
-#     - bf16 on 4 GPUs: ~16 GB weights + ~16 GB grads per GPU + activations ≈ comfortable;
-#       bf16 matmuls keep ~3-4 min/step so 250 steps fit the wall.
+#   device_map does NOT shard anything — each GPU holds full grads + optimizer states for
+#   its layers. Nothing here is "2.5% sparse" in MEMORY: SparseAdamW only skips the masked
+#   weights in the UPDATE, but its exp_avg/exp_avg_sq are dense (zeros_like(p)) → ~128 GB of
+#   state for 32B. So per GPU we need: policy ~16 + live ref ~16 + grads ~16 + Adam states
+#   ~32 + activations ≈ ~90 GB on 4 GPUs.
+#   Two failure modes had to be fixed to make this fit (both were OOM at accelerator.prepare,
+#   jobs 7605119 / 7619424):
+#     1. device_map="auto" fills cuda:0 first → it put the whole 64 GB policy + 64 GB ref on
+#        GPU 0. Fixed by capping weights per GPU (SPARSE_PER_GPU_WEIGHT_CAP_GIB, default 18)
+#        so the model — and the ref/grads/states that follow it — spread across all 4 GPUs.
+#     2. SparseAdamW pre-allocated its 128 GB of dense state in __init__, so accelerate tried
+#        to consolidate ALL of it onto cuda:0 at prepare(). Fixed by lazy state init in
+#        src/optimizers/sparse_adamw.py (states created during step() on each param's device).
+#   (int8 (32 GB weights, 64 GB states) squeaked onto cuda:0 but dequant is too slow to finish
+#   250 steps in the wall (~6 min/step ≈ 27h); bf16 on 4 GPUs is faster and now fits.)
 #   - Reference model: LIVE frozen ref (TRL deep-copies the policy). precompute_ref_log_probs
 #     is intentionally NOT used: with this raw-text dataset + custom collator the cached ref
 #     logps never reach the loss, so TRL uses the live policy as its own reference — DPO loss
 #     pins at ln2 / rewards 0 while the model diverges (seen on the dense run, job 7606255).
-#     The live ref deep-copy adds ~16 GB/GPU on 4 GPUs; total ≈ policy 16 + ref 16 + grads 16
-#     + activations per GPU — fits 141 GB. Matches the healthy Qwen3-8B oracle recipe.
-#   - SparseAdamW states: only for 2.5% active weights (sparse, ~1 GB total)
-#   - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation.
+#     Matches the healthy Qwen3-8B oracle recipe.
+#   - PYTORCH_ALLOC_CONF=expandable_segments:True reduces allocator fragmentation.
 #
 # Phases (sequential):
 #   1. Random mask generation — loads Qwen3-32B to CPU RAM (device_map="cpu"),
@@ -61,7 +65,7 @@ export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
 export NUM_STEPS_DPO="${NUM_STEPS_DPO:-50}"         # DEBUG: 50 steps for fast iteration (was 250)
 export SPARSITY_PCT="${SPARSITY_PCT:-97.5}"
 # Reduce CUDA allocator fragmentation (policy + live ref deep-copy on device_map).
-export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
 export MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 export RANDOM_MASK_SEED="${RANDOM_MASK_SEED:-42}"
 

@@ -171,11 +171,26 @@ def train(
             low_cpu_mem_usage=True,
         )
     else:
+        # device_map="auto" is an INFERENCE placement: it fills cuda:0 first and ignores
+        # training memory (gradients ≈ weights; the live reference deep-copy ≈ weights;
+        # dense SparseAdamW states ≈ 2× weights; activations).  On 32B it put the whole
+        # 64 GB policy + 64 GB ref on cuda:0 → OOM at accelerator.prepare.  Cap per-GPU
+        # weight placement so the policy (and the ref/grads/states that follow it) spread
+        # across all GPUs.  cap × n_gpus must exceed the model size (else weights spill to
+        # CPU and training crawls): 18 GiB × 4 = 72 GiB > 64 GB for Qwen3-32B in bf16.
+        bf16_max_memory = None
+        n_gpus = torch.cuda.device_count()
+        if n_gpus > 1:
+            cap_gib = int(os.environ.get("SPARSE_PER_GPU_WEIGHT_CAP_GIB", "18"))
+            bf16_max_memory = {i: f"{cap_gib}GiB" for i in range(n_gpus)}
+            print(f"bf16 device_map: capping weights to {cap_gib} GiB/GPU across {n_gpus} GPUs "
+                  f"to leave headroom for ref + grads + optimizer state")
         model = AutoModelForCausalLM.from_pretrained(
             checkpoint_path,
             dtype=torch.bfloat16,
             low_cpu_mem_usage=True,
             device_map="auto",
+            max_memory=bf16_max_memory,
         )
     model.config.use_cache = False
 
