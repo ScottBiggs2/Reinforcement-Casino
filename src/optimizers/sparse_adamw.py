@@ -65,6 +65,10 @@ class SparseAdamW(torch.optim.Optimizer):
         self.block_size = block_size
         self.mlp_only = mlp_only
         self.max_grad_norm = max_grad_norm
+        # Cache of mask indices relocated to each param's own device (see _sparse_step).
+        # Under device_map the model is split across GPUs but the mask manager builds all
+        # indices on one device; the kernel needs them co-located with the param.
+        self._idx_cache = {}
 
         self.stats = {
             'sparse_steps': 0,
@@ -144,6 +148,18 @@ class SparseAdamW(torch.optim.Optimizer):
                   f"(param {param.shape} vs mask {mask.shape}), falling back to dense")
             self._dense_step(param, group)
             return
+
+        # device_map can place this param on a GPU other than the one the mask indices
+        # were built on (the mask manager loads them all to a single device). The Triton
+        # kernel turns these indices into param/grad write offsets, so they MUST live on
+        # the param's device — otherwise it writes through cross-device pointers and
+        # silently corrupts the weights to NaN on the first step. Relocate once and cache.
+        if nonzero_indices.device != param.device:
+            cached = self._idx_cache.get(param_name)
+            if cached is None or cached.device != param.device:
+                cached = nonzero_indices.to(param.device)
+                self._idx_cache[param_name] = cached
+            nonzero_indices = cached
 
         state = self._ensure_state(param)
         state['step'] += 1

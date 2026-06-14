@@ -133,27 +133,33 @@ def triton_indexed_sparse_adamw_step(
         stride_m_m, stride_m_n = exp_avg.stride(0), exp_avg.stride(1)
         stride_v_m, stride_v_n = exp_avg_sq.stride(0), exp_avg_sq.stride(1)
 
-    indexed_sparse_adamw_kernel[grid](
-        param, grad, exp_avg, exp_avg_sq,
-        nonzero_indices,
-        n_indices,
-        M, N,
-        param.stride(0), param.stride(1),
-        grad.stride(0), grad.stride(1),
-        stride_m_m, stride_m_n,
-        stride_v_m, stride_v_n,
-        lr=lr,
-        beta1=beta1,
-        beta2=beta2,
-        eps=eps,
-        weight_decay=weight_decay,
-        bias_correction1_val=bias_correction1,
-        bias_correction2_val=bias_correction2,
-        BLOCK_SIZE=block_size,
-        USE_SPARSE_STATES=use_sparse_states,
-        num_warps=num_warps,
-        num_stages=num_stages,
-    )
+    # Co-locate indices with the param (device_map may place this param off cuda:0) and
+    # launch the kernel on the param's device so Triton uses the matching CUDA context.
+    if nonzero_indices.device != param.device:
+        nonzero_indices = nonzero_indices.to(param.device)
+
+    with torch.cuda.device(param.device):
+        indexed_sparse_adamw_kernel[grid](
+            param, grad, exp_avg, exp_avg_sq,
+            nonzero_indices,
+            n_indices,
+            M, N,
+            param.stride(0), param.stride(1),
+            grad.stride(0), grad.stride(1),
+            stride_m_m, stride_m_n,
+            stride_v_m, stride_v_n,
+            lr=lr,
+            beta1=beta1,
+            beta2=beta2,
+            eps=eps,
+            weight_decay=weight_decay,
+            bias_correction1_val=bias_correction1,
+            bias_correction2_val=bias_correction2,
+            BLOCK_SIZE=block_size,
+            USE_SPARSE_STATES=use_sparse_states,
+            num_warps=num_warps,
+            num_stages=num_stages,
+        )
 
 
 @triton.jit
