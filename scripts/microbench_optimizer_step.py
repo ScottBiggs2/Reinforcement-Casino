@@ -75,8 +75,9 @@ class MemRow:
     active_frac: float
     # Measured GPU memory (MB) ------------------------------------------------
     params_grad_mb: float       # params + grads allocated on GPU (measured)
-    opt_state_mb: float         # optimizer state after lazy init via first step (measured)
-    total_footprint_mb: float   # params_grad_mb + opt_state_mb
+    mask_infra_mb: float        # SparseMaskManager (masks + indices on GPU); 0 for dense optimizers
+    opt_state_mb: float         # optimizer-own state only (exp_avg, exp_avg_sq — excludes mask infra)
+    total_footprint_mb: float   # params_grad_mb + mask_infra_mb + opt_state_mb
     peak_scratch_mb: float      # peak temp alloc above baseline during one step (measured)
     # Bandwidth estimate -------------------------------------------------------
     bw_ref_steps: int           # steps run solely for bandwidth reference timing
@@ -336,10 +337,13 @@ def run_memory_phase(
     For each optimizer:
       1. Clean GPU slate (gc + empty_cache).
       2. Allocate params+grads → measure delta → params_grad_mb.
-      3. Build optimizer → run first step (lazy state init) → measure delta → opt_state_mb.
-      4. Warm up 3 steps, then run one step under peak-memory tracking → peak_scratch_mb.
-      5. Run _BW_REF_STEPS timed steps → bw_ref_mean_ms for bandwidth estimate.
-      6. Delete all tensors and optimizer, flush cache before next case.
+      3. Build mask infrastructure (SparseMaskManager for sparse, nothing for dense)
+         → measure delta → mask_infra_mb.
+      4. Build optimizer with the pre-built prereqs → run first step (lazy state init)
+         → measure delta → opt_state_mb.  This isolates optimizer-own state from SMM cost.
+      5. Warm up 3 steps, then run one step under peak-memory tracking → peak_scratch_mb.
+      6. Run _BW_REF_STEPS timed steps → bw_ref_mean_ms for bandwidth estimate.
+      7. Delete all tensors, optimizer, and prereqs; flush cache before next case.
     """
     if not torch.cuda.is_available():
         return []
@@ -353,14 +357,20 @@ def run_memory_phase(
             mask_label=str(args.mask_label),
             mask_path=str(args.mask_path),
             tensors_used=0, total_numel=0, active_numel=0, active_frac=float("nan"),
-            params_grad_mb=float("nan"), opt_state_mb=float("nan"),
-            total_footprint_mb=float("nan"), peak_scratch_mb=float("nan"),
+            params_grad_mb=float("nan"), mask_infra_mb=float("nan"),
+            opt_state_mb=float("nan"), total_footprint_mb=float("nan"),
+            peak_scratch_mb=float("nan"),
             bw_ref_steps=_BW_REF_STEPS, bw_ref_mean_ms=float("nan"),
             est_traffic_bytes=0, bw_est_gb_s=float("nan"),
             note=str(exc),
         )
 
-    def _run_mem_case(case: str, optimizer_name: str, build_opt_fn) -> None:
+    def _run_mem_case(
+        case: str,
+        optimizer_name: str,
+        make_prereqs_fn,   # () -> Any  —  called after params, before optimizer build
+        build_opt_fn,      # (named_params, prereqs) -> optimizer
+    ) -> None:
         try:
             # ── Step 0: clean slate ──────────────────────────────────────────
             gc.collect()
@@ -382,17 +392,27 @@ def run_memory_phase(
             mem_1 = torch.cuda.memory_allocated(dev)
             params_grad_mb = (mem_1 - mem_0) / 1e6
 
-            # ── Step 2: build optimizer + lazy state init ────────────────────
-            # AdamW (torch and 8-bit) initializes momentum buffers on the first
-            # step, not on construction. SparseAdamW may do the same. We capture
-            # everything from post-params to post-first-step as "optimizer state".
-            opt = build_opt_fn(named_params)
+            # ── Step 2: mask infrastructure (SparseMaskManager for sparse) ───
+            # Measured separately so it doesn't inflate opt_state_mb.
+            # Dense optimizers pass make_prereqs_fn=None → mask_infra_mb = 0.
+            prereqs = None
+            if make_prereqs_fn is not None:
+                prereqs = make_prereqs_fn()
+            _sync(dev)
+            mem_2 = torch.cuda.memory_allocated(dev)
+            mask_infra_mb = (mem_2 - mem_1) / 1e6
+
+            # ── Step 3: build optimizer + lazy state init ────────────────────
+            # AdamW initializes exp_avg/exp_avg_sq lazily on first step.
+            # SparseAdamW does the same (zeros_like(p) — dense buffers).
+            # We capture only what the optimizer itself allocates here.
+            opt = build_opt_fn(named_params, prereqs)
             opt.step()  # triggers lazy state allocation
             _sync(dev)
             mem_3 = torch.cuda.memory_allocated(dev)
-            opt_state_mb = (mem_3 - mem_1) / 1e6
+            opt_state_mb = (mem_3 - mem_2) / 1e6
 
-            # ── Step 3: warm up, then measure peak scratch ───────────────────
+            # ── Step 4: warm up, then measure peak scratch ───────────────────
             for _ in range(3):
                 opt.step()
             _sync(dev)
@@ -403,14 +423,14 @@ def run_memory_phase(
             _sync(dev)
             peak_scratch_mb = max(0.0, torch.cuda.max_memory_allocated(dev) - mem_baseline) / 1e6
 
-            # ── Step 4: short timing run for bandwidth estimate ──────────────
+            # ── Step 5: short timing run for bandwidth estimate ──────────────
             bw_times = _timed_steps(opt, steps=_BW_REF_STEPS, sync_cuda=True, device=dev)
             bw_ref_mean_ms = sum(bw_times) / len(bw_times) if bw_times else float("nan")
 
-            # ── Step 5: compute bandwidth estimate ───────────────────────────
+            # ── Step 6: compute bandwidth estimate ───────────────────────────
             total_numel, active_numel = _mask_stats(str(args.mask_path), named_params)
             active_frac = (active_numel / total_numel) if total_numel > 0 else float("nan")
-            # Sparse operates only on active elements; dense touches all of them.
+            # Sparse kernel touches only active elements; dense touches all.
             working_numel = active_numel if optimizer_name == "sparse_adamw" else total_numel
             est_traffic = int(working_numel * 112)  # same proxy as speed-phase estimates
             bw_est_gb_s = (
@@ -429,8 +449,9 @@ def run_memory_phase(
                 active_numel=int(active_numel),
                 active_frac=float(active_frac),
                 params_grad_mb=float(params_grad_mb),
+                mask_infra_mb=float(mask_infra_mb),
                 opt_state_mb=float(opt_state_mb),
-                total_footprint_mb=float(params_grad_mb + opt_state_mb),
+                total_footprint_mb=float(params_grad_mb + mask_infra_mb + opt_state_mb),
                 peak_scratch_mb=float(peak_scratch_mb),
                 bw_ref_steps=_BW_REF_STEPS,
                 bw_ref_mean_ms=float(bw_ref_mean_ms),
@@ -444,20 +465,20 @@ def run_memory_phase(
 
         finally:
             # Explicit cleanup so each case starts with a clean GPU state.
-            try:
-                del opt  # type: ignore[possibly-undefined]
-            except NameError:
-                pass
-            try:
-                del params, named_params  # type: ignore[possibly-undefined]
-            except NameError:
-                pass
+            for obj_name in ("opt", "prereqs", "named_params"):
+                try:
+                    del locals()[obj_name]  # type: ignore[misc]
+                except (KeyError, NameError):
+                    pass
             gc.collect()
             torch.cuda.empty_cache()
 
     if int(args.run_dense_torch) == 1:
-        _run_mem_case("dense", "adamw_torch",
-                      lambda named: torch.optim.AdamW([p for _, p in named], lr=args.lr))
+        _run_mem_case(
+            "dense", "adamw_torch",
+            None,
+            lambda named, _prereqs: torch.optim.AdamW([p for _, p in named], lr=args.lr),
+        )
 
     if int(args.run_dense_8bit) == 1:
         try:
@@ -467,22 +488,26 @@ def run_memory_phase(
                 case=f"dense8bit_{args.mask_label}", optimizer="adamw_8bit",
                 mask_label=str(args.mask_label), mask_path=str(args.mask_path),
                 tensors_used=0, total_numel=0, active_numel=0, active_frac=float("nan"),
-                params_grad_mb=float("nan"), opt_state_mb=float("nan"),
-                total_footprint_mb=float("nan"), peak_scratch_mb=float("nan"),
+                params_grad_mb=float("nan"), mask_infra_mb=float("nan"),
+                opt_state_mb=float("nan"), total_footprint_mb=float("nan"),
+                peak_scratch_mb=float("nan"),
                 bw_ref_steps=_BW_REF_STEPS, bw_ref_mean_ms=float("nan"),
                 est_traffic_bytes=0, bw_est_gb_s=float("nan"),
                 note=f"bitsandbytes import failed: {e}",
             ))
         else:
-            _run_mem_case("dense8bit", "adamw_8bit",
-                          lambda named: AdamW8bit([p for _, p in named], lr=args.lr))
+            _run_mem_case(
+                "dense8bit", "adamw_8bit",
+                None,
+                lambda named, _prereqs: AdamW8bit([p for _, p in named], lr=args.lr),
+            )
 
     if int(args.run_sparse) == 1:
         _run_mem_case(
             "sparse", "sparse_adamw",
-            lambda named: SparseAdamW(
-                named,
-                SparseMaskManager(str(args.mask_path), device=dev),
+            lambda: SparseMaskManager(str(args.mask_path), device=dev),
+            lambda named, smm: SparseAdamW(
+                named, smm,
                 lr=args.lr,
                 block_size=args.block_size,
                 mlp_only=False,
@@ -595,20 +620,21 @@ def _write_markdown(
     lines.append("")
     lines.append(f"- **bw_ref_steps:** `{_BW_REF_STEPS}` (short timing used only for bandwidth estimate, not the Phase 1 numbers)")
     lines.append("- `params_grad_mb`: GPU bytes for params + grads, measured before optimizer is built.")
-    lines.append("- `opt_state_mb`: GPU bytes added by optimizer (build + lazy first-step state init), measured.")
-    lines.append("- `peak_scratch_mb`: peak temp allocations above steady-state baseline during one step.")
+    lines.append("- `mask_infra_mb`: GPU bytes for SparseMaskManager (all-layer bool masks + int64 nonzero indices). **0 for dense optimizers.** This is infrastructure shared across training, not per-step cost.")
+    lines.append("- `opt_state_mb`: GPU bytes added by the optimizer itself (exp_avg + exp_avg_sq via lazy first-step init). Measured after mask infrastructure, so SMM cost does not inflate this number.")
+    lines.append("- `peak_scratch_mb`: peak temp allocations above steady-state baseline during one step. Dense AdamW creates a full denom tensor; the Triton kernel is in-place.")
     lines.append("- `bw_est_gb_s`: theoretical traffic proxy / bw_ref_mean_ms (dense uses total_numel × 112 B; sparse uses active_numel × 112 B).")
     lines.append("")
     lines.append(
-        "| case | optimizer | active_frac | params_grad_MB | opt_state_MB | "
+        "| case | optimizer | active_frac | params_grad_MB | mask_infra_MB | opt_state_MB | "
         "total_footprint_MB | peak_scratch_MB | bw_est_GB_s | note |"
     )
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---|")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---|")
     for r in mem_rows:
         af_s = "" if r.active_frac != r.active_frac else f"{r.active_frac:.4g}"
         lines.append(
             f"| `{r.case}` | `{r.optimizer}` | {af_s} | "
-            f"{_fmt_mb(r.params_grad_mb)} | {_fmt_mb(r.opt_state_mb)} | "
+            f"{_fmt_mb(r.params_grad_mb)} | {_fmt_mb(r.mask_infra_mb)} | {_fmt_mb(r.opt_state_mb)} | "
             f"{_fmt_mb(r.total_footprint_mb)} | {_fmt_mb(r.peak_scratch_mb)} | "
             f"{_fmt_gb(r.bw_est_gb_s)} | {r.note} |"
         )
@@ -616,18 +642,28 @@ def _write_markdown(
     sparse_m = _row_by_opt(mem_rows, "sparse_adamw")
     if sparse_m is not None:
         lines.append("")
-        lines.append("### Memory savings (measured optimizer state)")
+        lines.append("### Memory profile")
         lines.append("")
         dense_t_m = _row_by_opt(mem_rows, "adamw_torch")
         dense_8_m = _row_by_opt(mem_rows, "adamw_8bit")
+        # opt_state comparison: SparseAdamW stores dense zeros_like(p) buffers, same as AdamW.
         for label, dense_m in [("torch AdamW", dense_t_m), ("AdamW 8-bit", dense_8_m)]:
             if dense_m is None:
                 continue
             d, s = dense_m.opt_state_mb, sparse_m.opt_state_mb
             if d == d and s == s and d > 0:
+                ratio = s / max(1e-6, d)
+                note = "same-size (dense zeros_like buffers)" if abs(ratio - 1.0) < 0.05 else f"x{d/max(1e-6,s):.2f} smaller"
+                lines.append(f"- **opt_state vs {label}:** {note}")
+        # peak_scratch is where SparseAdamW genuinely saves memory per step.
+        if dense_t_m is not None and dense_t_m.peak_scratch_mb == dense_t_m.peak_scratch_mb:
+            d_scratch = dense_t_m.peak_scratch_mb
+            s_scratch = sparse_m.peak_scratch_mb
+            if d_scratch > 0 and s_scratch == s_scratch:
                 lines.append(
-                    f"- **SparseAdamW vs {label} state:** "
-                    f"x{d / max(1e-6, s):.3f} smaller ({(1 - s / d) * 100:.1f}% reduction)"
+                    f"- **peak_scratch SparseAdamW vs torch AdamW:** "
+                    f"x{d_scratch / max(1e-6, s_scratch):.0f} less ({d_scratch:.1f} MB → {s_scratch:.2f} MB). "
+                    f"Triton kernel is in-place; dense AdamW allocates a full denom tensor."
                 )
 
     lines.append("")
