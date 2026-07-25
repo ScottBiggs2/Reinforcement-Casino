@@ -1,4 +1,5 @@
 
+import torch
 import triton
 import triton.language as tl
 
@@ -99,19 +100,28 @@ def triton_indexed_sparse_adamw_step(
     
     grid = (triton.cdiv(n_indices, block_size),)
     
-    indexed_sparse_adamw_kernel[grid](
-        param_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat,
-        nonzero_indices,
-        n_indices,
-        lr=lr,
-        beta1=beta1,
-        beta2=beta2,
-        eps=eps,
-        weight_decay=weight_decay,
-        bias_correction1_val=bias_correction1,
-        bias_correction2_val=bias_correction2,
-        BLOCK_SIZE=block_size,
-    )
+    # Co-locate indices with the param (device_map may place this param off cuda:0) and
+    # launch the kernel on the param's device so Triton uses the matching CUDA context.
+    # The indices become param/grad write offsets inside the kernel, so cross-device
+    # indices write through foreign pointers and silently corrupt weights to NaN on the
+    # first step. No-op single-GPU.
+    if nonzero_indices.device != param.device:
+        nonzero_indices = nonzero_indices.to(param.device)
+
+    with torch.cuda.device(param.device):
+        indexed_sparse_adamw_kernel[grid](
+            param_flat, grad_flat, exp_avg_flat, exp_avg_sq_flat,
+            nonzero_indices,
+            n_indices,
+            lr=lr,
+            beta1=beta1,
+            beta2=beta2,
+            eps=eps,
+            weight_decay=weight_decay,
+            bias_correction1_val=bias_correction1,
+            bias_correction2_val=bias_correction2,
+            BLOCK_SIZE=block_size,
+        )
     
     # Update .data directly to avoid overhead (modifications to views are reflected if contiguous)
     # If we made copies with .contiguous(), we might need to copy back?
