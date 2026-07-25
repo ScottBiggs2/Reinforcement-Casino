@@ -72,11 +72,43 @@ key-based auth works fine. Scripts were `scp`'d to the worktree (not committed).
 
 Watch: `ssh login.explorer.northeastern.edu 'squeue -u $USER'`
 
+Note: tulu3 p2/p3 (7362102/7362105) were accidentally scancel'd and resubmitted
+as 7370963 (oracle) / 7370964 (sparse) against the existing tulu3 dense ckpts.
+
+## RESULTS (2026-06-02)
+
+All dense + light-r1 sparse COMPLETED cleanly (ExitCode 0:0). Final DPO metrics:
+
+| Condition | Dataset | Trainable params | rewards/margins | accuracies | epoch |
+|---|---|---|---|---|---|
+| Dense | light-r1 | 100% | **3.24** | 1.0 | 20.9 |
+| **Sparse (oracle 97.5%)** | light-r1 | **2.5%** | **~2.60** | 1.0 | 20.9 |
+| Dense | tulu3 | 100% | ~0.05 (weak, 0.23 ep) | ~0.6 | 0.23 |
+| Sparse (oracle 97.5%) | tulu3 | 2.5% | ~0.04 | ~0.59 | 0.23 |
+
+All 6 jobs COMPLETED 0:0. tulu3 arm: sparse (0.04) ≈ dense (0.05) but both are
+non-learning (0.23 epoch) → uninformative; would need tulu3 dense extended to
+~1 epoch (~2000+ steps) to be a usable arm. Deferred by request.
+
+**Headline:** On Qwen3-8B (light-r1), training only **2.5% of params** (97.5%-sparse
+oracle subnetwork) recovers **~80% of the dense reward margin** (2.60 vs 3.24) at
+100% preference accuracy. The task-subnetwork finding generalizes Llama→Qwen3.
+No Qwen3-specific hparam changes were needed — clean single-variable backbone swap.
+
+tulu3 is the weak-signal arm by design (only 0.23 epoch in 500 steps because the
+tulu3 mixture is ~270K pairs); kept for parity with the Llama tulu3 baseline.
+
+Result paths:
+- light-r1 sparse model: `/scratch/xie.yiyi/transfer_v1/sparse_dpo_light_r1_qwen3_8b_oracle_step500/`
+- oracle masks (97.5% verified): `/scratch/xie.yiyi/transfer_v1/oracle_masks_qwen3_8b/oracle_dpo_{light_r1,tulu3}_step{500,150}_sp97.5.pt`
+
 ## Caveats / things to watch
-- **Qwen3 thinking-mode chat template.** `Qwen/Qwen3-8B` defaults to a template
-  that can inject `<think>` blocks. DPO formatting goes through the tokenizer's
-  chat template; verify the formatted pairs look sane on the first dense run
-  (check the early WandB samples / stdout) before trusting downstream numbers.
+- **Qwen3 thinking-mode chat template — RESOLVED, not a risk.** Verified in code:
+  `dataset_registry._msg_to_text` joins raw message `content` with `\n` (no chat
+  template, no special tokens), and the DPO collator (`DPO_train.py:218-225`)
+  calls `tokenizer(prompt/chosen/rejected)` on plain strings — it does NOT call
+  `apply_chat_template`. So Qwen3 thinking mode never triggers, no `<think>`
+  injection, and nothing Llama-specific is in the data path. Fully model-agnostic.
 - DPO loads policy + frozen ref model → ~2× weights in memory; Llama-8B fit on
   1 H200 at these settings, Qwen3-8B (≈8.2B) is comparable, but watch for OOM on
   the first dense step (supervisor-style fix: halve per_device, double grad_accum).

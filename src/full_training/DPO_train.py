@@ -128,6 +128,27 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to a checkpoint-* directory, or 'auto' for latest under output_dir.",
     )
+    parser.add_argument(
+        "--device_map",
+        type=str,
+        default=None,
+        help="HF device_map, e.g. 'auto' for multi-GPU model parallelism (single "
+             "process, NOT torchrun) — required for models too big for one GPU "
+             "(e.g. Qwen3-32B). Default None = single-GPU/DDP via torchrun (unchanged).",
+    )
+    parser.add_argument(
+        "--fsdp",
+        action="store_true",
+        help="Enable FSDP full_shard+auto_wrap (launch via torchrun --nproc_per_node=N). "
+             "Keeps all GPUs busy (fast, no RC idle-cancel) — preferred for full-FT of "
+             "big models like Qwen3-32B. Mutually exclusive with --device_map.",
+    )
+    parser.add_argument(
+        "--fsdp_layer_cls",
+        type=str,
+        default="Qwen3DecoderLayer",
+        help="Transformer decoder layer class to wrap under FSDP (model-specific).",
+    )
     return parser.parse_args()
 
 
@@ -243,15 +264,36 @@ def main() -> None:
             "rejected_attention_mask": batch_reject["attention_mask"],
         }
 
+    if args.fsdp and args.device_map is not None:
+        raise ValueError("--fsdp and --device_map are mutually exclusive: FSDP shards "
+                         "params (needs torchrun), device_map pins whole layers per GPU.")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16,
-        device_map=None,
+        device_map=args.device_map,
     )
     model.config.use_cache = False
 
+    # device_map="auto": spread layers across GPUs (model parallelism, single
+    # process). DPOTrainer won't auto-place its internal reference model under
+    # device_map, so build one explicitly here. Default None path is unchanged.
+    ref_model = None
+    if args.device_map is not None:
+        print(f"device_map={args.device_map}: building explicit reference model (model-parallel).")
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            device_map=args.device_map,
+        )
+        ref_model.config.use_cache = False
+
     _grad_ckpt = args.gradient_checkpointing
     if args.no_gradient_checkpointing:
+        _grad_ckpt = False
+    if args.fsdp:
+        # under FSDP use fsdp_config activation_checkpointing instead (set above);
+        # leaving TrainingArguments gradient_checkpointing on double-checkpoints + warns.
         _grad_ckpt = False
 
     save_steps_arg = args.save_steps
@@ -267,7 +309,37 @@ def main() -> None:
         hf_save_steps = 500
         hf_save_total_limit = None
 
+    # FSDP: full shard + wrap each transformer decoder layer. All GPUs stay busy
+    # (fast, no RC idle-cancel). Launch this script via torchrun --nproc_per_node=N.
+    _fsdp_kwargs = {}
+    if args.fsdp:
+        _fsdp_kwargs = dict(
+            fsdp="full_shard auto_wrap",
+            fsdp_config={
+                "transformer_layer_cls_to_wrap": [args.fsdp_layer_cls],
+                # save consolidated full checkpoints so checkpoint_diff_mask_finder
+                # (oracle) can load them as a normal HF model dir.
+                "state_dict_type": "FULL_STATE_DICT",
+                # use FSDP-native activation checkpointing (NOT TrainingArguments
+                # gradient_checkpointing, which adds a redundant backward AllGather
+                # and spikes memory under full_shard).
+                "activation_checkpointing": True,
+            },
+            # Save ONLY model weights, not optimizer state. (1) the oracle only needs
+            # model weights; (2) FSDP gathering bitsandbytes 8-bit optimizer state for
+            # a full state_dict crashes ("tensors on cuda:0 and cuda:1"). adamw_8bit
+            # keeps optimizer memory low enough to fit; skipping its save dodges the bug.
+            save_only_model=True,
+            # Precompute reference log-probs once, then DROP the ref model. Under FSDP
+            # the DPO ref model is NOT sharded — at 32B it sits full (~66GB) on every
+            # GPU and OOMs. Precomputing frees it so training only holds the (sharded)
+            # policy + optimizer.
+            precompute_ref_log_probs=True,
+        )
+        print(f"FSDP enabled: full_shard auto_wrap, wrap={args.fsdp_layer_cls}")
+
     cfg = DPOConfig(
+        **_fsdp_kwargs,
         output_dir=output_dir,
         run_name=wandb_run_name,
         report_to=["wandb"] if args.use_wandb else [],
@@ -301,6 +373,7 @@ def main() -> None:
 
     trainer = DPOTrainer(
         model=model,
+        ref_model=ref_model,
         args=cfg,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -383,7 +456,11 @@ def main() -> None:
             if state.is_world_process_zero and self.wandb_initialized:
                 wandb.finish()
 
-    if not resume_ckpt:
+    # FSDP renames params ('_fsdp_wrapped_module.…') and shards them, so the
+    # per-param weight-delta callback (built from pre-wrap names) KeyErrors. The
+    # oracle mask is built from checkpoint-diffs (initial vs ckpt-500), not these
+    # delta logs, so just skip delta logging under FSDP.
+    if not resume_ckpt and not args.fsdp:
         base_state: Dict[str, torch.Tensor] = {}
         if trainer.is_world_process_zero():
             with torch.no_grad():
@@ -399,6 +476,8 @@ def main() -> None:
                 wandb_project_name=wandb_project,
             )
         )
+    elif args.fsdp:
+        print("FSDP: skipping weight-delta callback (oracle uses checkpoint-diff, not deltas).")
 
     print(f"\n{'=' * 60}")
     print("Starting DPO training")

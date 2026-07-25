@@ -132,3 +132,27 @@ class SparseMaskManager:
             param_name.replace('.', '_') in self.masks or
             param_name.replace('_', '.') in self.masks
         )
+
+    @staticmethod
+    def _resolve_key(param_name, store):
+        """Find the store key for param_name, trying dot/underscore variants."""
+        for k in (param_name, param_name.replace('.', '_'), param_name.replace('_', '.')):
+            if k in store:
+                return k
+        return None
+
+    def move_to_device(self, param_name, device):
+        """Colocate this param's mask + precomputed nonzero indices onto `device`.
+
+        Needed for multi-GPU model parallelism (``device_map="auto"``), where each
+        weight tensor lives on a different GPU: the mask/indices must sit on the
+        SAME device as the param or the sparse kernel hits a cross-device error.
+        No-op when already on `device` (so the single-GPU path is unchanged).
+        """
+        device = torch.device(device)
+        mk = self._resolve_key(param_name, self.masks)
+        if mk is not None and self.masks[mk].device != device:
+            self.masks[mk] = self.masks[mk].to(device)
+        ik = self._resolve_key(param_name, self.nonzero_indices)
+        if ik is not None and self.nonzero_indices[ik].device != device:
+            self.nonzero_indices[ik] = self.nonzero_indices[ik].to(device)

@@ -60,6 +60,19 @@ class SparseAdamW(torch.optim.Optimizer):
         
         init_time = time.time() - init_start
         print(f"✓ Optimizer states pre-initialized in {init_time:.2f}s")
+
+        # Multi-GPU (device_map="auto"): each weight tensor may live on a different
+        # GPU. Colocate every param's mask + nonzero indices with its param's device
+        # so the indexed sparse kernel never crosses devices. No-op single-GPU.
+        n_moved = 0
+        for group in self.param_groups:
+            for p in group['params']:
+                name = self.param_to_name.get(id(p), None)
+                if name is not None and self.mask_manager.has_mask(name):
+                    self.mask_manager.move_to_device(name, p.device)
+                    n_moved += 1
+        print(f"✓ Colocated {n_moved} masks with their param devices")
+
         print(f"✓ SparseAdamW optimizer ready")
         print(f"  MLP-only: {mlp_only}")
         print(f"  Block size: {block_size}")

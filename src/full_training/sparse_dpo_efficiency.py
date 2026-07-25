@@ -70,6 +70,7 @@ def train(
     save_steps=None,
     save_total_limit=None,
     resume_from_checkpoint=None,
+    device_map=None,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -125,12 +126,27 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
-        device_map=None
+        device_map=device_map
     )
     model.config.use_cache = False
-    
-    # Mask Manager
-    mask_manager = SparseMaskManager(mask_path, device=device)
+
+    # device_map="auto" spreads layers across GPUs (model parallelism). Each weight
+    # tensor stays whole on its assigned GPU, so the per-param mask design survives
+    # (unlike FSDP, which flattens/shards params). DPOTrainer won't auto-place its
+    # internal reference model under device_map, so build one explicitly here.
+    ref_model = None
+    if device_map is not None:
+        print(f"device_map={device_map}: building explicit reference model (model-parallel).")
+        ref_model = AutoModelForCausalLM.from_pretrained(
+            checkpoint_path, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
+            device_map=device_map
+        )
+        ref_model.config.use_cache = False
+
+    # Mask Manager. Under device_map, hold masks on CPU and let SparseAdamW colocate
+    # each one with its param's device on init (avoids a transient single-GPU spike).
+    mask_device = "cpu" if device_map is not None else device
+    mask_manager = SparseMaskManager(mask_path, device=mask_device)
     
     # Optimizer Logic
     print(f"Initializing {optimizer_type}...")
@@ -238,6 +254,7 @@ def train(
 
     trainer = DPOTrainer(
         model=model,
+        ref_model=ref_model,
         args=dpo_config,
         train_dataset=dpo_dataset,
         data_collator=lambda x: dpo_collator_fn(x, tokenizer),
@@ -322,6 +339,14 @@ if __name__ == "__main__":
         default=None,
         help="Path to checkpoint-* dir, or 'auto' for latest under run_dir/checkpoints.",
     )
+    parser.add_argument(
+        "--device_map",
+        type=str,
+        default=None,
+        help="HF device_map, e.g. 'auto' for multi-GPU model parallelism (keeps full "
+             "param tensors so per-param masks survive — required for models too big "
+             "for one GPU, e.g. Qwen3-32B). Default None = single-GPU (unchanged).",
+    )
 
     args = parser.parse_args()
 
@@ -353,4 +378,5 @@ if __name__ == "__main__":
         save_steps=args.save_steps,
         save_total_limit=args.save_total_limit,
         resume_from_checkpoint=args.resume_from_checkpoint,
+        device_map=args.device_map,
     )
