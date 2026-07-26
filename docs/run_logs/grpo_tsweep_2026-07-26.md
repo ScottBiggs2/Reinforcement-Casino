@@ -221,15 +221,16 @@ LR at step 500 while every sparse arm had annealed to 0.2%, a 449× gap).
   mask — left queued; it answers the narrower D.4-confound question and is cheap.
 - Existing masks under `transfer_v1/oracle_masks_llama8b/` — read-only here.
 
-## 7a. Loose end worth chasing separately
+## 7a. Loose end — chased and closed
 
-Scott's 5-way sweep (`orchestrate_grpo_500step_5way.slurm`, 2026-05-01) has **GraSP-ABS**
-and **GraSP-ABS+per-weight-SNR** GRPO arms, plus a random control, at ρ=97.5% on this
-exact configuration. The rebuttal's item-3 text
-(`docs/paper_drafts/ac_four_items_response_2026-07-25.md`) currently states that the only
-scoring functions compared are random / warm-magnitude / oracle, and concedes the scoring
-grid as a gap. If those GraSP runs produced usable curves, the concession is understating
-existing coverage — worth locating before the item-3 reply is finalised.
+Scott's 5-way sweep (`orchestrate_grpo_500step_5way.slurm`, 2026-05-01) locks **GraSP-ABS**
+and **GraSP-ABS+per-weight-SNR** GRPO arms at ρ=97.5% on this exact configuration, which
+raised the question of whether item 3's scoring-function concession understates existing
+coverage. **Checked 2026-07-26: it does not.** No GraSP mask was ever produced — the
+orchestrator directories named `grasp` hold only random masks, the `grasp_elem_base`
+directory is empty, and no file with `grasp` in its name exists in Scott's scratch. Full
+evidence and root cause in [DO_NOT_REPEAT.md](DO_NOT_REPEAT.md). The item-3 concession
+stands as written.
 
 ## 8. Results
 

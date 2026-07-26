@@ -96,6 +96,41 @@ invokes `H_ii ≈ F_i`, so omitting it is the most demandable gap. Gradient-base
 also need a real calibration set: the convention is 128 sequences (SparseGPT, Wanda),
 not 2.
 
+### "Scott's 5-way sweep already has GraSP arms, so item 3's scoring-function gap is over-conceded"
+**False — checked 2026-07-26, no GraSP mask exists anywhere.** The infrastructure is
+real and complete: `src/cold_start/utils/grasp_scorer.py`, five sbatch entry points
+(`run_grpo_grasp_vanilla_vs_snr_abs.slurm`, `run_grpo_grasp_mask_only.slurm`,
+`run_dpo_grasp_masks_only.slurm`, `orchestrate_light_r1_grasp_sweep.slurm`,
+`run_light_r1_grasp_elem_base_mask.slurm`), and two locked arms in
+`docs/hyperparams/grpo_500step_5way_sweep.yaml` (`grasp_abs_no_snr`,
+`grasp_abs_snr_per_weight_log1p`). The **output** is not:
+
+- `/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972` and `..._6377908` — despite
+  the name, contain **only** `random_elem` / `random_block256_mean` masks.
+- `/scratch/biggs.s/rl_casino_masks/tulu3_..._grasp_elem_base_..._20260503_164435` —
+  **empty**, `total 0`.
+- The only sparse training runs downstream of `grasp6` are named
+  `dpo200_sparse_lr1_random_elem_rerun_*`, i.e. the random control.
+- `find` over Scott's `rl_casino_{masks,sparse_train,train}` returns **zero** files with
+  `grasp` in the name — only directories.
+
+The commit trail says why: `f50862b` "GRaSP and SNIP save me please bro" (04-27),
+`dbbebbc` "testing GraSP implementations. Please work..." (04-29), `5f30ba3`
+"relaunching GraSP jobs due to a bug in the torch autograd 2nd order implementation in
+the backend" (04-30), `65febd5` "time boost for grasp calculation" (05-03). GraSP is
+never mentioned again after 2026-05-04.
+
+**Root cause is structural, not a passing bug.** GraSP scores `−w ⊙ (Hg)`, so it needs a
+Hessian-vector product: `create_graph=True` then a second `autograd.grad` through an 8B
+transformer. Flash and mem-efficient SDPA do not implement higher-order autograd (hence
+`_sdp_force_math_backend_cuda` in the scorer), and reentrant gradient checkpointing is
+incompatible with `autograd.grad` (hence the `use_reentrant=False` branch). Math-backend
+attention plus a retained graph is a large VRAM multiple over a normal backward pass.
+
+**Do not "just rerun Scott's GraSP arms" and do not soften item 3's concession on the
+strength of them existing in a yaml.** If a scorer is to be added, the ledger entry above
+still applies: make it Fisher / FISH Mask, which needs no second-order autograd.
+
 ---
 
 ## Infrastructure traps that have cost time more than once
