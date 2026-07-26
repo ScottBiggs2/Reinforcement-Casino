@@ -110,6 +110,7 @@ def train(
     adam_eps: float,
     grpo_beta: float,
     warmup_steps: int,
+    lr_scheduler_type: str,
     disable_tf32: bool,
     save_model: bool,
     dataset_key: str,
@@ -323,6 +324,11 @@ def train(
         max_prompt_length=max_prompt_length,
         beta=grpo_beta,
         warmup_steps=warmup_steps,
+        # This script previously exposed no scheduler knob, so it silently took the
+        # HF default (LINEAR) while GRPO_train.py defaults to COSINE. That mismatch is
+        # what makes the dense-vs-sparse comparison in Appendix D.4 uninterpretable:
+        # measured at step 500, dense sat at 4.99e-6 and sparse at 1.11e-8, a 449x gap.
+        lr_scheduler_type=lr_scheduler_type,
     )
 
     trainer = GRPOTrainer(
@@ -437,6 +443,10 @@ if __name__ == "__main__":
     parser.add_argument("--adam_eps", type=float, default=1e-8)
     parser.add_argument("--grpo_beta", type=float, default=0.025)
     parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--lr_scheduler_type", type=str, default="cosine",
+                        help="Must MATCH the dense arm. GRPO_train.py defaults to cosine; "
+                             "this script used to take the HF default (linear) with no way to "
+                             "override it, which is the schedule mismatch behind Appendix D.4.")
     parser.add_argument("--disable_tf32", action="store_true")
     parser.add_argument("--save_steps", type=int, default=50)
     parser.add_argument("--save_total_limit", type=int, default=3)
@@ -498,6 +508,7 @@ if __name__ == "__main__":
         adam_eps=args.adam_eps,
         grpo_beta=args.grpo_beta,
         warmup_steps=args.warmup_steps,
+        lr_scheduler_type=args.lr_scheduler_type,
         disable_tf32=args.disable_tf32,
         save_model=args.save_model,
         dataset_key=args.dataset,
