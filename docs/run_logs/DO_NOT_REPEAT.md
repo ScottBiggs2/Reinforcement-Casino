@@ -113,6 +113,8 @@ real and complete: `src/cold_start/utils/grasp_scorer.py`, five sbatch entry poi
   `dpo200_sparse_lr1_random_elem_rerun_*`, i.e. the random control.
 - `find` over Scott's `rl_casino_{masks,sparse_train,train}` returns **zero** files with
   `grasp` in the name — only directories.
+- An exhaustive `find /scratch/xie.yiyi -iname "*grasp*"` returns **zero hits of any
+  kind**, so nothing was produced on Irene's side either.
 
 The commit trail says why: `f50862b` "GRaSP and SNIP save me please bro" (04-27),
 `dbbebbc` "testing GraSP implementations. Please work..." (04-29), `5f30ba3`
