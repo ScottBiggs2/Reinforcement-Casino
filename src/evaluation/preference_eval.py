@@ -218,32 +218,42 @@ def main() -> None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
+    # Two passes, one model resident at a time. Holding policy AND reference together
+    # is ~32 GB for two 8B models in bf16, which restricts the job to the single H200
+    # node in this cluster's multigpu partition and puts it behind a multi-hour queue.
+    # Sequential passes halve peak memory and let the eval run on an A100, off the
+    # critical path of the training runs that genuinely need H200.
+    def collect(model) -> Dict[str, List[float]]:
+        lp_c: List[float] = []
+        lp_r: List[float] = []
+        for i in range(0, len(ds), args.batch_size):
+            rows = ds[i: i + args.batch_size]
+            p = encode_batch(tokenizer, list(rows["prompt"]), args.max_prompt_length)
+            c = encode_batch(tokenizer, list(rows["chosen"]), args.max_length)
+            r = encode_batch(tokenizer, list(rows["rejected"]), args.max_length)
+            lp_c += sequence_logprob(model, p, c).tolist()
+            lp_r += sequence_logprob(model, p, r).tolist()
+            if (i // args.batch_size) % 25 == 0:
+                print(f"    {min(i + args.batch_size, len(ds)):>5}/{len(ds)} pairs", flush=True)
+        return {"chosen": lp_c, "rejected": lp_r}
+
+    print("\nPass 1/2 — policy")
     policy = load_policy(args.model, args.adapter, args.device_map)
+    pol = collect(policy)
+    del policy
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    print("\nPass 2/2 — reference")
     ref = load_policy(args.ref_model, None, args.device_map)
+    rf = collect(ref)
+    del ref
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    margins: List[float] = []
-    r_chosen_all: List[float] = []
-    r_rejected_all: List[float] = []
-
-    for i in range(0, len(ds), args.batch_size):
-        rows = ds[i: i + args.batch_size]
-        p = encode_batch(tokenizer, list(rows["prompt"]), args.max_prompt_length)
-        c = encode_batch(tokenizer, list(rows["chosen"]), args.max_length)
-        r = encode_batch(tokenizer, list(rows["rejected"]), args.max_length)
-
-        pol_c = sequence_logprob(policy, p, c)
-        pol_r = sequence_logprob(policy, p, r)
-        ref_c = sequence_logprob(ref, p, c)
-        ref_r = sequence_logprob(ref, p, r)
-
-        rc = args.beta * (pol_c - ref_c)
-        rr = args.beta * (pol_r - ref_r)
-        r_chosen_all += rc.tolist()
-        r_rejected_all += rr.tolist()
-        margins += (rc - rr).tolist()
-
-        if (i // args.batch_size) % 20 == 0:
-            print(f"  {i + len(margins) - len(margins) + len(rc):>5}/{len(ds)} pairs")
+    r_chosen_all = [args.beta * (a - b) for a, b in zip(pol["chosen"], rf["chosen"])]
+    r_rejected_all = [args.beta * (a - b) for a, b in zip(pol["rejected"], rf["rejected"])]
+    margins = [a - b for a, b in zip(r_chosen_all, r_rejected_all)]
 
     n = len(margins)
     acc = [1.0 if m > 0 else 0.0 for m in margins]

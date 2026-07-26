@@ -22,8 +22,11 @@
 #SBATCH --output=logs/pref_eval_%A_%a.out
 #SBATCH --error=logs/pref_eval_%A_%a.err
 #SBATCH --partition=multigpu
-#SBATCH --gres=gpu:h200:1
-#SBATCH --mem=192G
+# Eval does not need H200 and must not sit behind the training queue: this cluster has
+# exactly ONE h200 node in multigpu (gpu:h200:8), so every h200 request serialises on it.
+# Two sequential passes keep peak memory at one 8B model, so an A100 is sufficient.
+#SBATCH --gres=gpu:a100:1
+#SBATCH --mem=96G
 #SBATCH --cpus-per-task=8
 #SBATCH --time=01:30:00
 #SBATCH --requeue

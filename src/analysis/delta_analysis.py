@@ -29,7 +29,12 @@ import torch
 def iter_named_tensors(path: str):
     """Yield (name, tensor) from an HF checkpoint dir or a .pt state dict, lazily."""
     import os
-    if os.path.isdir(path):
+    # A local .pt state dict is the only case that goes through torch.load. Anything
+    # else — a local HF checkpoint directory OR a hub id like "meta-llama/Llama-3.1-8B-
+    # Instruct" — goes through from_pretrained. Testing isdir() alone sent hub ids into
+    # torch.load and failed with FileNotFoundError.
+    is_local_file = os.path.isfile(path)
+    if not is_local_file:
         from transformers import AutoModelForCausalLM
         model = AutoModelForCausalLM.from_pretrained(
             path, torch_dtype=torch.float32, low_cpu_mem_usage=True, device_map="cpu",
