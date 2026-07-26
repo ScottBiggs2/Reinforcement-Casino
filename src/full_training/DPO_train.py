@@ -149,7 +149,91 @@ def parse_args() -> argparse.Namespace:
         default="Qwen3DecoderLayer",
         help="Transformer decoder layer class to wrap under FSDP (model-specific).",
     )
+    parser.add_argument(
+        "--lora",
+        action="store_true",
+        help="Train with LoRA adapters instead of full fine-tuning (PEFT baseline for the "
+             "sparse-subnetwork comparison). Requires an explicit --learning_rate.",
+    )
+    parser.add_argument(
+        "--lora_r",
+        type=int,
+        default=64,
+        help="LoRA rank. r=64 over all linear projections is ~168M trainable params on "
+             "Llama-3.1-8B (2.1%%), the closest match to a 97.5%%-sparse subnetwork (2.5%%). "
+             "r=16 is the standard-practice point (~42M, 0.5%%).",
+    )
+    parser.add_argument(
+        "--lora_alpha",
+        type=int,
+        default=None,
+        help="LoRA alpha (scaling = alpha/r). Default: 2*r.",
+    )
+    parser.add_argument("--lora_dropout", type=float, default=0.0, help="LoRA dropout.")
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+        help="Comma-separated module names to adapt. Default: all linear projections, so "
+             "the adapted parameter set spans the same tensors the sparse mask covers.",
+    )
     return parser.parse_args()
+
+
+def _resolve_lora(args):
+    """Build the LoRA config and guard the failure modes that waste a whole run.
+
+    Returns (peft_config, lora_manifest_fields) or (None, {}) when --lora is off.
+    """
+    if not args.lora:
+        return None, {}
+
+    if args.fsdp:
+        raise ValueError(
+            "--lora and --fsdp are not supported together here. The LoRA baseline is an "
+            "8B-scale comparison that fits on one GPU; FSDP-wrapping an adapter model "
+            "changes both the param naming and the ref-model handling."
+        )
+
+    # The full-FT default (5e-7) is ~200x too small to move a freshly-initialised
+    # adapter: B is zero-init, so the run would train to a near-null delta and report
+    # a meaningless "LoRA underperforms" number. Fail loudly instead of silently.
+    if args.learning_rate <= 1e-6:
+        raise ValueError(
+            f"--lora with --learning_rate={args.learning_rate:g} will not train. LoRA needs "
+            f"its own LR (typically 1e-4; 5e-5 is a reasonable second point) because the "
+            f"adapter is zero-initialised, not a pretrained weight. Pass --learning_rate "
+            f"explicitly. Note in any write-up that LoRA got a tuned LR and the sparse "
+            f"runs did not."
+        )
+
+    try:
+        from peft import LoraConfig
+    except ImportError as exc:  # pragma: no cover - environment guard
+        raise ImportError(
+            "--lora requires `peft` (installed in the rl_casino env, not necessarily "
+            "in a bare python). pip install peft"
+        ) from exc
+
+    target_modules = [m.strip() for m in args.lora_target_modules.split(",") if m.strip()]
+    alpha = args.lora_alpha if args.lora_alpha is not None else 2 * args.lora_r
+
+    peft_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=alpha,
+        lora_dropout=args.lora_dropout,
+        target_modules=target_modules,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    fields = {
+        "lora": True,
+        "lora_r": args.lora_r,
+        "lora_alpha": alpha,
+        "lora_dropout": args.lora_dropout,
+        "lora_target_modules": target_modules,
+    }
+    return peft_config, fields
 
 
 def main() -> None:
@@ -166,8 +250,13 @@ def main() -> None:
     dataset_name = dataset_config["hf_id"]
     dataset_sanitized = dataset_config["sanitized_name"]
 
+    peft_config, lora_fields = _resolve_lora(args)
+
     base_dir = args.output_base_dir
     sub_dir = f"{model_name_sanitized}_{dataset_sanitized}"
+    if peft_config is not None:
+        # keep LoRA runs off the dense run's checkpoint/delta paths
+        sub_dir = f"{sub_dir}_lora_r{args.lora_r}"
     output_dir = os.path.join(base_dir, "checkpoints", sub_dir)
     delta_log_dir = os.path.join(base_dir, "deltas", sub_dir)
 
@@ -278,8 +367,12 @@ def main() -> None:
     # device_map="auto": spread layers across GPUs (model parallelism, single
     # process). DPOTrainer won't auto-place its internal reference model under
     # device_map, so build one explicitly here. Default None path is unchanged.
+    #
+    # Under LoRA there is NO explicit ref model: TRL uses the base model with the
+    # adapter disabled as the implicit reference. Building one anyway would both
+    # double memory and give DPOTrainer a second, conflicting reference.
     ref_model = None
-    if args.device_map is not None:
+    if args.device_map is not None and peft_config is None:
         print(f"device_map={args.device_map}: building explicit reference model (model-parallel).")
         ref_model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -287,6 +380,8 @@ def main() -> None:
             device_map=args.device_map,
         )
         ref_model.config.use_cache = False
+    elif args.device_map is not None and peft_config is not None:
+        print("LoRA + device_map: no explicit ref model (TRL disables the adapter for the reference).")
 
     _grad_ckpt = args.gradient_checkpointing
     if args.no_gradient_checkpointing:
@@ -295,6 +390,14 @@ def main() -> None:
         # under FSDP use fsdp_config activation_checkpointing instead (set above);
         # leaving TrainingArguments gradient_checkpointing on double-checkpoints + warns.
         _grad_ckpt = False
+    if peft_config is not None and _grad_ckpt:
+        # With gradient checkpointing the base model's embedding output is produced
+        # under no_grad and the frozen base weights require no grad, so nothing in the
+        # checkpointed segment carries requires_grad and the adapter receives zero
+        # gradient — the run trains to nothing without erroring. Forcing the embedding
+        # output to require grad reconnects the graph.
+        model.enable_input_require_grads()
+        print("LoRA + gradient checkpointing: enabled input require_grads (adapter grad flow).")
 
     save_steps_arg = args.save_steps
     save_total_limit_arg = args.save_total_limit if args.save_total_limit is not None else 3
@@ -378,7 +481,19 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=dpo_collator_fn,
+        peft_config=peft_config,
     )
+
+    # Trainable-parameter accounting. This is the axis the LoRA baseline is compared
+    # on (LoRA r=64 ≈ 2.1% vs a 97.5%-sparse subnetwork's 2.5%), so record it rather
+    # than quoting it from a formula.
+    n_trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
+    n_total = sum(p.numel() for p in trainer.model.parameters())
+    trainable_pct = 100.0 * n_trainable / n_total if n_total else float("nan")
+    print(f"\nTrainable parameters: {n_trainable:,} / {n_total:,} ({trainable_pct:.4f}%)")
+    if peft_config is not None:
+        print(f"LoRA: r={args.lora_r}, alpha={lora_fields['lora_alpha']}, "
+              f"targets={lora_fields['lora_target_modules']}, lr={args.learning_rate:g}")
 
     manifest = {
         "model_name": model_name,
@@ -393,6 +508,10 @@ def main() -> None:
         "resume_from_checkpoint": resume_ckpt,
         "hf_rolling_save_steps": save_steps_arg,
         "hf_save_total_limit": hf_save_total_limit if use_hf_rolling else None,
+        "trainable_params": n_trainable,
+        "total_params": n_total,
+        "trainable_pct": trainable_pct,
+        **lora_fields,
     }
     trainer.add_callback(RunManifestCallback(base_dir, manifest))
 
@@ -460,7 +579,11 @@ def main() -> None:
     # per-param weight-delta callback (built from pre-wrap names) KeyErrors. The
     # oracle mask is built from checkpoint-diffs (initial vs ckpt-500), not these
     # delta logs, so just skip delta logging under FSDP.
-    if not resume_ckpt and not args.fsdp:
+    # LoRA: the delta callback exists to build warm-start magnitude masks from |θ^k − θ^0|
+    # over the FULL parameter vector. Under PEFT the base weights never move (only the
+    # adapter does), so every delta would be zero for the tensors the mask cares about,
+    # and named_parameters() carries the PEFT wrapper prefixes anyway. Skip it.
+    if not resume_ckpt and not args.fsdp and peft_config is None:
         base_state: Dict[str, torch.Tensor] = {}
         if trainer.is_world_process_zero():
             with torch.no_grad():
@@ -478,6 +601,8 @@ def main() -> None:
         )
     elif args.fsdp:
         print("FSDP: skipping weight-delta callback (oracle uses checkpoint-diff, not deltas).")
+    elif peft_config is not None:
+        print("LoRA: skipping weight-delta callback (base weights are frozen; no warm-start mask).")
 
     print(f"\n{'=' * 60}")
     print("Starting DPO training")
@@ -487,7 +612,40 @@ def main() -> None:
     print(f"Total steps target: {num_steps}")
     print(f"{'=' * 60}\n")
 
-    trainer.train(resume_from_checkpoint=resume_ckpt)
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
+    train_output = trainer.train(resume_from_checkpoint=resume_ckpt)
+
+    # Efficiency summary. The PEFT-vs-sparse comparison is reported on trainable
+    # params, wall-clock per step, and peak VRAM, so emit all three from the run
+    # itself instead of reconstructing them from logs afterwards.
+    metrics = dict(getattr(train_output, "metrics", {}) or {})
+    runtime_s = metrics.get("train_runtime")
+    steps_done = trainer.state.global_step or 0
+    summary = {
+        "run_name": wandb_run_name,
+        "model_name": model_name,
+        "dataset_key": dataset_key,
+        "lora": peft_config is not None,
+        "trainable_params": n_trainable,
+        "total_params": n_total,
+        "trainable_pct": trainable_pct,
+        "learning_rate": args.learning_rate,
+        "steps_completed": steps_done,
+        "train_runtime_s": runtime_s,
+        "sec_per_step": (runtime_s / steps_done) if runtime_s and steps_done else None,
+        "peak_vram_gb": (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else None,
+        "final_loss": metrics.get("train_loss"),
+        **lora_fields,
+    }
+    if trainer.is_world_process_zero():
+        summary_path = os.path.join(output_dir, "efficiency_summary.json")
+        with open(summary_path, "w") as fh:
+            json.dump(summary, fh, indent=2)
+        print(f"\nEfficiency summary → {summary_path}")
+        for k, v in summary.items():
+            print(f"  {k}: {v}")
 
     print(f"\n{'=' * 60}")
     print("Training complete!")
