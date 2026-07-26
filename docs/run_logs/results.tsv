@@ -23,3 +23,8 @@ timestamp	job_id	stage	arm	metric	value	artifact	state	notes
 2026-07-26	8734159_0	train	grpo_dense_matched_150	clipped_ratio	0.873	same	OK	vs 0.858 over 500 steps
 2026-07-26	8734159_1	train	grpo_sparse_matched_150	-	-	/scratch/$USER/rebuttal_analysis/grpo_matched/sparse/	PENDING	the other half of the comparison
 2026-07-26	8727274_0	train	lora_r64_lr5e-6	-	-	/scratch/$USER/rebuttal_lora/arm0_r64_lr5e-6	RUNNING	started ~12:19 cluster time, ~6.7h expected
+2026-07-26	8757086	analysis	dpo_lightr1_mag_k50	jaccard_vs_oracle	0.8102	/scratch/$USER/rebuttal_analysis/ksweep_jaccard/jaccard_matrix.csv	OK	k-sweep: does the DPO subnetwork stabilise?
+2026-07-26	8757086	analysis	dpo_lightr1_mag_k100	jaccard_vs_oracle	0.9632	same	OK	knee is around k=100
+2026-07-26	8757086	analysis	dpo_lightr1_mag_k150	jaccard_vs_oracle	0.9897	same	OK
+2026-07-26	8757086	analysis	dpo_lightr1_mag_k200	jaccard_vs_oracle	0.9981	same	OK	40% of training buys 99.8% of the final mask
+2026-07-26	8757086	analysis	random_seed42	jaccard_vs_oracle	0.0178	same	OK	chance floor; analytic A/(2-A)=0.0127, gap likely from the per-layer keep floor
