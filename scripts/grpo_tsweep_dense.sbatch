@@ -27,11 +27,17 @@
 # so a single self-consistent trajectory yields BOTH the oracle (T=500) and the
 # warm-start points. Everything else is byte-identical to that script's arm 0.
 #
-# max_completion_length stays at the as-run 1024. Raising it would make this a
-# two-variable change and break comparability with the arms already in the paper.
+# max_completion_length = 2048, which is Scott's locked spec
+# (docs/hyperparams/grpo_500step_5way_sweep.yaml, updated 2026-05-01) and what the
+# submission's Table 6 claims. It is NOT the as-run value: every arm in Fig. 9 actually
+# ran at 1024, read out of training_args.bin. We take the specified value rather than
+# the as-run one because at 1024 `completions/clipped_ratio` sits at 0.5-1.0 and
+# ~90% of the optimised reward is formatting, so a T-sweep there would be measuring
+# mask quality against a target that barely scores reasoning.
 #
-# COST: measured 44 min for 150 steps (job 8734159_0) => ~17.6 s/step.
-#       500 steps ~= 2.5 h + 10 checkpoint writes. 34 GB per checkpoint, ~340 GB total.
+# COST: measured 44 min for 150 steps at cap 1024 (job 8734159_0) => ~17.6 s/step.
+#       At 2048 generation roughly doubles the tail; budget ~4.5-5 h for 500 steps
+#       plus 10 checkpoint writes. 34 GB per checkpoint, ~340 GB total.
 #SBATCH --job-name=grpo_tsweep_dense
 #SBATCH --output=logs/grpo_tsweep_dense_%j.out
 #SBATCH --error=logs/grpo_tsweep_dense_%j.err
@@ -60,7 +66,7 @@ export HF_DATASETS_CACHE="$SCRATCH_ROOT/hf_cache/datasets"
 export WANDB_PROJECT="rl_casino_rebuttal"
 
 STEPS="${STEPS:-500}"
-CAP="${CAP:-1024}"
+CAP="${CAP:-2048}"
 OUT="$SCRATCH_ROOT/rebuttal_analysis/grpo_tsweep/dense"
 mkdir -p "$OUT"
 

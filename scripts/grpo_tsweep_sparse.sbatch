@@ -2,7 +2,7 @@
 # Sparse GRPO training on the masks built by scripts/grpo_tsweep_masks.sbatch.
 #
 # Every arm here is schedule-matched to the dense run in scripts/grpo_tsweep_dense.sbatch:
-# cosine, 500 steps, 50-step warmup, lr 5e-6, cap 1024. That matters. Appendix D.4's
+# cosine, 500 steps, 50-step warmup, lr 5e-6, cap 2048. That matters. Appendix D.4's
 # dense-vs-sparse GRPO comparison is unreadable precisely because it was not matched —
 # dense sat at 99.8% of peak LR at step 500 while every sparse arm had annealed to 0.2%,
 # a 449x gap (docs/run_logs/grpo_schedule_confound_2026-07-25.md). These four arms and
@@ -50,7 +50,7 @@ export HF_DATASETS_CACHE="$SCRATCH_ROOT/hf_cache/datasets"
 export WANDB_PROJECT="rl_casino_rebuttal"
 
 STEPS="${STEPS:-500}"
-CAP="${CAP:-1024}"
+CAP="${CAP:-2048}"
 SPARSITY="${SPARSITY:-97.5}"
 WARMUP_STEPS=$(python -c "print(int(0.1*$STEPS))" 2>/dev/null || echo 50)
 

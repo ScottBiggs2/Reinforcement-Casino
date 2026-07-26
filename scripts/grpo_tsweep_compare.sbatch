@@ -31,7 +31,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=192G
-#SBATCH --time=03:00:00
+#SBATCH --time=05:00:00
 
 set -uo pipefail
 
@@ -62,6 +62,10 @@ cat > "$MASKS_JSON" << JSONEOF
    "path": "$M/grpo_math220k_warmmag_T50_sp${SPARSITY}.pt"},
   {"label": "GRPO-warmmag-T100",    "family": "GRPO-warmmag", "dataset": "Math220k", "step": 100, "sparsity": $SPARSITY,
    "path": "$M/grpo_math220k_warmmag_T100_sp${SPARSITY}.pt"},
+  {"label": "GRPO-warmmag-T150",    "family": "GRPO-warmmag", "dataset": "Math220k", "step": 150, "sparsity": $SPARSITY,
+   "path": "$M/grpo_math220k_warmmag_T150_sp${SPARSITY}.pt"},
+  {"label": "GRPO-warmmag-T200",    "family": "GRPO-warmmag", "dataset": "Math220k", "step": 200, "sparsity": $SPARSITY,
+   "path": "$M/grpo_math220k_warmmag_T200_sp${SPARSITY}.pt"},
   {"label": "GRPO-warmmag-T250",    "family": "GRPO-warmmag", "dataset": "Math220k", "step": 250, "sparsity": $SPARSITY,
    "path": "$M/grpo_math220k_warmmag_T250_sp${SPARSITY}.pt"},
   {"label": "GRPO-oracle-T500",     "family": "GRPO-oracle",  "dataset": "Math220k", "step": 500, "sparsity": $SPARSITY,
@@ -86,7 +90,7 @@ done
 [ "$MISSING" -ne 0 ] && exit 1
 
 echo ""
-echo "[1/2] Jaccard (global + per-layer) and linear CKA over all 15 pairs"
+echo "[1/2] Jaccard (global + per-layer) and linear CKA over all 28 pairs"
 python scripts/multi_mask_jaccard_cka.py \
     --model meta-llama/Llama-3.1-8B-Instruct \
     --masks_json "$MASKS_JSON" \
@@ -104,6 +108,8 @@ echo "[2/2] Tensor-class composition, same convention as mask_composition_2026-0
 python src/analysis/mask_composition.py \
     "$M/grpo_math220k_warmmag_T50_sp${SPARSITY}.pt" \
     "$M/grpo_math220k_warmmag_T100_sp${SPARSITY}.pt" \
+    "$M/grpo_math220k_warmmag_T150_sp${SPARSITY}.pt" \
+    "$M/grpo_math220k_warmmag_T200_sp${SPARSITY}.pt" \
     "$M/grpo_math220k_warmmag_T250_sp${SPARSITY}.pt" \
     "$M/grpo_math220k_oracle_T500_sp${SPARSITY}.pt" \
     "$OLD/oracle_grpo_math220k_step500_sp${SPARSITY}.pt" \

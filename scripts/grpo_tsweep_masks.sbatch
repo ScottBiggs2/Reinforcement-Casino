@@ -1,8 +1,14 @@
 #!/bin/bash
 # Build the GRPO magnitude/oracle mask family from ONE dense trajectory.
 #
-#   T =  50, 100, 250  ->  warm-start magnitude masks  |theta^T - theta^0|
-#   T = 500            ->  the oracle (k = T), same formula at the end of training
+#   T = 50, 100, 150, 200, 250  ->  warm-start magnitude masks  |theta^T - theta^0|
+#   T = 500                     ->  the oracle (k = T), same formula at end of training
+#
+# 150 and 200 are not free additions of convenience: k = 50/100/150/200 is exactly the
+# warm-magnitude grid the submission uses for DPO (Fig. 1, Fig. 5), and 200 is the
+# `magnitude.target_step` locked in Scott's docs/hyperparams/grpo_500step_5way_sweep.yaml.
+# Including them makes the GRPO sweep line up point-for-point with the DPO one instead
+# of being a differently-sampled curve that has to be argued about.
 #
 # All four come from the same run (scripts/grpo_tsweep_dense.sbatch, 500 steps,
 # cosine + 50-step warmup, cap 1024), so "how much of the oracle is already visible
@@ -56,7 +62,7 @@ CKPT_DIR="$SCRATCH_ROOT/rebuttal_analysis/grpo_tsweep/dense/grpo_tsweep_dense_${
 MASK_DIR="$SCRATCH_ROOT/rebuttal_analysis/grpo_tsweep/masks"
 mkdir -p "$MASK_DIR"
 
-TS=(50 100 250 500)
+TS=(50 100 150 200 250 500)
 
 echo "=========================================="
 echo "GRPO T-sweep mask generation"
