@@ -53,22 +53,28 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def sequence_logprob(model, prompt_ids: torch.Tensor, completion_ids: torch.Tensor) -> torch.Tensor:
+def sequence_logprob(model, prompt_ids: torch.Tensor, prompt_mask: torch.Tensor,
+                     completion_ids: torch.Tensor, completion_mask: torch.Tensor) -> torch.Tensor:
     """Sum of token log-probs of `completion_ids` conditioned on `prompt_ids`.
 
-    Both are [B, T] with right padding; padding is assumed to be token id 0 and is
-    excluded via an explicit length mask rather than by trusting the pad token.
+    All four are [B, T] with right padding. Lengths come from the tokenizer's own
+    attention masks, NOT from comparing ids against 0: Llama pads with eos
+    (pad_token = eos_token here), so an `ids != 0` test would count every pad position
+    as a real token and inflate the log-probs.
+
     Returns [B].
     """
     device = next(model.parameters()).device
     prompt_ids = prompt_ids.to(device)
     completion_ids = completion_ids.to(device)
+    prompt_mask = prompt_mask.to(device)
+    completion_mask = completion_mask.to(device)
 
     seq = torch.cat([prompt_ids, completion_ids], dim=1)
-    attn = (seq != 0).long()
+    attn = torch.cat([prompt_mask, completion_mask], dim=1)
     # first completion position differs per row, so build the loss mask from lengths
-    p_len = (prompt_ids != 0).sum(dim=1)
-    c_len = (completion_ids != 0).sum(dim=1)
+    p_len = prompt_mask.sum(dim=1)
+    c_len = completion_mask.sum(dim=1)
 
     logits = model(input_ids=seq, attention_mask=attn).logits[:, :-1]
     targets = seq[:, 1:]
@@ -84,10 +90,16 @@ def sequence_logprob(model, prompt_ids: torch.Tensor, completion_ids: torch.Tens
     return (tok_lp * mask).sum(dim=1)
 
 
-def encode_batch(tokenizer, texts: List[str], max_len: int) -> torch.Tensor:
-    enc = [tokenizer(t, truncation=True, max_length=max_len, return_tensors="pt") for t in texts]
+def encode_batch(tokenizer, texts: List[str], max_len: int):
+    """Tokenize and pad a batch. Returns (input_ids, attention_mask), both [B, T] long.
+
+    Tokenizes WITHOUT return_tensors: with it, each item's input_ids is a [1, T] tensor
+    and tokenizer.pad then sees one level of nesting too many and raises
+    "excessive nesting (inputs type list where type int is expected)".
+    """
+    enc = tokenizer([t for t in texts], truncation=True, max_length=max_len)
     padded = tokenizer.pad(enc, padding=True, return_tensors="pt")
-    return padded["input_ids"].to(torch.long)
+    return padded["input_ids"].to(torch.long), padded["attention_mask"].to(torch.long)
 
 
 # ---------------------------------------------------------------------------
@@ -228,11 +240,11 @@ def main() -> None:
         lp_r: List[float] = []
         for i in range(0, len(ds), args.batch_size):
             rows = ds[i: i + args.batch_size]
-            p = encode_batch(tokenizer, list(rows["prompt"]), args.max_prompt_length)
-            c = encode_batch(tokenizer, list(rows["chosen"]), args.max_length)
-            r = encode_batch(tokenizer, list(rows["rejected"]), args.max_length)
-            lp_c += sequence_logprob(model, p, c).tolist()
-            lp_r += sequence_logprob(model, p, r).tolist()
+            p, pm = encode_batch(tokenizer, list(rows["prompt"]), args.max_prompt_length)
+            c, cm = encode_batch(tokenizer, list(rows["chosen"]), args.max_length)
+            r, rm = encode_batch(tokenizer, list(rows["rejected"]), args.max_length)
+            lp_c += sequence_logprob(model, p, pm, c, cm).tolist()
+            lp_r += sequence_logprob(model, p, pm, r, rm).tolist()
             if (i // args.batch_size) % 25 == 0:
                 print(f"    {min(i + args.batch_size, len(ds)):>5}/{len(ds)} pairs", flush=True)
         return {"chosen": lp_c, "rejected": lp_r}
