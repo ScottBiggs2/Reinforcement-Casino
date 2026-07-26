@@ -171,6 +171,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--lora_dropout", type=float, default=0.0, help="LoRA dropout.")
     parser.add_argument(
+        "--lora_use_rslora",
+        action="store_true",
+        help="Rank-stabilized LoRA: scale by alpha/sqrt(r) instead of alpha/r "
+             "(Kalajdzievski 2023). With the conventional alpha=2r the scaling alpha/r is "
+             "constant across ranks, which under-scales HIGH ranks — i.e. exactly the r=64 "
+             "matched-budget arm. Off by default so the reported config is the standard one; "
+             "turn it on if the r=64 arm underperforms r=16 and record which was used.",
+    )
+    parser.add_argument(
         "--lora_target_modules",
         type=str,
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
@@ -225,6 +234,7 @@ def _resolve_lora(args):
         target_modules=target_modules,
         bias="none",
         task_type="CAUSAL_LM",
+        use_rslora=args.lora_use_rslora,
     )
     fields = {
         "lora": True,
@@ -232,6 +242,8 @@ def _resolve_lora(args):
         "lora_alpha": alpha,
         "lora_dropout": args.lora_dropout,
         "lora_target_modules": target_modules,
+        "lora_use_rslora": args.lora_use_rslora,
+        "lora_scaling": (alpha / (args.lora_r ** 0.5)) if args.lora_use_rslora else (alpha / args.lora_r),
     }
     return peft_config, fields
 
@@ -255,8 +267,14 @@ def main() -> None:
     base_dir = args.output_base_dir
     sub_dir = f"{model_name_sanitized}_{dataset_sanitized}"
     if peft_config is not None:
-        # keep LoRA runs off the dense run's checkpoint/delta paths
-        sub_dir = f"{sub_dir}_lora_r{args.lora_r}"
+        # Keep LoRA runs off the dense run's paths, AND off each other's. The tag must
+        # include the learning rate: an LR sweep at fixed rank would otherwise collide,
+        # and with --resume_from_checkpoint auto one arm would silently resume from
+        # another arm's checkpoint at a different LR — invisible in the output.
+        lr_tag = f"{args.learning_rate:g}".replace("-", "m").replace("+", "").replace(".", "p")
+        sub_dir = f"{sub_dir}_lora_r{args.lora_r}_lr{lr_tag}"
+        if args.lora_use_rslora:
+            sub_dir = f"{sub_dir}_rs"
     output_dir = os.path.join(base_dir, "checkpoints", sub_dir)
     delta_log_dir = os.path.join(base_dir, "deltas", sub_dir)
 
@@ -615,6 +633,25 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
+    class SegmentStepCounter(TrainerCallback):
+        """Counts steps executed in THIS process only.
+
+        train_runtime covers only the resumed segment while global_step is cumulative,
+        so train_runtime/global_step understates s/step on any requeued run. Since the
+        LoRA arm exists to make a wall-clock claim, that error would land in our favour
+        and nobody would question it. Count the segment explicitly instead.
+        """
+
+        def __init__(self):
+            self.steps = 0
+
+        def on_step_end(self, train_args, state, control, **kwargs):
+            self.steps += 1
+            return control
+
+    seg_counter = SegmentStepCounter()
+    trainer.add_callback(seg_counter)
+
     train_output = trainer.train(resume_from_checkpoint=resume_ckpt)
 
     # Efficiency summary. The PEFT-vs-sparse comparison is reported on trainable
@@ -623,6 +660,26 @@ def main() -> None:
     metrics = dict(getattr(train_output, "metrics", {}) or {})
     runtime_s = metrics.get("train_runtime")
     steps_done = trainer.state.global_step or 0
+    seg_steps = seg_counter.steps
+
+    # DPO at an aggressive LR can drive chosen AND rejected log-probs down together while
+    # the margin still grows (likelihood displacement — Razin et al., ICLR 2025). The
+    # margin is our headline metric, so a blown-up arm could post the best number in the
+    # table and generate garbage. Record the two log-probs so that is visible.
+    last_logps = {}
+    for entry in reversed(trainer.state.log_history or []):
+        if "logps/chosen" in entry:
+            last_logps = {
+                "logps_chosen": entry.get("logps/chosen"),
+                "logps_rejected": entry.get("logps/rejected"),
+                "rewards_chosen": entry.get("rewards/chosen"),
+                "rewards_rejected": entry.get("rewards/rejected"),
+                "rewards_margin": entry.get("rewards/margins"),
+                "rewards_accuracy": entry.get("rewards/accuracies"),
+                "logged_at_step": entry.get("step"),
+            }
+            break
+
     summary = {
         "run_name": wandb_run_name,
         "model_name": model_name,
@@ -633,10 +690,16 @@ def main() -> None:
         "trainable_pct": trainable_pct,
         "learning_rate": args.learning_rate,
         "steps_completed": steps_done,
+        "steps_this_segment": seg_steps,
+        "resumed": bool(resume_ckpt),
         "train_runtime_s": runtime_s,
-        "sec_per_step": (runtime_s / steps_done) if runtime_s and steps_done else None,
+        # runtime covers THIS segment only -> divide by this segment's steps, not global_step
+        "sec_per_step": (runtime_s / seg_steps) if runtime_s and seg_steps else None,
         "peak_vram_gb": (torch.cuda.max_memory_allocated() / 1e9) if torch.cuda.is_available() else None,
         "final_loss": metrics.get("train_loss"),
+        # NOTE: these are TRAINING-batch metrics logged by TRL, not held-out. Use
+        # src/evaluation/preference_eval.py for the held-out numbers.
+        "train_batch_metrics": last_logps,
         **lora_fields,
     }
     if trainer.is_world_process_zero():
