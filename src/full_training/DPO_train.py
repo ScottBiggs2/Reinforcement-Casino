@@ -298,8 +298,10 @@ def main() -> None:
     if not checkpoint_schedule and num_steps > 0:
         checkpoint_schedule = [num_steps]
 
-    wandb_project = "huggingface"
-    os.environ["WANDB_PROJECT"] = wandb_project
+    # setdefault, not assignment: the sbatches export WANDB_PROJECT and this used to
+    # overwrite it, so runs landed in "huggingface" regardless of what the job asked for.
+    # Unset -> unchanged behaviour.
+    wandb_project = os.environ.setdefault("WANDB_PROJECT", "huggingface")
     wandb_run_name = args.run_name if args.run_name else f"{model_name_sanitized}_{dataset_sanitized}_dpo_{num_steps}steps"
 
     print(f"Delta (warm-mask) schedule: {checkpoint_schedule}")
