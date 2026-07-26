@@ -17,3 +17,9 @@ timestamp	job_id	stage	arm	metric	value	artifact	state	notes
 2026-07-26	8727254_1	eval	sparse_oracle_lightr1	r_chosen	-0.3119	same	OK	moved ~26x further from reference than random
 2026-07-26	8727254_2	eval	sparse_random_lightr1	r_chosen	0.0124	same	OK	random mask barely moved the policy at all
 2026-07-26	8727274	train	lora_baseline_4arms	-	-	/scratch/$USER/rebuttal_lora/	PENDING	queued; one h200 node, QOS 4 running/8 submitted
+2026-07-26	8734159_0	train	grpo_dense_matched_150	final_lr	6.769e-10	/scratch/$USER/rebuttal_analysis/grpo_matched/dense/	OK	cosine over max_steps=150; was 4.99e-6 in the confounded run
+2026-07-26	8734159_0	train	grpo_dense_matched_150	reward_delta	+0.1104	same	OK	0.8833 -> 0.9938 over 150 steps; dense does learn in this window
+2026-07-26	8734159_0	train	grpo_dense_matched_150	accuracy_mean	0.0708	same	OK	vs 0.0779 over 500 steps -- short run is representative
+2026-07-26	8734159_0	train	grpo_dense_matched_150	clipped_ratio	0.873	same	OK	vs 0.858 over 500 steps
+2026-07-26	8734159_1	train	grpo_sparse_matched_150	-	-	/scratch/$USER/rebuttal_analysis/grpo_matched/sparse/	PENDING	the other half of the comparison
+2026-07-26	8727274_0	train	lora_r64_lr5e-6	-	-	/scratch/$USER/rebuttal_lora/arm0_r64_lr5e-6	RUNNING	started ~12:19 cluster time, ~6.7h expected
