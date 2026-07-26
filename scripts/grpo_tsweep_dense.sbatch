@@ -41,7 +41,10 @@
 #SBATCH --job-name=grpo_tsweep_dense
 #SBATCH --output=logs/grpo_tsweep_dense_%j.out
 #SBATCH --error=logs/grpo_tsweep_dense_%j.err
-#SBATCH --partition=multigpu
+# d4052-d4055 (the only h200 nodes) sit in BOTH `gpu` and `multigpu`, and the two
+# partitions carry SEPARATE QOS counters. Listing both doubles the scheduling chances
+# on identical hardware. `gpu` caps at 8h = this script's walltime, so nothing is lost.
+#SBATCH --partition=gpu,multigpu
 #SBATCH --gres=gpu:h200:1
 #SBATCH --mem=192G
 #SBATCH --cpus-per-task=12

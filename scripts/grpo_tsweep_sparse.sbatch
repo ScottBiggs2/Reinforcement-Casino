@@ -24,7 +24,11 @@
 #SBATCH --job-name=grpo_tsweep_sparse
 #SBATCH --output=logs/grpo_tsweep_sparse_%A_%a.out
 #SBATCH --error=logs/grpo_tsweep_sparse_%A_%a.err
-#SBATCH --partition=multigpu
+# d4052-d4055 (the only h200 nodes) sit in BOTH `gpu` and `multigpu`, and the two
+# partitions carry SEPARATE QOS counters (each: 8 submitted / 4 running). Listing both
+# gives these arms two queues to win from on the same physical hardware instead of one.
+# `gpu` caps at 8h, which is already this script's walltime, so nothing is given up.
+#SBATCH --partition=gpu,multigpu
 #SBATCH --gres=gpu:h200:1
 #SBATCH --mem=192G
 #SBATCH --cpus-per-task=12
