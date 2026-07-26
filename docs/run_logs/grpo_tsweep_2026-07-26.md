@@ -46,11 +46,29 @@ yields both the oracle (T=500) and every warm-start point**.
 
 | Job | Script | Depends on | Partition | Resources |
 |---|---|---|---|---|
-| **8761309** | `scripts/grpo_tsweep_dense.sbatch` | — | multigpu | `gpu:h200:1`, 192G, 12 cpu, 8h, `--requeue` |
+| **8761309** | `scripts/grpo_tsweep_dense.sbatch` | — | gpu,multigpu | `gpu:h200:1`, 192G, 12 cpu, 8h, `--requeue` |
 | **8761310** | `scripts/grpo_tsweep_masks.sbatch` | `afterok:8761309` | short | CPU only, 192G, 16 cpu, 6h |
 | **8761311** | `scripts/grpo_tsweep_compare.sbatch` | `afterok:8761310` | gpu | `gpu:1`, 192G, 8 cpu, 5h |
 | **8761312** | `scripts/grpo_tsweep_launch_sparse.sbatch` | `afterok:8761310` | short | 1 cpu, 2G, 12h |
-| ↳ submits | `scripts/grpo_tsweep_sparse.sbatch` | (launcher) | multigpu | `gpu:h200:1`, 192G, 12 cpu, 8h, array 0–3 |
+| ↳ submits | `scripts/grpo_tsweep_sparse.sbatch` | (launcher) | gpu,multigpu | `gpu:h200:1`, 192G, 12 cpu, 8h, array 0–3 |
+
+**Partition:** the only h200 nodes (d4052–d4055) belong to *both* `gpu` and `multigpu`,
+and the two partitions carry separate QOS counters (each 8 submitted / 4 running). The
+GRPO jobs list both, which doubles the scheduling chances on identical hardware; `gpu`
+caps at 8h, already the walltime here, so nothing is given up. Applied to 8761309 and
+8734159_1 in place via `scontrol update Partition=...` — no resubmission.
+
+**Queue made room for this (2026-07-26, Irene's call):** LoRA baseline arms
+`8727274_1` (r=64, lr 3e-5) and `8727274_3` (r=16, lr 3e-5) were cancelled while still
+PENDING — never started, no work lost. Reason: arm 0 (r=64, lr 5e-6, the *lowest* grid
+point) had already reached train margin **10.44** with accuracy **1.00** and loss 2e-4 at
+step 400/500, against dense DPO's 3.24. On Light-R1 (~3,060 pairs) 500 steps at effective
+batch 128 is ≈21 epochs, so every LR in the grid will read accuracy 1.00 and the grid
+cannot be adjudicated on training-batch metrics at all — it only becomes meaningful once
+the held-out preference eval runs. `8727274_0` was left running (nearly done) and
+`8727274_2` (r=64, lr 1e-4) kept, because that arm tests likelihood displacement
+(Razin et al., ICLR 2025) via `logps/chosen` vs `logps/rejected`, which is a separate
+question from LR selection and does not depend on the margin.
 
 An earlier chain (8760188/8760223/8760224/8760259) was submitted at `cap=1024`, then
 cancelled and resubmitted at `cap=2048` before any of it started — see §3a. Nothing else
