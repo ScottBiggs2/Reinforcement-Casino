@@ -1,0 +1,19 @@
+timestamp	job_id	stage	arm	metric	value	artifact	state	notes
+2026-07-25	8724440	analysis	oracle_dpo_lightr1	layernorm_over_selection	0.70	/scratch/$USER/rebuttal_analysis/mask_composition_llama8b.json	OK	under-selected; BitFit hypothesis refuted
+2026-07-25	8724440	analysis	oracle_grpo_math220k	layernorm_over_selection	0.14	same	OK	GRPO nearly abandons LayerNorm; 5x below DPO
+2026-07-25	8724440	analysis	oracle_grpo_math220k	attn_o_over_selection	1.22	same	OK	vs DPO 1.09; composition differs by objective
+2026-07-25	8725606_0	analysis	llama_dpo_tulu3	mass_in_top_2.5pct	1.0000	/scratch/$USER/rebuttal_analysis/delta_llama_dpo_tulu3.json	OK	DPO saturates at top 1%
+2026-07-25	8725606_1	analysis	llama_grpo_math220k	mass_in_top_2.5pct	0.9638	delta_llama_grpo_math220k.json	OK	GRPO leaves 3.6% outside the budget
+2026-07-25	8725606_2	analysis	qwen3_dpo_lightr1	mass_in_top_2.5pct	1.0000	delta_qwen3_dpo_lightr1.json	OK	second family, same saturation
+2026-07-25	8725606_0	analysis	llama_dpo_tulu3	stable_rank_median	131.9	same	OK	LoRA r=64 caps this at 64
+2026-07-25	8725606_1	analysis	llama_grpo_math220k	stable_rank_median	228.9	same	OK
+2026-07-25	8725606_2	analysis	qwen3_dpo_lightr1	stable_rank_median	180.3	same	OK
+2026-07-25	8725068	smoke	lora_r16_lr3e-5	trainable_params	41943040	/scratch/$USER/rebuttal_lora/smoke	PASS	6/6 machine checks; grad_norm>0 confirms adapter grad flow
+2026-07-25	8725068	smoke	lora_r16_lr3e-5	sec_per_step	48.29	same	PASS	=> 500 steps ~= 6.7h
+2026-07-26	8727254_0	eval	base_llama	heldout_margin	0.0000	/scratch/$USER/rebuttal_analysis/pref_eval/base_llama.json	PASS	sanity: policy==reference must give exactly 0
+2026-07-26	8727254_1	eval	sparse_oracle_lightr1	heldout_margin	0.0345	pref_eval/sparse_oracle_lightr1.json	OK	CI [+0.014,+0.056]; CROSS-DATASET (tulu3 tail)
+2026-07-26	8727254_2	eval	sparse_random_lightr1	heldout_margin	0.0188	pref_eval/sparse_random_lightr1.json	OK	CI [+0.003,+0.036]; overlaps oracle -- NOT separated at n=500
+2026-07-26	8727254_3	eval	sparse_warmmag200_lightr1	heldout_margin	0.0286	pref_eval/sparse_warmmag200_lightr1.json	OK	CI [+0.007,+0.049]
+2026-07-26	8727254_1	eval	sparse_oracle_lightr1	r_chosen	-0.3119	same	OK	moved ~26x further from reference than random
+2026-07-26	8727254_2	eval	sparse_random_lightr1	r_chosen	0.0124	same	OK	random mask barely moved the policy at all
+2026-07-26	8727274	train	lora_baseline_4arms	-	-	/scratch/$USER/rebuttal_lora/	PENDING	queued; one h200 node, QOS 4 running/8 submitted
