@@ -38,3 +38,6 @@ timestamp	job_id	stage	arm	metric	value	artifact	state	notes
 2026-07-26	8770352	analysis	oracle_grpo_math220k_mask	kept_1d_frac_of_budget	0.000005	logs/mask_budget_1d_8770352.out	OK	937 of 200,756,531 kept coords are 1-D => INERT (sparse_adamw.py:115 gates on len(shape)==2)
 2026-07-26	8770352	analysis	oracle_dpo_lightr1_mask	kept_1d_frac_of_budget	0.000023	same	OK	4,687 of 200,756,531; 5.0x the GRPO count -- this is the source of the LayerNorm 0.70-vs-0.14 over-selection figure
 2026-07-26	8770352	analysis	oracle_masks_llama8b	embed_lmhead_share_of_budget	0.1098	same	OK	embed_tokens+lm_head = 13.08% of params take 10.98% of the GRPO budget (9.49% DPO); scored by BOTH branches, not a branch difference
+2026-07-27	8787043	eval	lora_r64_lr1e-4	heldout_margin	0.2655	/scratch/$USER/rebuttal_analysis/pref_eval/lora_r64_lr1e-4.json	OK	CI [0.182,0.352]; 3x arm0's margin at 20x the LR
+2026-07-27	8787043	eval	lora_r64_lr1e-4	pref_accuracy	0.614	same	OK	vs arm0 0.618 -- 20x LR change moves accuracy by -0.004, CIs near-identical
+2026-07-27	8787043	eval	lora_r64_lr1e-4	r_chosen	-3.4821	same	OK	vs arm0 -1.12 and sparse oracle -0.31: displacement tracks margin, accuracy does not
