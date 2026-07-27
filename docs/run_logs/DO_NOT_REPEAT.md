@@ -304,3 +304,16 @@ and can never emit a boxed answer.
   cost at cap 2048 gives ~35 s/step, ~4.9 h for 500 steps against the 8 h limit.
 - The random-mask control 8769965 deliberately keeps cap 1024 to stay single-variable
   against the 2026-04 arms, and therefore inherits this truncation regime by design.
+
+### A bare `--gres=gpu:1` for an 8B eval can land on a V100 and blow the walltime
+Job 8786294 (held-out preference eval for LoRA arm2) asked for `--partition=multigpu
+--gres=gpu:1` and Slurm assigned **c2207 = `v100-pcie:2`**. V100 is Volta: no bf16, and
+PCIe rather than SXM. The identical eval for arm0 (8763502) ran on **d1028 = `a100:4`** in
+**3m12s**; on the V100 it finished pass 1 and reached 104/500 of pass 2 before a 30-minute
+wall killed it — roughly **10x slower**. It was not stuck, just on the wrong silicon.
+
+**Rule:** anything doing 8B forward passes — preference eval, probe extraction, mask
+scoring on a loaded model — must pin the GPU type (`--gres=gpu:a100:1` or `h200:1`), not
+just a count. The existing playbook note "mask-gen/eval can stay on bare `--gres=gpu:N`"
+is too permissive and is superseded for any job that loads an 8B model.
+Resubmitted as 8787043 with `a100:1` and a 1 h wall.
