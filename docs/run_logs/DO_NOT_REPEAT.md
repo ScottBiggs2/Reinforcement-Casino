@@ -46,6 +46,38 @@ exactly zero gradient regardless of magnitude. By the honest measure
 **False.** It still registered 0.125 in exactly that step. The problem is its share of
 the signal, not a hard zero.
 
+### "Figure 3 does contain GRPO results — the legend just mislabels them."
+**False, and it is a tempting mistake.** Reviewer XD33's "there are no GRPO results in
+the figure" is **correct**. Every curve in Figure 3 is a **DPO training run**; only the
+origin of the mask varies. `DPO Oracle OpenR1` means *DPO training under a mask derived
+from GRPO dense fine-tuning* — the label names the training objective and the mask's
+dataset, never the mask's objective. Table 1's "Sparse · oracle GRPO Math" row is the
+same thing (`transfer_v1/sparse_dpo_lightr1_oracle_grpo_math`). Answering the complaint
+with "the curve is there, it is just mislabelled" is an evasion of a valid point and
+would read as one.
+
+The real answer is that sparse **GRPO training** runs exist and were never plotted in
+that figure: `transfer_v1/sparse_grpo_math220k_oracle_{grpo_math,dpo_lightr1_500,
+dpo_tulu3}`. See the entry below on what they show.
+
+### Sparse GRPO at ρ=97.5% learns — do not repeat "the method fails for GRPO"
+The three runs above are single-variable (same model, `open-r1/OpenR1-Math-220k`,
+`n_steps=500`, lr 5e-6, β=0.025, reward profile, per `run_manifest.json`) and **all end
+at LR 1.111e-08**, so they share a schedule and are comparable to each other. Mean
+accuracy reward, steps 0–50 → 450–500:
+
+| mask driving sparse GRPO | acc. reward | total reward Δ |
+|---|---|---|
+| in-task GRPO Open-R1 | 0.0434 → 0.0833 | +0.0720 |
+| DPO Light-R1 | 0.0587 → 0.0809 | +0.0807 |
+| DPO Tülu-3 | 0.0561 → 0.0956 | +0.0355 |
+
+So the Appendix D.4 "failure at 97.5%" is the dense-vs-sparse **schedule confound**, not
+a property of GRPO. **Caveat that must travel with these numbers:** no random-mask sparse
+GRPO run exists anywhere (`find` over `transfer_v1` and Scott's `rl_casino_sparse_train`),
+so they establish *that* sparse GRPO trains and can never establish *which mask is
+better*. Do not use them to rank masks.
+
 ### "Sparse DPO runs at 48.3 s/step, so LoRA (45.8) is ~5% faster."
 **False, and it was in two rebuttal replies until 2026-07-26.** 48.29 s/step is the
 **LoRA r=16 smoke run** (job 8725068) — it was never a sparse measurement, and the
