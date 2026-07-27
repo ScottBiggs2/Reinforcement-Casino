@@ -282,3 +282,25 @@ the headline speedups do not describe deployed behaviour. The rebuttal's existin
 below the 1.69x/3.35x kernel figures") remains true and is now better grounded.
 
 **Fix, when the campaign is over:** make lr a runtime arg, as cav_fixes already does.
+
+### At cap 1024, ~90% of GRPO completions are truncated — that is why accuracy reward looks low
+From `trainer_state.json` of the dense matched arm 8734159_0 (cap 1024):
+`completions/clipped_ratio` mean **0.90**, `completions/mean_length` mean **973.9** of a
+1024 cap, `completions/max_length` **1024.0 at every step**. Completions that terminate
+naturally average only **413** tokens — so the 90% that hit the cap are cut off mid-reasoning
+and can never emit a boxed answer.
+
+**Consequences to keep straight:**
+- The low absolute `accuracy_reward` in every cap-1024 GRPO run (~0.04–0.10) is largely a
+  truncation artifact, not a statement about what the model can do. Do not describe those
+  levels as the model's math ability.
+- The *within-run* rise (e.g. 0.0434 → 0.0833 for the in-task sparse arm) is still valid:
+  both endpoints sit in the same truncation regime, so the comparison is internally sound.
+  Only the absolute level is suppressed.
+- This is why Scott's locked `grpo_500step_5way_sweep.yaml` uses cap 2048 and why 39ce420
+  moved the T-sweep to it. The T-sweep runs will NOT be comparable in absolute reward to
+  the 2026-04 cap-1024 arms.
+- Walltime is still fine: 8734159_0 ran 17.7 s/step at cap 1024, so even a 2x generation
+  cost at cap 2048 gives ~35 s/step, ~4.9 h for 500 steps against the 8 h limit.
+- The random-mask control 8769965 deliberately keeps cap 1024 to stay single-variable
+  against the 2026-04 arms, and therefore inherits this truncation regime by design.
