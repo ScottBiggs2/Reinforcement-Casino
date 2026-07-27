@@ -11,8 +11,11 @@
 # of being a differently-sampled curve that has to be argued about.
 #
 # All four come from the same run (scripts/grpo_tsweep_dense.sbatch, 500 steps,
-# cosine + 50-step warmup, cap 1024), so "how much of the oracle is already visible
+# cosine + 50-step warmup, cap 2048), so "how much of the oracle is already visible
 # at step T" is a statement about the trajectory and not about a schedule mismatch.
+# (Cap corrected 2026-07-27: it was 1024 when this header was written and became 2048
+# in 39ce420, aligning to Scott's locked grpo_500step_5way_sweep.yaml. The sweep stays
+# internally consistent either way -- every T and the oracle come from this one run.)
 #
 # MASK-FINDER VERSION — deliberate choice.
 # We use the version on this branch, NOT origin/cav_fixes. Scott's branch has since
@@ -20,9 +23,19 @@
 # the seed-jitter path. That is arguably the better definition and is what the random
 # baseline uses, but it is NOT the code that produced
 # `oracle_grpo_math220k_step500_sp97.5.pt` (2026-04-29). Keeping this branch's version
-# means the new T=500 oracle is directly comparable to the paper's oracle, which turns
-# the pair into a free reproducibility check: same objective, same dataset, same
-# sparsity, different LR schedule. Any Jaccard shortfall there is schedule sensitivity.
+# removes the mask-finder as a variable when the new T=500 oracle is set against the
+# paper's.
+#
+# BUT DO NOT CALL THAT PAIR A CLEAN REPRODUCIBILITY CHECK. An earlier version of this
+# header claimed the only remaining difference was the LR schedule. That is false, and
+# it was verified 2026-07-27 by reading training_args.bin out of checkpoint-850 of
+# `transfer_v1/dense_grpo_math220k_llama8b/llama8b_math220k_dense_scott_full`, the run
+# the paper's oracle was built from:
+#     paper oracle   cosine over max_steps=5000, cap 1024
+#     this run       cosine over max_steps=500,  cap 2048
+# TWO variables differ (schedule horizon AND completion cap), so a Jaccard shortfall
+# between the two oracles is NOT attributable to schedule sensitivity alone. Report it
+# as "differs under a different schedule and cap" or not at all.
 #
 # Defaults left untouched to match the paper's masks: global pooling (no --local_pool),
 # DEFAULT_MIN_LAYER_KEEP_RATIO, element-wise granularity.
