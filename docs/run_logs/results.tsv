@@ -28,3 +28,6 @@ timestamp	job_id	stage	arm	metric	value	artifact	state	notes
 2026-07-26	8757086	analysis	dpo_lightr1_mag_k150	jaccard_vs_oracle	0.9897	same	OK
 2026-07-26	8757086	analysis	dpo_lightr1_mag_k200	jaccard_vs_oracle	0.9981	same	OK	40% of training buys 99.8% of the final mask
 2026-07-26	8757086	analysis	random_seed42	jaccard_vs_oracle	0.0178	same	OK	chance floor; analytic A/(2-A)=0.0127, gap likely from the per-layer keep floor
+2026-07-26	6512341	train	sparse_oracle_lightr1_rho97.5	sec_per_step	45.22	logs/transfer_p3_sparse_dpo_6512341.out	OK	train_runtime 22612.2s/500 steps, 1x H200 (d4052), epoch 20.86 -- the real sparse timing
+2026-07-26	8727274_0	train	lora_r64_lr5e-6	sec_per_step	45.83	rebuttal_lora/arm0_r64_lr5e-6/.../efficiency_summary.json	OK	train_runtime 22916.2s/500 steps, 1x H200 (d4053), epoch 20.9 -- parity with sparse, NOT 5% faster
+2026-07-26	6366610	train	dense_dpo_lightr1_llama8b	sec_per_step	12.19	logs/transfer_p1_dpo_lightr1_6366610.out	OK	train_runtime 6092.6s/500 steps on 4x H200, epoch 20.86 => 6.77 GPU-h vs sparse 6.28, LoRA 6.37

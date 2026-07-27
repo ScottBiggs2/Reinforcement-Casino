@@ -46,6 +46,26 @@ exactly zero gradient regardless of magnitude. By the honest measure
 **False.** It still registered 0.125 in exactly that step. The problem is its share of
 the signal, not a hard zero.
 
+### "Sparse DPO runs at 48.3 s/step, so LoRA (45.8) is ~5% faster."
+**False, and it was in two rebuttal replies until 2026-07-26.** 48.29 s/step is the
+**LoRA r=16 smoke run** (job 8725068) — it was never a sparse measurement, and the
+figure was carried into a wall-clock concession to LoRA that the data does not support.
+The real numbers, all 500 steps of Light-R1 to the same 20.86 epochs on H200s:
+
+| arm | train_runtime | s/step | GPUs | job |
+|---|---|---|---|---|
+| dense DPO | 6,092.6 s | 12.19 | 4 | 6366610 |
+| sparse ρ=97.5% | 22,612.2 s | 45.22 | 1 | 6512341 (d4052) |
+| LoRA r=64 | 22,916.2 s | 45.83 | 1 | 8727274_0 (d4053) |
+
+Sparse and LoRA are at **parity** (1.3% apart) on identical hardware. Do not concede a
+wall-clock loss to LoRA. Note dense's GPU-hours (6.77) include data-parallel overhead,
+so the ~7% GPU-hour edge for sparse (6.28) is not a clean throughput win — the
+defensible claim is that sparse fit on one GPU where dense needed four.
+**Method note:** neither `run_manifest.json` nor `trainer_state.json` carries
+`train_runtime`; it is printed in the job's stdout, and node GPU type comes from
+`sacct -o NodeList` cross-referenced with `sinfo -N -o "%N %G"`.
+
 ### "The anti-oracle mask already exists, so the bottom-2.5% control is one training run away."
 **False.** `anti_oracle_dpo_lightr1_step500_sp97.5.pt` has measured density **97.5%** —
 it is the complement `1 − M` used by the probe necessity analysis. A bottom-k-by-|Δθ|
