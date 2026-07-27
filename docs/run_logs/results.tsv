@@ -41,3 +41,6 @@ timestamp	job_id	stage	arm	metric	value	artifact	state	notes
 2026-07-27	8787043	eval	lora_r64_lr1e-4	heldout_margin	0.2655	/scratch/$USER/rebuttal_analysis/pref_eval/lora_r64_lr1e-4.json	OK	CI [0.182,0.352]; 3x arm0's margin at 20x the LR
 2026-07-27	8787043	eval	lora_r64_lr1e-4	pref_accuracy	0.614	same	OK	vs arm0 0.618 -- 20x LR change moves accuracy by -0.004, CIs near-identical
 2026-07-27	8787043	eval	lora_r64_lr1e-4	r_chosen	-3.4821	same	OK	vs arm0 -1.12 and sparse oracle -0.31: displacement tracks margin, accuracy does not
+2026-07-27	8734159_1	train	grpo_sparse_matched_150	-	-	-	CANCELLED	scancel 2026-07-27 by Irene; was PENDING, nothing lost; bf6h reply's in-thread promise withdrawn as a result
+2026-07-27	8769965	train	sparse_grpo_random_seed42_control	-	-	-	CANCELLED	scancel 2026-07-27; random-mask GRPO control still does not exist, disclosed limitation stands
+2026-07-27	8761309	train	grpo_tsweep_dense	-	-	-	CANCELLED	scancel 2026-07-27; whole afterok chain 8761309/10/11/12 cancelled with it
