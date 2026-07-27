@@ -245,3 +245,40 @@ sparse arm carries decay 0.01 against dense's 0.0. **Left unfixed deliberately:*
 lr 5e-6 the per-step factor is `1 - lr*wd = 1 - 5e-8`, i.e. ~2.5e-5 relative shrinkage over
 500 steps — far below bf16 training noise, and changing it would break comparability with
 every existing sparse arm. Document it; do not "fix" it without rerunning the whole set.
+
+### The optimizer kernel forked from Scott's, and ours recompiles every step (294x measured)
+Same file, same kernel name, **different implementation**. `origin/cav_fixes`'s
+`src/kernels/indexed_sparse_adam.py` carries four kernels (indexed + two BSR variants);
+this branch has only the indexed one, and that one differs:
+
+| | cav_fixes | this branch |
+|---|---|---|
+| addressing | `M, N` + full strides, decodes row/col | assumes contiguous flat, uses flat index |
+| moment buffers | `USE_SPARSE_STATES` allows **packed** state | always full-size |
+| lr / beta / eps / wd | **runtime args** | **`tl.constexpr`** |
+
+`tl.constexpr` values are part of Triton's JIT cache key and **lr changes every step under
+any scheduler**, so ours recompiles once per step. Measured on one H200 (job 8770992,
+4096x4096, 2.5% kept): constant lr **0.93 ms/step**, varying lr **273.56 ms/step** —
+**294.6x**. The file's own docstring says "without kernel recompilation" and the bias
+corrections are deliberately non-constexpr for that reason; lr was missed.
+
+**Do NOT swap the kernel mid-campaign.** Three reasons:
+1. **Correctness is unaffected** — constexpr vs runtime arg changes compilation, not
+   arithmetic. Every existing result stands.
+2. **The cost is already inside every s/step number we have**, because every real run used
+   a real scheduler: sparse DPO 45.22 s/step, sparse GRPO 22.6 s/step. One compile per
+   step is shared across all ~290 param tensors (they share the step's lr), so it is
+   ~0.27 s on a 22-45 s step, i.e. 0.6-1.2%. Nothing needs re-measuring.
+3. Changing it would break time-comparability with the 2026-04 arms for a ~1% gain.
+
+**But it does bite one claim.** `scripts/microbench_optimizer_step.py` — the source of
+Table 2/3 and the abstract's 1.69x / 3.35x — runs at a **single fixed lr** (`lr: 5e-07` in
+`microbench_optstep_scott_2026-06-21.md`) with no scheduler, so the kernel compiles once
+there. The reported 4.2141 ms optimizer step is a regime that never occurs in training,
+where the same step costs ~277 ms. The kernel's O((1-rho)P) asymptotics are unaffected;
+the headline speedups do not describe deployed behaviour. The rebuttal's existing hedge
+("the optimizer step is a small fraction of total step time, so end-to-end gains stay far
+below the 1.69x/3.35x kernel figures") remains true and is now better grounded.
+
+**Fix, when the campaign is over:** make lr a runtime arg, as cav_fixes already does.
