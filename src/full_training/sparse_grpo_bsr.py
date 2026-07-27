@@ -329,6 +329,19 @@ def train(
         # what makes the dense-vs-sparse comparison in Appendix D.4 uninterpretable:
         # measured at step 500, dense sat at 4.99e-6 and sparse at 1.11e-8, a 449x gap.
         lr_scheduler_type=lr_scheduler_type,
+        # Same class of defect as the scheduler above, found 2026-07-27. --max_grad_norm
+        # reached SparseAdamW (which clips each tensor separately) but never reached
+        # GRPOConfig, so TRL's GLOBAL clip silently stayed at the HF default of 1.0 while
+        # GRPO_train.py was passing 0.1. Measured grad norms are median 1.21 (sparse) and
+        # 2.98 (dense) with >86% of steps above 1.0, so both clips bind on nearly every
+        # step and the dense/sparse arms were an order of magnitude apart in effective
+        # gradient scale. Wiring it here makes global clipping match the dense entry
+        # point; SparseAdamW's per-tensor clip at the same value then becomes a no-op,
+        # since after a global clip to t no single tensor can exceed t.
+        # NOTE: this is deliberately driven by the SAME --max_grad_norm the caller passes,
+        # so a job that passes 1.0 (e.g. the random-mask control replicating the 2026-04
+        # arms) sees no behaviour change, while a job that passes 0.1 becomes matched.
+        max_grad_norm=max_grad_norm,
     )
 
     trainer = GRPOTrainer(

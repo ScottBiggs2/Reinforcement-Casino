@@ -210,3 +210,38 @@ Running any python script from `/tmp` fails at `import torch`. Run from the repo
 So the as-run configuration is **not** recoverable from the project's own records. Read
 `training_args.bin` from the checkpoint instead — `scripts/read_training_args.py`. Three
 Table 6 discrepancies were invisible until someone did.
+
+### `--max_grad_norm` reached SparseAdamW but never TRL — dense/sparse GRPO were 10x apart
+**Found 2026-07-27, same class of defect as the D.4 scheduler bug.** In
+`sparse_grpo_bsr.py` the CLI `--max_grad_norm` was passed to `SparseAdamW` (which clips
+**each tensor separately**) but was never put into `GRPOConfig`, so TRL's **global** clip
+silently stayed at the HF default **1.0**. `GRPO_train.py` meanwhile passes its
+`--max_grad_norm` (0.1) straight into `TrainingArguments`. So for any dense-vs-sparse GRPO
+pair:
+
+| | global clip | per-tensor clip |
+|---|---|---|
+| dense (`GRPO_train.py`) | **0.1** | — |
+| sparse (`sparse_grpo_bsr.py`, before fix) | **1.0** (HF default) | 0.1 |
+
+**It binds on nearly every step**, so this is not academic. Measured `grad_norm` from
+`trainer_state.json`: sparse in-task GRPO median **1.21**, 92.2% of steps above 1.0;
+dense matched arm 8734159_0 median **2.98**, 86.7% above 1.0.
+
+**Fixed** by wiring `max_grad_norm=max_grad_norm` into `GRPOConfig`, driven by the same
+CLI value, so a job passing 1.0 is unchanged and a job passing 0.1 becomes matched. After
+a global clip to t, no tensor can exceed t, so SparseAdamW's per-tensor clip becomes a
+no-op rather than a second, different clip.
+
+**Do not compare a dense GRPO arm against any sparse GRPO arm that ran before
+2026-07-27** without checking this. Sparse-vs-sparse comparisons are unaffected — every
+sparse arm shares the same clipping — so the 2026-04 three-arm set and its random control
+(8769965, which passes 1.0) remain internally valid.
+
+### SparseAdamW's weight_decay default is 0.01 and no GRPO/DPO entry point overrides it
+`SparseAdamW.__init__` defaults `weight_decay=0.01`; `sparse_grpo_bsr.py` never passes the
+argument and exposes no flag, while `GRPO_train.py` defaults `--weight_decay 0.0`. So every
+sparse arm carries decay 0.01 against dense's 0.0. **Left unfixed deliberately:** at
+lr 5e-6 the per-step factor is `1 - lr*wd = 1 - 5e-8`, i.e. ~2.5e-5 relative shrinkage over
+500 steps — far below bf16 training noise, and changing it would break comparability with
+every existing sparse arm. Document it; do not "fix" it without rerunning the whole set.
