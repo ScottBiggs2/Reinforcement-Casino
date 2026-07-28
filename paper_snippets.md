@@ -129,11 +129,13 @@ into account.
 
 
 # Scratch
+7759907/elem/optimizer_step_microbench.md
 
+(base) [biggs.s@explorer-01 rl_casino_optstep_microbench]$ cat 7759907/elem/optimizer_step_microbench.md
 # SparseAdamW optimizer.step() microbench
 
 - **mask_label:** `elem`
-- **mask_path:** `/scratch/biggs.s/rl_casino_masks/orch_lr1_grasp6_6376972/random_elem_meta-llama_Llama-3.1-8B-Instruct_light_r1_sp97.5pct_seed42.pt`
+- **mask_path:** `/scratch/biggs.s/rl_casino_optstep_microbench/7759907/mask/random_elem_meta-llama_Llama-3.1-8B-Instruct_sp97.5pct_seed42.pt`
 - **device:** `cuda`  **dtype:** `bf16`
 - **lr:** `5e-07`  **block_size:** `32`
 - **max_total_numel:** `525000000`  **max_tensors:** `64`  **selection_order:** `model_order`  **cap_behavior:** `break`
@@ -145,33 +147,35 @@ into account.
 
 | case | optimizer | tensors | total_numel | active_frac | mean_ms_mid | p50_ms_mid | note |
 |---|---|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.02499 | 7.16078 | 7.15895 |  |
-| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.02499 | 14.1442 | 14.1047 |  |
-| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.02499 | 2.58127 | 2.57802 |  |
+| `dense_elem` | `adamw_torch` | 1 | 525336576 | 0.02499 | 7.16021 | 7.16001 |  |
+| `dense8bit_elem` | `adamw_8bit` | 1 | 525336576 | 0.02499 | 14.134 | 14.1079 |  |
+| `sparse_elem` | `sparse_adamw` | 1 | 525336576 | 0.02499 | 2.57778 | 2.57558 |  |
 
 ### Key speedups (trimmed mean)
 
-- **SparseAdamW vs torch AdamW:** x2.774 faster
-- **SparseAdamW vs AdamW 8-bit:** x5.480 faster
+- **SparseAdamW vs torch AdamW:** x2.778 faster
+- **SparseAdamW vs AdamW 8-bit:** x5.483 faster
 
 ## Phase 2 — Memory (measured GPU footprint, isolated from speed phase)
 
 - **bw_ref_steps:** `5` (short timing used only for bandwidth estimate, not the Phase 1 numbers)
 - `params_grad_mb`: GPU bytes for params + grads, measured before optimizer is built.
-- `opt_state_mb`: GPU bytes added by optimizer (build + lazy first-step state init), measured.
-- `peak_scratch_mb`: peak temp allocations above steady-state baseline during one step.
+- `mask_infra_mb`: GPU bytes for SparseMaskManager (all-layer bool masks + int64 nonzero indices). **0 for dense optimizers.** This is infrastructure shared across training, not per-step cost.
+- `opt_state_mb`: GPU bytes added by the optimizer itself (exp_avg + exp_avg_sq via lazy first-step init). Measured after mask infrastructure, so SMM cost does not inflate this number.
+- `peak_scratch_mb`: peak temp allocations above steady-state baseline during one step. Dense AdamW creates a full denom tensor; the Triton kernel is in-place.
 - `bw_est_gb_s`: theoretical traffic proxy / bw_ref_mean_ms (dense uses total_numel × 112 B; sparse uses active_numel × 112 B).
 
-| case | optimizer | active_frac | params_grad_MB | opt_state_MB | total_footprint_MB | peak_scratch_MB | bw_est_GB_s | note |
-|---|---|---:|---:|---:|---:|---:|---:|---|
-| `dense_elem` | `adamw_torch` | 0.02499 | 2627.73 | 2101.35 | 4729.08 | 1050.67 | 8207.9 |  |
-| `dense8bit_elem` | `adamw_8bit` | 0.02499 | 2627.73 | 1069.19 | 3696.92 | 0.00 | 4160.7 |  |
-| `sparse_elem` | `sparse_adamw` | 0.02499 | 2627.73 | 11741.59 | 14369.32 | 0.03 | 569.0 |  |
+| case | optimizer | active_frac | params_grad_MB | mask_infra_MB | opt_state_MB | total_footprint_MB | peak_scratch_MB | bw_est_GB_s | note |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| `dense_elem` | `adamw_torch` | 0.02499 | 2627.73 | 0.00 | 2101.35 | 4729.08 | 1050.67 | 8231.9 |  |
+| `dense8bit_elem` | `adamw_8bit` | 0.02499 | 2627.73 | 0.00 | 1069.19 | 3696.92 | 0.00 | 4166.9 |  |
+| `sparse_elem` | `sparse_adamw` | 0.02499 | 2627.73 | 9640.24 | 2101.35 | 14369.32 | 0.03 | 570.3 |  |
 
-### Memory savings (measured optimizer state)
+### Memory profile
 
-- **SparseAdamW vs torch AdamW state:** x0.179 smaller (-458.8% reduction)
-- **SparseAdamW vs AdamW 8-bit state:** x0.091 smaller (-998.2% reduction)
+- **opt_state vs torch AdamW:** same-size (dense zeros_like buffers)
+- **opt_state vs AdamW 8-bit:** x0.51 smaller
+- **peak_scratch SparseAdamW vs torch AdamW:** x32064 less (1050.7 MB → 0.03 MB). Triton kernel is in-place; dense AdamW allocates a full denom tensor.
 
 ## Memory / traffic estimates (subset only)
 
@@ -184,3 +188,4 @@ into account.
 | `dense_elem` | 1050.7 | 1050.7 | 4202.7 | 105.0 | 1470.5 |
 | `dense8bit_elem` | 1050.7 | 1050.7 | 4202.7 | 105.0 | 1470.5 |
 | `sparse_elem` | 1050.7 | 1050.7 | 4202.7 | 105.0 | 1470.5 |
+(base) [biggs.s@explorer-01 rl_casino_optstep_microbench]$ 
