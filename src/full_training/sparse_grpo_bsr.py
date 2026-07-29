@@ -223,6 +223,9 @@ def train(
             model.parameters(), lr=learning_rate, betas=(adam_beta1, adam_beta2), eps=adam_eps
         )
     elif optimizer_type == "sparse_adamw":
+        if lazy_sparse_adamw_state:
+            print("WARNING: --sparse_adamw_lazy_state has no effect since 68dff0c "
+                  "reverted SparseAdamW to the origin/main version.")
         optimizer = SparseAdamW(
             list(model.named_parameters()),
             mask_manager,
@@ -232,7 +235,6 @@ def train(
             block_size=block_size_adam,
             mlp_only=mlp_only,
             max_grad_norm=max_grad_norm,
-            eager_state_init=not lazy_sparse_adamw_state,
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
