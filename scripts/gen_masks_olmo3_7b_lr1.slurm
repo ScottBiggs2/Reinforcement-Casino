@@ -60,6 +60,25 @@ fi
 source "${REPO_ROOT}/scripts/pipeline_common.sh"
 pipeline_setup
 
+# Resolve DENSE_RUN_ID: accept the full RUN_ID (e.g. 20260728_184922_8811836) OR a
+# bare Slurm jobid (e.g. 8811836) — the training RUN_ID is <timestamp>_<jobid>.
+if [ ! -d "${TRAIN_OUT_BASE}/${DENSE_RUN_ID}" ]; then
+  shopt -s nullglob
+  _matches=( "${TRAIN_OUT_BASE}"/*"${DENSE_RUN_ID}" )
+  shopt -u nullglob
+  if [ "${#_matches[@]}" -eq 1 ]; then
+    DENSE_RUN_ID="$(basename "${_matches[0]}")"
+    echo "NOTE: resolved DENSE_RUN_ID → ${DENSE_RUN_ID}"
+  elif [ "${#_matches[@]}" -eq 0 ]; then
+    echo "ERROR: no train dir under ${TRAIN_OUT_BASE} matching '*${DENSE_RUN_ID}'" >&2
+    exit 1
+  else
+    echo "ERROR: DENSE_RUN_ID='${DENSE_RUN_ID}' is ambiguous; matches:" >&2
+    printf '       %s\n' "${_matches[@]}" >&2
+    exit 1
+  fi
+fi
+
 # sanitize_model_name(MODEL)_<ds sanitized> — must match DPO_train.py output tree.
 SUBDIR="allenai_olmo_3_7b_instruct_light_r1"
 DELTA_DIR="${TRAIN_OUT_BASE}/${DENSE_RUN_ID}/deltas/${SUBDIR}"
