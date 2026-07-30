@@ -132,6 +132,7 @@ def train(
     precision: str = "auto",
     lazy_sparse_adamw_state: bool = False,
     grpo_reward_profile: str = "llama_cot",
+    lr_scheduler_type: str = "cosine",
 ) -> None:
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
         checkpoint_path = model_name
@@ -324,6 +325,7 @@ def train(
         max_prompt_length=max_prompt_length,
         beta=grpo_beta,
         warmup_steps=warmup_steps,
+        lr_scheduler_type=lr_scheduler_type,
     )
 
     trainer = GRPOTrainer(
@@ -437,6 +439,13 @@ if __name__ == "__main__":
     parser.add_argument("--adam_eps", type=float, default=1e-8)
     parser.add_argument("--grpo_beta", type=float, default=0.025)
     parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument(
+        "--lr_scheduler_type",
+        type=str,
+        default="cosine",
+        help="LR schedule; default cosine to match dense GRPO (GRPO_train.py). "
+        "HF/TRL default is linear, which caused the sparse/dense mismatch.",
+    )
     parser.add_argument("--disable_tf32", action="store_true")
     parser.add_argument("--save_steps", type=int, default=50)
     parser.add_argument("--save_total_limit", type=int, default=3)
@@ -497,6 +506,7 @@ if __name__ == "__main__":
         adam_eps=args.adam_eps,
         grpo_beta=args.grpo_beta,
         warmup_steps=args.warmup_steps,
+        lr_scheduler_type=args.lr_scheduler_type,
         disable_tf32=args.disable_tf32,
         save_model=args.save_model,
         dataset_key=args.dataset,

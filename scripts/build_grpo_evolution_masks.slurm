@@ -65,6 +65,9 @@ SPARSITY_PERCENT="${SPARSITY_PERCENT:-97.5}"
 MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 RANDOM_SEED="${RANDOM_SEED:-42}"
 MAG_STEPS="${MAG_STEPS:-50 100 250}"
+# Pass MAG_STEPS=none to build ONLY the oracle (+random) — skips magnitude masks.
+# ("none" is a safe non-empty sentinel that propagates cleanly through sbatch --export.)
+if [ "${MAG_STEPS}" = "none" ]; then MAG_STEPS=""; fi
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-500}"
 
 GRPO_DENSE_OUTPUT_BASE="${GRPO_DENSE_OUTPUT_BASE:-${RL_CASINO_SCRATCH_ROOT}/rl_casino_grpo/dense}"
