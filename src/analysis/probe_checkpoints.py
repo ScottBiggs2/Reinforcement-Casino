@@ -116,7 +116,10 @@ def load_probe_datasets(args):
     that supports unequal per-property sizes (preference probes have more
     samples than the 4 benchmarks)."""
     cache_dir = args.dataset_cache_dir or os.environ.get("HF_DATASETS_CACHE")
-    _CACHE_VERSION = "v3"
+    # v4: `math` changed from sentence-shuffling to GSM8K answer validity;
+    # a v3 cache would silently replay the old task. Kept in step with
+    # probe_pair_masks.py, which shares the same builder.
+    _CACHE_VERSION = "v4"
     if args.probe_cache:
         probe_cache_path = args.probe_cache
     else:

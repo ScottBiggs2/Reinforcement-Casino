@@ -146,6 +146,7 @@ def _train_one_layer(
             "cv_test": float("nan"), "cv_std": float("nan"),
             "cv_train": float("nan"), "cv_gap": float("nan"),
             "holdout_test": None, "holdout_train": None,
+            "holdout_se": None, "holdout_n_pairs": None,
             "holdout_gap": None, "primary_metric": "degenerate",
             "converged": False, "degenerate": True,
             "degenerate_reason": reason,
@@ -195,6 +196,8 @@ def _train_one_layer(
 
     holdout_test = None
     holdout_train = None
+    holdout_se = None
+    holdout_n_pairs = None
     if pos_idx_holdout is not None and neg_idx_holdout is not None:
         train_pairs = _build_pairs(pos_idx_cv, neg_idx_cv, pairs_per_pos, rng)
         holdout_pairs = _build_pairs(pos_idx_holdout, neg_idx_holdout, pairs_per_pos, rng)
@@ -209,12 +212,29 @@ def _train_one_layer(
                     all_converged = False
             holdout_train = float(pipe.score(X_train, y_train))
             holdout_test = float(pipe.score(X_holdout, y_holdout))
+            # A single holdout split has no fold-to-fold spread, so the CV std
+            # is NOT its error bar -- reporting one next to the other invites
+            # reading the dispersion of one estimator as the uncertainty of a
+            # different one. Give the holdout its own binomial standard error.
+            # n is the PAIR count, not len(X_holdout): _make_pair_dataset emits
+            # each pair twice (x and -x), and those two rows are perfectly
+            # anti-correlated, so they carry one pair's worth of information.
+            # Still optimistic -- each positive sample appears in
+            # pairs_per_pos pairs, so the pairs are not fully independent.
+            holdout_n_pairs = int(len(holdout_pairs))
+            if holdout_n_pairs > 0:
+                p = holdout_test
+                holdout_se = float(np.sqrt(max(p * (1.0 - p), 0.0) / holdout_n_pairs))
 
-    primary_test = holdout_test if (use_holdout_as_test and holdout_test is not None) else cv_test
-    primary_train = holdout_train if (use_holdout_as_test and holdout_train is not None) else cv_train
+    use_holdout = use_holdout_as_test and holdout_test is not None
+    primary_test = holdout_test if use_holdout else cv_test
+    primary_train = holdout_train if use_holdout else cv_train
+    # `std` tracks whichever estimator `test` came from, so the two are always
+    # about the same quantity.
+    primary_std = holdout_se if use_holdout else cv_std
     return layer_name, {
         "test": primary_test,
-        "std": cv_std,
+        "std": primary_std,
         "train": primary_train,
         "gap": primary_train - primary_test,
         "cv_test": cv_test,
@@ -223,11 +243,13 @@ def _train_one_layer(
         "cv_gap": cv_train - cv_test,
         "holdout_test": holdout_test,
         "holdout_train": holdout_train,
+        "holdout_se": holdout_se,
+        "holdout_n_pairs": holdout_n_pairs,
         "holdout_gap": (
             None if holdout_test is None or holdout_train is None
             else holdout_train - holdout_test
         ),
-        "primary_metric": "holdout" if use_holdout_as_test and holdout_test is not None else "cv",
+        "primary_metric": "holdout" if use_holdout else "cv",
         "converged": all_converged,
         "degenerate": False,
         "degenerate_reason": None,

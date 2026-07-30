@@ -148,45 +148,85 @@ def _load_hf_probe_datasets(samples_per_class: int = None,
     }
     print(f"[data]   factual: {len(world)} world, {len(scitech)} sci/tech")
 
-    # ── 4. Math: GSM8K-style arithmetic (correct vs incorrect) ───────────
-    print(f"[data] Loading math probe (GSM8K)...")
+    # ── 4. Math: GSM8K answer validity (sound vs corrupted arithmetic) ───
+    #
+    # Replaces the previous sentence-shuffling construction. That version
+    # labelled a question "incorrect" by permuting its sentences, so the
+    # discriminating signal was discourse coherence (dangling pronouns,
+    # a question clause in the middle) -- solvable without doing any
+    # arithmetic, and equally solvable on a shuffled recipe. It measured
+    # the wrong thing for a property named `math`.
+    #
+    # Here both classes carry the full question AND its chain of thought.
+    # They differ only in whether the stated final answer follows from the
+    # reasoning, so separating them requires actually checking the arithmetic.
+    # The `answer` field was previously loaded and discarded.
+    print(f"[data] Loading math probe (GSM8K answer validity)...")
     try:
         gsm8k = load_dataset("openai/gsm8k", "main", split="test", cache_dir=cache_dir)
-        questions = [row["question"] for row in gsm8k]
-        rng.shuffle(questions)
+        rows = [(row["question"], row["answer"]) for row in gsm8k]
+        rng.shuffle(rows)
 
-        # Split on sentence terminators while keeping them on the preceding
-        # sentence (avoids losing "?" from the final question).
-        def _split_sentences(q: str) -> list:
-            parts = re.split(r"(?<=[.!?])\s+", q.strip())
-            return [p for p in parts if p]
+        def _strip_calc(sol: str) -> str:
+            # GSM8K embeds calculator spans like <<48/2=24>>; they are dataset
+            # artifacts, and leaving them in would hand the probe a shortcut
+            # (a corrupted final answer would disagree with an untouched span).
+            return re.sub(r"<<[^>]*>>", "", sol)
 
-        def _shuffled_distinct(sents: list, max_tries: int = 10):
-            for _ in range(max_tries):
-                cand = sents[:]
-                rng.shuffle(cand)
-                if cand != sents:
-                    return cand
+        def _corrupt_final(sol: str):
+            """Perturb the '#### N' answer so it no longer follows from the CoT."""
+            m = re.search(r"####\s*(-?[\d,]+(?:\.\d+)?)\s*$", sol.strip())
+            if m is None:
+                return None
+            raw = m.group(1)
+            try:
+                val = float(raw.replace(",", ""))
+            except ValueError:
+                return None
+            # Multiplicative jitter in [-30%, +30%], never 0, and forced to
+            # land on a different value. Keeping the magnitude close means the
+            # probe cannot separate the classes on digit count alone.
+            for _ in range(10):
+                factor = 1.0 + rng.uniform(0.1, 0.3) * rng.choice([-1, 1])
+                new = round(val * factor)
+                if new != round(val):
+                    is_int = float(val).is_integer()
+                    new_s = str(int(new)) if is_int else f"{new:.2f}"
+                    return sol[: m.start(1)] + new_s + sol[m.end(1):]
             return None
 
-        # Only keep questions with enough structure to meaningfully shuffle.
-        shuffleable = [(q, _split_sentences(q)) for q in questions]
-        shuffleable = [(q, s) for q, s in shuffleable if len(s) >= 3]
+        # The label lives in the trailing '#### N', and the probe tokenises with
+        # right truncation at --max_length (256 in the frozen protocol). Measured
+        # on Llama-3.1-8B: 2.9% of these texts exceed 256 tokens and every one of
+        # them loses its '####' span, turning the label into noise. Cap on
+        # characters at construction time so the answer always survives; 800 chars
+        # is ~216 tokens at the ~3.7 chars/token this text runs at, and the
+        # assertion below is what actually guarantees it. 800 still let one
+        # digit-dense example through at 266 tokens, so the cap is 700.
+        MAX_CHARS = 700
+        usable = []
+        for q, sol in rows:
+            clean = _strip_calc(sol)
+            if not re.search(r"####\s*-?[\d,]+", clean):
+                continue
+            if len(f"{q}\n{clean}".strip()) > MAX_CHARS:
+                continue
+            usable.append((q, clean))
 
-        half = len(shuffleable) // 2
-        real_qs = [(q, 1) for q, _ in shuffleable[:half]]
+        half = len(usable) // 2
+        real_qs = [(f"{q}\n{sol}".strip(), 1) for q, sol in usable[:half]]
         fake_qs = []
-        for _, sents in shuffleable[half:half * 2]:
-            shuffled = _shuffled_distinct(sents)
-            if shuffled is not None:
-                fake_qs.append((" ".join(shuffled), 0))
+        for q, sol in usable[half:half * 2]:
+            bad = _corrupt_final(sol)
+            if bad is not None:
+                fake_qs.append((f"{q}\n{bad}".strip(), 0))
 
         datasets["math"] = {
-            "description": "Math coherence (GSM8K; 0=shuffled, 1=coherent)",
+            "description": "Math answer validity (GSM8K; 0=corrupted final answer, 1=sound)",
             "pos": real_qs, "neg": fake_qs,
         }
-        print(f"[data]   math: {len(real_qs)} real, {len(fake_qs)} shuffled "
-              f"(filtered from {len(questions)} to questions with ≥3 sentences)")
+        print(f"[data]   math: {len(real_qs)} sound, {len(fake_qs)} corrupted "
+              f"(from {len(usable)} usable of {len(rows)} GSM8K test rows)")
     except Exception as e:
         print(f"[data]   WARNING: GSM8K load failed ({e}), using MMLU abstract_algebra")
         mmlu = load_dataset("cais/mmlu", "abstract_algebra", split="test", cache_dir=cache_dir)

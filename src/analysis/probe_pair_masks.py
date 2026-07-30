@@ -136,7 +136,10 @@ def load_probe_datasets(args):
     # v3: adds tulu3 dpo_preference + open-r1 grpo_preference (scheme C).
     # Preference probes have different per-class counts than benchmarks, so
     # old v2 caches (which required equal N across properties) aren't reusable.
-    _CACHE_VERSION = "v3"
+    # v4: the `math` property changed from sentence-shuffling to GSM8K answer
+    # validity. A v3 cache holds the old texts, so the version must move or a
+    # stale file would silently feed the previous task back in.
+    _CACHE_VERSION = "v4"
     if args.probe_cache:
         probe_cache_path = args.probe_cache
     else:
