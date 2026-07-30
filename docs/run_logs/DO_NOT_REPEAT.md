@@ -247,6 +247,32 @@ config → tokenizer → weight index → **every shard named in the index**, an
 training. A config-only check is not sufficient: the small files can be present
 while a 3.9 GB shard is missing, which fails ~30 min in rather than at second 5.
 
+## A resumed HF run inherits `save_steps` from the checkpoint, silently ignoring the CLI
+
+**Found 2026-07-30 on the Qwen3-32B p1 resume (job 238613).** The sbatch passes
+`--save_steps 10`; the run trained past steps 260, 270 and 280 writing **no
+checkpoint at all**. Not a broken save path — `DefaultFlowCallback.on_step_end`
+tests `state.save_steps`, and `TrainerState.load_from_json` restores that field
+from the checkpoint's `trainer_state.json`, where the original Explorer run had
+recorded **50**. HF prints the mismatch and then proceeds with the checkpoint's
+value:
+
+```
+Warning: The following arguments do not match the ones in the `trainer_state.json`
+	save_steps: 10 (from args) != 50 (from trainer_state.json)
+```
+
+That warning is the only signal, and it scrolls past during startup.
+
+**Why it matters for a `timeout`+resume chain:** the design assumes a slot that
+hits its wall loses at most `save_steps` of work. Inheriting 50 instead of 10
+raises the worst-case loss to 49 steps — at the 32B rate (105 s/it) that is 1.4 h
+of compute per slot boundary. It also *reduces* total save overhead, so the effect
+on a budget is mixed, not simply bad.
+
+**Check `state.save_steps`, not the launcher, when planning slot boundaries for
+any resumed run**, and read the mismatch warning rather than assuming the CLI won.
+
 ## `pkill -f "<pattern>"` matches its own ssh command line
 
 `ssh host 'pkill -f "hf download"; ...'` kills the remote `bash -c` wrapper itself,
