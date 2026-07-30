@@ -133,6 +133,35 @@ make a resolvable HF repo.
 weight index → every shard named in the index, and both p1 and p3 now call it
 before training. A config-only check would not have caught a missing 3.9 GB shard.
 
+**Verification of the recovered cache (2026-07-30 14:34–15:10):** 27/27 blobs
+transferred with zero chunk failures. Integrity was checked *against HF's own
+published hashes* rather than against Explorer: the cache is content-addressed, so
+the 64-hex blob filenames are the upstream sha256 — recomputing them locally gave
+**18/18 match** (17 weight shards + `tokenizer.json`; the remaining 9 small files
+are git-sha1-named config/vocab and are covered by the preflight's resolution
+check). This is a stronger gate than the checkpoint-250 md5 comparison, which only
+proved "same as Explorer". The Explorer↔AICR md5 comparison was also completed as
+a secondary check and matches on **all 27 blobs**. Snapshot symlinks: 0 broken.
+Preflight: PASS (qwen3, 64 layers; vocab 151669; 17 shards).
+
+## Attempt 2 (2026-07-30 15:10)
+
+| stage | job | dependency |
+|---|---|---|
+| p1 slot A | 238324 | — (PD Priority) |
+| p1 slot B | 238325 | afterok:238324 |
+| p1 slot C | 238326 | afterok:238325 |
+| p2 mask | 238327 | afterok:238326 |
+| p3 slot A | 238328 | afterok:238327 |
+| p3 slot B | 238329 | afterok:238328 |
+| p3 slot C | 238330 | afterok:238329 |
+
+`--exclude` resolved to empty at submit because the seven GRPO arms had all
+completed, so no node was hosting one of our jobs. Within the chain p1 and p3 are
+`afterok`-sequential and never hold GPUs at the same time, so there is no
+self-contention. Anything submitted alongside this chain must still exclude the
+node p1 lands on.
+
 ## Read-out plan
 
 Same as the 8B chain (`qwen3_8b_high_sparsity_dpo_2026-06-01.md`): dense vs sparse
