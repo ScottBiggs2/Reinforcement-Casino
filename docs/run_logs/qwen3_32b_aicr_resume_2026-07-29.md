@@ -162,6 +162,36 @@ completed, so no node was hosting one of our jobs. Within the chain p1 and p3 ar
 self-contention. Anything submitted alongside this chain must still exclude the
 node p1 lands on.
 
+## The cluster filled up — pivot to b200-devel for p1
+
+By 16:00 on 07-30 `b200-batch` was saturated by other users (283 pending jobs from
+one user, 131 from another, ~600 total). Measured free GPUs across the 28 nodes:
+**4**, spread as b0010×2, b0013×1, b0026×1 — and b0007 has 8 free but is `drain`
+(`gpu5_fault-needs_reset`). p1 wants **3 GPUs on one node**, which no node could
+offer, so Slurm quoted a start of **2026-07-31T15:40** — a full day of idling
+against an 08-03 deadline.
+
+`b200-devel` was nearly empty at the same moment: 13 free GPUs over 3 nodes
+(b0029×5, b0030×5, b0031×3) and 2 pending jobs. Its cost is a 4 h wall, which the
+existing `timeout`+`--resume_from_checkpoint auto` design already absorbs.
+
+**QOS limit found the hard way:** `b200-devel` carries `MaxTRESPU gres/gpu=2`, so a
+3-GPU ask is rejected at submit with `QOSMaxGRESPerUser`. p1 fits in 2 because it
+uses `adamw_8bit`: policy + ref + grads + 8-bit moments ≈ 244 GiB against
+2×178 = 356 GiB (~70%). **p3 cannot use devel at all** — SparseAdamW's dense fp32
+moments need 4 GPUs, twice the devel ceiling.
+
+To avoid two jobs training into one output directory (the 234945/234952 collision
+in `DO_NOT_REPEAT.md`), the three batch p1 slots were put on `scontrol hold` before
+the devel chain was submitted. They must be released or cancelled once p1 reaches
+checkpoint-500.
+
+| devel slot | job | outcome |
+|---|---|---|
+| A | 238613 | started on b0030 within 13 s |
+| B | 238614 | afterok:238613 |
+| C | 238615 | afterok:238614 |
+
 ## Read-out plan
 
 Same as the 8B chain (`qwen3_8b_high_sparsity_dpo_2026-06-01.md`): dense vs sparse
