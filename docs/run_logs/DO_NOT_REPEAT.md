@@ -60,6 +60,23 @@ The real answer is that sparse **GRPO training** runs exist and were never plott
 that figure: `transfer_v1/sparse_grpo_math220k_oracle_{grpo_math,dpo_lightr1_500,
 dpo_tulu3}`. See the entry below on what they show.
 
+### "GRPO is resistant to masking" (Appendix B/D.4) — SETTLED FALSE 2026-07-30
+Under a **matched schedule** (cosine over 500, warmup 50, lr 5e-6, β 0.025, global clip
+0.1 on all arms, cap 2048, ρ=97.5%), three AICR arms of 500 steps each — dense `235271`,
+sparse oracle `235463`, sparse random `235303`, all ending at `learning_rate` 6.0923e-11:
+
+| last-50 total reward | gap | SE |
+|---|---|---|
+| dense − oracle | **−0.0225** | 0.6 |
+| oracle − random | **+0.0687** | 1.8 |
+
+Sparse oracle is **indistinguishable from dense** and consistently ahead of random (9 of
+10 windows). KL displacement over training: oracle **6.1×** (0.00035→0.00214) vs random
+**1.3×** (0.00026→0.00035) — the random subnetwork is nearly frozen while the oracle
+tracks dense. **Do not repeat "GRPO resists masking" or cite Fig 8/9 as evidence for it**;
+that figure's dense/sparse arms differed in scheduler, horizon, and global clip. Full
+numbers: `grpo_matched_aicr_2026-07-29.md` §4a.
+
 ### Sparse GRPO at ρ=97.5% learns — do not repeat "the method fails for GRPO"
 The three runs above are single-variable (same model, `open-r1/OpenR1-Math-220k`,
 `n_steps=500`, lr 5e-6, β=0.025, reward profile, per `run_manifest.json`) and **all end
@@ -126,6 +143,17 @@ Our own measured concentration curve says GRPO's update mass saturates by keep-1
 training more parameters works. The informative points are the predicted knee,
 ρ ∈ {95, 90}%.
 
+**SUPERSEDED 2026-07-30 — the sweep was run anyway (Irene's call) and the plateau is the
+result.** Seven matched-schedule levels, all ending at LR 6.0923e-11: ρ = 70/80/90/95/
+97.5/99 are **all within 1.5 SE of dense**, and only ρ=99.75 breaks (reward −0.0237,
+KL fold-change collapsing 6× → 2.0× toward random's 1.4×). So the GRPO oracle tolerates
+a parameter budget **100× smaller** than Mukherjee's 70% anchor implies, and the "lower
+bound" question is answered at ρ≈99.75, not below 97.5. Two lessons: (a) a saturated
+level is uninformative *as a mechanism probe* but can be the strongest *rhetorical*
+evidence — a measured plateau beats an argument about why the point is uninteresting;
+(b) reward saturates across 70–99, so **KL displacement is the metric that resolves
+sparsity tolerance**. Numbers: `grpo_rho_sweep_aicr_2026-07-29.md` §4a.
+
 ### Changed variable: base model → Qwen3-32B
 ~7 min/step, ≈58 h per phase against an 8 h walltime cap. Stalled at dense 250/500 since
 2026-06-14. Cannot complete. Do not report a partial run as a matched pair.
@@ -184,6 +212,48 @@ attention plus a retained graph is a large VRAM multiple over a normal backward 
 **Do not "just rerun Scott's GraSP arms" and do not soften item 3's concession on the
 strength of them existing in a yaml.** If a scorer is to be added, the ledger entry above
 still applies: make it Fisher / FISH Mask, which needs no second-order autograd.
+
+---
+
+## `hf download` on the AICR login node hangs with zero bytes written
+
+**Measured twice: 2026-07-29 and again 2026-07-30.** `hf download Qwen/Qwen3-32B
+--max-workers 8` starts, the process stays ALIVE indefinitely, and **no cache
+directory is ever created** — the only line in the log is an unrelated urllib3
+version warning. `curl -sI https://huggingface.co/Qwen/Qwen3-32B/resolve/main/config.json`
+returns **307 in 0.33 s** from the same login node, so a reachability check on
+huggingface.co does **not** prove the transfer path works; the CDN/xet endpoint
+that actually serves bytes is what stalls.
+
+**Consequence that cost a full chain:** `qwen3_32b_aicr_resume_2026-07-29.md`
+recorded "Qwen/Qwen3-32B weights pulled directly from HF on AICR (network + token
+verified)" on the strength of that reachability check. The weights were never
+there. Job `235953` queued, started, loaded the dataset, and died at
+`AutoTokenizer.from_pretrained` 61 seconds in; the `afterok` chain read the
+non-zero exit as a hard crash and cancelled all six downstream jobs.
+
+**Do not** verify a model's availability with a HEAD against huggingface.co, and
+do not record a model as "pulled" without listing the cache. The working route is
+the **chunked-dd transfer from Explorer's cache**, which already holds the model
+(`/scratch/xie.yiyi/hf_cache/hub/models--Qwen--Qwen3-32B`, 27 blobs, 65.5 GB):
+`~/xfer_qwen32b_base.sh` moved it in ~8 minutes at ~200 MB/s with zero chunk
+failures. The HF cache is content-addressed, so the transfer must also replay
+`snapshots/<rev>/*` symlinks, `refs/main`, and the `.no_exist/<rev>/` negative
+lookups — blobs alone do not make a resolvable repo.
+
+**Preflight, now enforced:** `scripts/preflight_base_model.py <model_id>` resolves
+config → tokenizer → weight index → **every shard named in the index**, and both
+`aicr_qwen32b_p1_dense.sbatch` and `aicr_qwen32b_p3_sparse.sbatch` call it before
+training. A config-only check is not sufficient: the small files can be present
+while a 3.9 GB shard is missing, which fails ~30 min in rather than at second 5.
+
+## `pkill -f "<pattern>"` matches its own ssh command line
+
+`ssh host 'pkill -f "hf download"; ...'` kills the remote `bash -c` wrapper itself,
+because the wrapper's command line contains the pattern. The ssh exits 255 and the
+rest of the compound command never runs — so the check that was supposed to
+confirm the kill never executes. Use a bracket pattern (`pgrep -f "[h]f download"`)
+for the *verify* step, and prefer killing by PID captured beforehand.
 
 ---
 
@@ -305,6 +375,59 @@ and can never emit a boxed answer.
 - The random-mask control 8769965 deliberately keeps cap 1024 to stay single-variable
   against the 2026-04 arms, and therefore inherits this truncation regime by design.
 
+### `sparse_grpo_bsr.py` / `sparse_dpo_bsr.py` were ImportError-dead on this branch from 2026-04-30 to 2026-07-29
+Commit `68dff0c` "Revert SparseAdamW + sparse kernels to origin/main" reverted
+`bsr_backward.py` + three optimizer files but **not** `src/mlps/bsr_sparse_mlp.py`, which
+kept importing the B1-era `sparse_grad_input_triton` — a symbol the reverted kernel no
+longer defines. Both BSR entrypoints crashed at import for three months without anyone
+noticing, because every sparse run in that window went through
+`sparse_dpo_efficiency.py`. Found by AICR jobs 235272/235273; fixed by `39adbcb`
+(restores the pre-B1 pair). The same partial revert had a **second face**: the
+entrypoint passed the B1-era `eager_state_init=` kwarg to the reverted `SparseAdamW`,
+a `TypeError` that only fires at optimizer construction — i.e. AFTER a clean import,
+~3 min into the job (235292/235293; fixed by `f315ae4`). **Lesson: a revert must cover
+every caller of the reverted API, not just the file that changed. The import check
+alone is not enough — also assert call-site kwargs against
+`inspect.signature(SparseAdamW.__init__)` — the preflight that gated the third
+submission (235302/235303).**
+
+### Mask generation on a first-gen EPYC (`zen`) node is 6x slower and ρ=80 cannot finish at all
+**Measured 2026-07-28/29.** Job `8817043` backfilled onto **c2205** in 63 s against a
+`--test-only` estimate of 03:46 — but c2205 is `AvailableFeatures=zen`, an **AMD EPYC
+7351** (first-gen Naples, 2.4 GHz). The global top-k over 8.03 B elements is
+**memory-latency bound**, and that is the worst node generation on the cluster for it:
+
+| ρ | Tulu3 half (`short` nodes) | c2205 (`zen`) | ratio |
+|---|---|---|---|
+| 99 | 0:10:04 | 0:45:38 | 4.5x |
+| 97.5 | 0:24:28 | 2:32:27 | **6.2x** |
+
+Ruled out: memory pressure (403 G available of 471 G, **zero swap**, MaxRSS 114 G against
+a 200 G ask) and core starvation (31 threads, ~280% CPU of 16 allocated cores).
+
+**This is a hard block, not a delay.** Linear-in-keep extrapolation — optimistic, the real
+scaling is superlinear — gives ρ=90 ~7.6 h and ρ=80 ~15 h against the **8 h hard cap**.
+ρ=80 cannot complete on a `zen` node at any walltime request.
+
+**Always pass `--constraint="zen2|cascadelake"` for 8B mask generation.** Node generation
+is a Slurm feature and is selectable. Two escape routes that do NOT work, both measured
+the same night: `short` is quoted 2026-08-03 *even with the constraint*, and `multigpu`
+rejects a no-`--gres` job outright (`allocation failure: Access/permission denied`), so
+CPU-only work still has to hold a GPU there.
+
+Corollary: **`sbatch --test-only` is an upper bound, not a placement plan.** It quoted
+03:46 and the job started in 63 s — onto exactly the node class that made the work
+impossible. Fast backfill usually means an *unwanted* node was idle.
+
+### The delta route does not save the memory its header claims
+`mask_from_delta.sbatch` says scoring `|deltas_step_N|` in place needs ~64 G because it
+avoids holding `initial_sd + final_sd + scores`. **Measured MaxRSS was 114 GB through
+ρ=97.5** — *above* the checkpoint-diff route's 105 GB at the same ρ. The reason is
+`create_mask_from_scores_gpu_efficient`, which does `s = score.to(...).clone()` per tensor
+([mask_utils.py:623](../../src/utils/mask_utils.py#L623)): a second full 32 GB copy is
+materialised inside the selector no matter how careful the caller is. Size these jobs from
+the Tulu3 measurements (199/161/105/98 GB for ρ=80/90/97.5/99), not from that header.
+
 ### A bare `--gres=gpu:1` for an 8B eval can land on a V100 and blow the walltime
 Job 8786294 (held-out preference eval for LoRA arm2) asked for `--partition=multigpu
 --gres=gpu:1` and Slurm assigned **c2207 = `v100-pcie:2`**. V100 is Volta: no bf16, and
@@ -317,3 +440,94 @@ scoring on a loaded model — must pin the GPU type (`--gres=gpu:a100:1` or `h20
 just a count. The existing playbook note "mask-gen/eval can stay on bare `--gres=gpu:N`"
 is too permissive and is superseded for any job that loads an 8B model.
 Resubmitted as 8787043 with `a100:1` and a 1 h wall.
+
+---
+
+## Submitting mask-generation jobs as if they were training jobs (2026-07-28)
+
+Four Light-R1 oracle-mask jobs were submitted with `--gres=gpu:h200:1 --time=06:00:00`
+and per-rho `--mem` of 110/180/220 G. All four sat PENDING; a 34-hour estimate. Three
+recorded rules were broken at once:
+
+1. **`feedback_must_use_h200` exempts mask generation.** The rule locks H200 for anything
+   calling `optimizer.step()`. `checkpoint_diff_mask_finder.py` is named in the exemption
+   list and should use a bare `--gres` (or none) "and benefit from the broader queue".
+   Locking it to H200 put a no-optimizer job into the most contended pool on the cluster.
+
+2. **`feedback_rc_idle_gpu_cancel` says this job class belongs on a CPU partition.**
+   "Run GPU-free steps (oracle ckpt-diff mask) on a CPU partition (`--partition=short`,
+   no `--gres`)." Taking an H200 for CPU-bound work then required a keep-alive sidecar to
+   dodge the 15-minute idle canceller — inventing a problem and then patching it. The
+   sidecar is documented for *unavoidable naive-MP training*, not for this.
+
+3. **`feedback_cluster_backfill` says walltime must track measured runtime.** "Set to
+   actual estimated runtime + small buffer. Going too long forfeits the backfill
+   advantage." Measured mask-gen times were already in hand from the Tulu3 half:
+   rho=99 10 min, rho=97.5 25 min, rho=90 1 h 31, rho=80 2 h 58. Asking 6 h for a 10-min
+   job discards backfill entirely. `--exclude=d1025` was also omitted.
+
+**Measured mask-gen cost (use these, do not re-guess):**
+
+| rho | keep | elapsed | MaxRSS |
+|---|---|---|---|
+| 80 | 1.61 B | 2:57:40 | 199 GB |
+| 90 | 0.80 B | 1:31:29 | 161 GB |
+| 97.5 | 0.20 B | 0:24:28 | 105 GB |
+| 99 | 0.08 B | 0:10:04 | 98 GB |
+
+Memory tracks the keep count, so a single blanket `--mem` for the whole array is wrong in
+both directions: 240 G starves the small levels of backfill opportunities, and a "safe
+looking" 128 G would have OOM'd rho=80 and rho=90.
+
+**Cheaper route that was not taken:** a saved `deltas_step_N.pt` already IS
+theta(N) - theta(0), so scoring is one in-place `abs()` over a single 32 GB dict instead
+of holding initial + final + scores. Same `create_mask_from_scores_gpu_efficient` call,
+same parameters, provably the same mask. Not to be confused with
+`even_better_mask_finder.py --method magnitude`, which accumulates
+sum_k |theta(k) - theta(0)| over every logged step — a different score.
+
+---
+
+## Deduplicating Slurm submissions with `squeue -O "Comment"` (2026-07-29, AICR)
+
+`launch_all.sh` guarded against double-submitting an arm with
+
+```bash
+squeue -u "$USER" -h -O "Comment" | grep -q "$TAG"
+```
+
+**The long form `-O` pads and truncates every field to 20 characters.** `TAG` for the
+ρ=97.5 arm is `oracle_step500_sp97.5` — **21 characters** — so squeue returned
+`oracle_step500_sp97.` and the grep never matched. `oracle_step500_sp99` is 19 and fit,
+which is why **only the 97.5 arm duplicated**: a partition-wide guard that works for one
+value of a loop variable and silently fails for another.
+
+Measured on the live queue:
+
+```
+$ squeue -h -O "Comment" | awk '{print length($0), $0}'
+20 oracle_step500_sp99
+20 oracle_step500_sp97.
+$ squeue -h -o "%k"     | awk '{print length($0), $0}'
+19 oracle_step500_sp99
+21 oracle_step500_sp97.5
+```
+
+Consequence: jobs `234945` and `234952` both trained the ρ=97.5 arm from the same mask
+into the **same output directory**, and `234952` overwrote `wandb_run_id.txt` so the
+recorded run id no longer pointed at the run that was actually training. `save_steps=50`
+would have had them writing `checkpoint-50` on top of each other ~8 min later, and with
+`--resume_from_checkpoint auto` any requeue could resume into the other process's state.
+`234952` was cancelled at 15:04 elapsed / step 21, before any checkpoint was written.
+
+Two mechanisms conspired: `autolaunch.sh` also invoked `launch_all.sh` **twice per tick**
+(once to act, once to test its output for `[wait]`), so a hole in the guard produced the
+duplicate inside the same tick rather than never.
+
+**Rules:**
+- Read Slurm comments with `-o "%k"`, never `-O "Comment"`. Match with `grep -Fxq`, so a
+  tag cannot match a longer tag that merely starts with it.
+- Any `squeue -O` field used for a decision must be width-checked first — the truncation
+  is silent and the failure mode is a duplicate run, not an error.
+- An idempotent submitter must be invoked **once** per tick. Capture its output and test
+  the capture.

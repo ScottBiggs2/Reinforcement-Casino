@@ -44,3 +44,69 @@ timestamp	job_id	stage	arm	metric	value	artifact	state	notes
 2026-07-27	8734159_1	train	grpo_sparse_matched_150	-	-	-	CANCELLED	scancel 2026-07-27 by Irene; was PENDING, nothing lost; bf6h reply's in-thread promise withdrawn as a result
 2026-07-27	8769965	train	sparse_grpo_random_seed42_control	-	-	-	CANCELLED	scancel 2026-07-27; random-mask GRPO control still does not exist, disclosed limitation stands
 2026-07-27	8761309	train	grpo_tsweep_dense	-	-	-	CANCELLED	scancel 2026-07-27; whole afterok chain 8761309/10/11/12 cancelled with it
+2026-07-27	8790708_0	mask	oracle_dpo_tulu3_sp80	measured_keep_frac	0.200000	/scratch/$USER/transfer_v1/oracle_masks_llama8b/oracle_dpo_tulu3_step500_sp80.pt	OK	1,606,052,249 params; src=_deltalog ckpt-500; floor 0.0025; err 0.000000%
+2026-07-27	8790708_1	mask	oracle_dpo_tulu3_sp90	measured_keep_frac	0.100000	/scratch/$USER/transfer_v1/oracle_masks_llama8b/oracle_dpo_tulu3_step500_sp90.pt	OK	803,026,124 params; err 0.000000%
+2026-07-27	8791301_2	mask	oracle_dpo_tulu3_sp97.5	measured_keep_frac	0.025000	/scratch/$USER/transfer_v1/oracle_masks_llama8b/oracle_dpo_tulu3_step500_sp97.5_src-deltalog.pt	OK	200,756,531 params; regenerated after paper source deleted
+2026-07-27	8790708_3	mask	oracle_dpo_tulu3_sp99	measured_keep_frac	0.010000	/scratch/$USER/transfer_v1/oracle_masks_llama8b/oracle_dpo_tulu3_step500_sp99.pt	OK	80,302,612 params; err 0.000000%; per-layer floor does not bind
+2026-07-27	8791301_2	analysis	oracle_dpo_tulu3_sp97.5	jaccard_new_vs_paper_source	0.9763	docs/run_logs/oracle_sparsity_sweep_tulu3_2026-07-27.md	OK	GATE PASSED; two independent dense runs, chance level 1.27e-2; run-to-run reproducibility of oracle subnetwork
+2026-07-27	8790708_2	analysis	oracle_dpo_tulu3_sp97.5	jaccard_self_compare	1.0000	-	VOID	BUG: OUT collided with REF_MASK, compared file to itself; superseded by 8791301_2
+2026-07-29	235271	train	grpo_matched_aicr_dense	final_lr	6.0923e-11	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/dense/.../checkpoint-500/trainer_state.json	OK	COMPLETED 3h02m; GATE 1 endpoint -- sparse arms must match this; cosine/500/warmup50/clip0.1/cap2048
+2026-07-29	235271	train	grpo_matched_aicr_dense	clipped_ratio_mean	0.7883	same	OK	GATE 2 passed (<0.90) but not comfortably: ~79% still truncate at cap2048; 0.8575 first50 -> 0.7975 last50; disclose
+2026-07-29	235271	train	grpo_matched_aicr_dense	acc_first50_last50	0.0775->0.0925	same	OK	diff +0.0150 at 0.5 SE -- accuracy alone is UNDERPOWERED at this horizon even for dense
+2026-07-29	235271	train	grpo_matched_aicr_dense	reward_first50_last50	0.9313->1.0325	same	OK	diff +0.1012 at 3.1 SE -- total reward is the powered comparison metric for the 3-arm read-out
+2026-07-29	235272	train	grpo_matched_aicr_sparse_oracle	-	-	-	FAILED	ImportError sparse_grad_input_triton: 68dff0c partial revert left bsr_sparse_mlp.py at B1 state; fixed by 39adbcb; resubmitted as 235292
+2026-07-29	235273	train	grpo_matched_aicr_sparse_random	-	-	-	FAILED	same import failure; resubmitted as 235293
+2026-07-29	235292	train	grpo_matched_aicr_sparse_oracle	-	-	-	FAILED	TypeError eager_state_init: second face of the 68dff0c partial revert; fixed by f315ae4; resubmitted as 235302
+2026-07-29	235293	train	grpo_matched_aicr_sparse_random	-	-	-	FAILED	same TypeError; resubmitted as 235303
+2026-07-29	235302	train	grpo_matched_aicr_sparse_oracle	-	-	-	CANCELLED	scancel by Irene 2026-07-29 (per-ID approval): landed on b0003 beside n5_masks 235057, memory-bandwidth contention held it at 156 s/it vs random arm 36.5 (GPU util 14%); cancelled at step 29, no checkpoint; wandb 3zdtbmrc set aside
+2026-07-29	235463	train	grpo_matched_aicr_sparse_oracle	-	-	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/oracle_grpo_math	PENDING	resubmit of 235302 with --exclude=b0003; mask md5 d0c16bbe both sides; schedule-matched to 235271; lesson: exclude nodes hosting our own mask-gen jobs at submit time
+2026-07-29	235303	train	grpo_matched_aicr_sparse_random	-	-	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/random_seed42	PENDING	the never-existed GRPO random control; paper random baseline mask (lightr1 keep profile, disclose)
+2026-07-29	235698	mask	oracle_grpo_rho_sweep_95_99_99.75	-	-	/scratch/xie_yiyi_neu/transfer_v1/oracle_masks_llama8b/oracle_grpo_math220k_step500_sp{95,99,99.75}.pt	PENDING	ckpt-500 staged to AICR, 4 shards md5-verified; same source/code/conventions as the 97.5 oracle; docs/run_logs/grpo_rho_sweep_aicr_2026-07-29.md
+2026-07-29	235699	train	grpo_matched_aicr_oracle_sp95	-	-	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/oracle_sp95	PENDING	afterok:235698; mass capture 99.93% -> predict ~dense
+2026-07-29	235700	train	grpo_matched_aicr_oracle_sp99	-	-	-	CANCELLED	scancel by Irene (per-ID approval): b0021 neighbour contention, 151 s/it at 15% GPU util, would blow 12h wall; cancelled at step 21, no ckpt; resubmitted as 235894
+2026-07-29	235894	train	grpo_matched_aicr_oracle_sp99	-	-	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/oracle_sp99	PENDING	resubmit of 235700 with --exclude=b0003,b0021; mass capture 80.86% -> predict mild degradation
+2026-07-29	235701	train	grpo_matched_aicr_oracle_sp99.75	-	-	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/oracle_sp99.75	PENDING	afterok:235698; mass capture 48.01% -> predict clear degradation
+2026-07-29	235725	mask	oracle_grpo_sp90	-	-	oracle_masks_llama8b/oracle_grpo_math220k_step500_sp90.pt	PENDING	plateau region added per Irene (Mukherjee answer + DPO grid parity); mem 200G sized from keep 0.80B
+2026-07-29	235726	mask	oracle_grpo_sp80	-	-	oracle_masks_llama8b/oracle_grpo_math220k_step500_sp80.pt	PENDING	mem 240G / keep 1.61B
+2026-07-29	235727	mask	oracle_grpo_sp70	-	-	oracle_masks_llama8b/oracle_grpo_math220k_step500_sp70.pt	PENDING	mem 320G / keep 2.41B (extrapolated); answers Mukherjee 70pct anchor with data
+2026-07-29	235728	train	grpo_matched_aicr_oracle_sp90	-	-	grpo_matched_aicr/oracle_sp90	PENDING	afterok:235725; mass 100% -> predict plateau at ~97.5-arm level
+2026-07-29	235729	train	grpo_matched_aicr_oracle_sp80	-	-	grpo_matched_aicr/oracle_sp80	PENDING	afterok:235726; mass 100% -> predict plateau
+2026-07-29	235730	train	grpo_matched_aicr_oracle_sp70	-	-	grpo_matched_aicr/oracle_sp70	PENDING	afterok:235727; mass 100% -> predict plateau; full sweep now 7 points 70..99.75
+2026-07-30	-	xfer	qwen32b_ckpt250_explorer_to_aicr	md5_match_files	29/29	/scratch/xie_yiyi_neu/transfer_v1/dense_dpo_light_r1_qwen3_32b/CKPT250_VERIFIED	OK	133GB chunked-dd, ALL_DONE 01:07, 0 chunk fails; sentinel written 01:26 after per-file md5 on both sides
+2026-07-30	235953	train	qwen32b_p1_dense_resume	-	-	/scratch/xie_yiyi_neu/transfer_v1/dense_dpo_light_r1_qwen3_32b	PENDING	p1 slot A, resume from verified ckpt-250; 3xB200; --exclude=b0008,b0009,b0010,b0026,b0028 (own-job contention rule)
+2026-07-30	235954	train	qwen32b_p1_dense_resume	-	-	same	PENDING	p1 slot B, afterok:235953; exits 0 fast if ckpt-500 already exists
+2026-07-30	235955	train	qwen32b_p1_dense_resume	-	-	same	PENDING	p1 slot C, afterok:235954
+2026-07-30	235956	mask	qwen32b_p2_oracle_sp97.5	-	-	/scratch/xie_yiyi_neu/transfer_v1/oracle_masks_qwen3_32b	PENDING	afterok:235955; cpu partition 800G; ckpt-diff from p1 ckpt-500
+2026-07-30	235957	train	qwen32b_p3_sparse_sp97.5	-	-	/scratch/xie_yiyi_neu/transfer_v1	PENDING	p3 slot A, afterok:235956; 4xB200, sparse_adamw
+2026-07-30	235958	train	qwen32b_p3_sparse_sp97.5	-	-	same	PENDING	p3 slot B, afterok:235957
+2026-07-30	235959	train	qwen32b_p3_sparse_sp97.5	-	-	same	PENDING	p3 slot C, afterok:235958
+2026-07-30	235303	train	grpo_matched_aicr_sparse_random	final_lr	6.0923e-11	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/random_seed42/.../checkpoint-500/trainer_state.json	OK	COMPLETED 5h11m; GATE PASSED: final lr matches dense 235271 exactly; the never-existed GRPO random control now exists
+2026-07-30	235303	train	grpo_matched_aicr_sparse_random	acc_first50_last50	0.0575->0.0975	same	OK	reward 0.9025->0.9862 (+0.0837); full 3-arm read-out waits on oracle arm 235463 (432/500 as of 01:40)
+2026-07-30	235463	train	grpo_matched_aicr_sparse_oracle	reward_first50_last50	0.9550->1.0550	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/oracle_grpo_math/.../checkpoint-500/trainer_state.json	OK	COMPLETED 5h09m; diff +0.1000 at 2.8 SE; GATE1 final lr 6.0923e-11 matches dense exactly
+2026-07-30	235463	train	grpo_matched_aicr_sparse_oracle	acc_first50_last50	0.0850->0.1075	same	OK	diff +0.0225 at 0.8 SE -- accuracy underpowered at 500 steps for every arm incl dense
+2026-07-30	235463	train	grpo_matched_aicr_sparse_oracle	kl_first50_last50	0.00035->0.00214	same	OK	6.1x displacement vs random's 1.3x -- the oracle subnetwork actually moves the policy
+2026-07-30	235463	train	grpo_matched_aicr_sparse_oracle	clipped_ratio_mean	0.7432	same	OK	GATE2; lowest of the three arms
+2026-07-30	235303	train	grpo_matched_aicr_sparse_random	reward_first50_last50	0.9025->0.9862	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/random_seed42/.../checkpoint-500/trainer_state.json	OK	COMPLETED 5h11m; diff +0.0837 at 2.5 SE; final lr 6.0923e-11
+2026-07-30	235303	train	grpo_matched_aicr_sparse_random	kl_first50_last50	0.00026->0.00035	same	OK	essentially flat -- a random 2.5% subnetwork barely displaces the policy
+2026-07-30	-	analysis	grpo_matched_3arm	gap_total_dense_minus_oracle	-0.0225	docs/run_logs/grpo_matched_aicr_2026-07-29.md	OK	0.6 SE last-50 window: sparse oracle is INDISTINGUISHABLE from dense at rho=97.5 under a matched schedule
+2026-07-30	-	analysis	grpo_matched_3arm	gap_total_oracle_minus_random	+0.0687	same	OK	1.8 SE last-50; oracle > random on 9 of 10 windows -- the mask matters for GRPO
+2026-07-30	235730	train	grpo_rho_sweep_sp70	reward_last50	1.0850	/scratch/xie_yiyi_neu/rebuttal_analysis/grpo_matched_aicr/oracle_sp70/.../checkpoint-500/trainer_state.json	OK	mass 100%; vs dense +0.0525 (1.5 SE); KL 6.1x; keep 2.41B; 48.4 s/it
+2026-07-30	235729	train	grpo_rho_sweep_sp80	reward_last50	1.0513	same pattern	OK	mass 100%; vs dense +0.0188 (0.5 SE); KL 8.1x
+2026-07-30	235728	train	grpo_rho_sweep_sp90	reward_last50	1.0562	same pattern	OK	mass 100%; vs dense +0.0237 (0.7 SE); KL 5.5x
+2026-07-30	235699	train	grpo_rho_sweep_sp95	reward_last50	1.0525	same pattern	OK	mass 99.93%; vs dense +0.0200 (0.5 SE); KL 6.3x
+2026-07-30	235894	train	grpo_rho_sweep_sp99	reward_last50	1.0375	same pattern	OK	mass 80.86%; vs dense +0.0050 (0.2 SE); KL 5.0x; ONLY 1% OF PARAMS STILL MATCHES DENSE
+2026-07-30	235701	train	grpo_rho_sweep_sp99.75	reward_last50	1.0088	same pattern	OK	mass 48.01%; vs dense -0.0237 (0.7 SE); KL 2.0x -- the breakpoint; keep 0.02B; 28.3 s/it
+2026-07-30	-	analysis	grpo_rho_sweep_7pt	plateau_extent	rho_70_to_99	docs/run_logs/grpo_rho_sweep_aicr_2026-07-29.md	OK	all 6 levels 70..99 within 1.5 SE of dense; final LR 6.0923e-11 on all 9 arms (gate passed)
+2026-07-30	-	analysis	grpo_rho_sweep_7pt	kl_fold_plateau_then_collapse	~6x_then_2.0x	same	OK	KL fold-change: dense 5.9x, rho70-97.5 5.5-8.1x, rho99 5.0x, rho99.75 2.0x, random 1.4x -- KL discriminates where reward saturates
+2026-07-30	-	analysis	grpo_rho_sweep_7pt	sec_per_step_vs_keep	28.3_36_48.4	logs/grpo_sparse_*.out	OK	step time monotone in keep count (0.02B/0.2-1.6B/2.41B) -- dose-response evidence for the O((1-rho)P) kernel claim
+2026-07-30	235463	train	grpo_matched_aicr_sparse_oracle97.5	rew_first50_last50	0.9550->1.0550	rebuttal_analysis/grpo_matched_aicr/oracle_grpo_math	OK	COMPLETED; +0.1000 vs dense +0.1012 -- sparse GRPO at 2.5% MATCHES dense on the matched schedule; acc 0.0850->0.1075; final lr 6.0923e-11 (gate)
+2026-07-30	235699	train	grpo_matched_aicr_oracle_sp95	rew_first50_last50	0.9350->1.0525	grpo_matched_aicr/oracle_sp95	OK	+0.1175; mass capture 99.93%; final lr 6.0923e-11
+2026-07-30	235894	train	grpo_matched_aicr_oracle_sp99	rew_first50_last50	0.9050->1.0375	grpo_matched_aicr/oracle_sp99	OK	+0.1325; mass capture 80.86% -- predicted mild degradation NOT observed
+2026-07-30	235701	train	grpo_matched_aicr_oracle_sp99.75	rew_first50_last50	0.9275->1.0088	grpo_matched_aicr/oracle_sp99.75	OK	+0.0813 -- lowest oracle arm; mass capture 48.01%; only point consistent with the pre-registered prediction
+2026-07-30	235728	train	grpo_matched_aicr_oracle_sp90	rew_first50_last50	0.9225->1.0562	grpo_matched_aicr/oracle_sp90	OK	+0.1337
+2026-07-30	235729	train	grpo_matched_aicr_oracle_sp80	rew_first50_last50	0.9450->1.0513	grpo_matched_aicr/oracle_sp80	OK	+0.1063
+2026-07-30	235730	train	grpo_matched_aicr_oracle_sp70	rew_first50_last50	0.9400->1.0850	grpo_matched_aicr/oracle_sp70	OK	+0.1450; highest arm
+2026-07-30	-	analysis	grpo_rho_sweep_7pt	prereg_prediction	NOT_CONFIRMED	docs/run_logs/grpo_rho_sweep_aicr_2026-07-29.md	OK	degradation does NOT track mass capture monotonically: sp99 (80.9% mass) +0.1325 > sp95 (99.9% mass) +0.1175; only sp99.75 is lowest. All 9 arms share final lr 6.0923e-11
+2026-07-30	-	analysis	grpo_oracle_vs_random_97.5	rew_delta_gap	0.1000_vs_0.0837	same	OK	oracle beats random but by ~0.5 SE (dense diff was +0.1012 at 3.1 SE => SE~0.033) -- mask still NOT shown to matter for GRPO at n=1 seed; do not claim separation
+2026-07-30	-	analysis	grpo_matched_signal_decomp	acc_share_of_reward_std	0.44->0.64	docs/run_logs/grpo_matched_aicr_2026-07-29.md	OK	accuracy_std/reward_std across arms: ~44-52% early -> 56-66% by step 500 at cap2048 (vs 27->42% at cap1024); the total-reward result is NOT a formatting artifact
+2026-07-30	-	analysis	grpo_matched_signal_decomp	frac_reward_zero_std_split	0.24-0.28_vs_0.08-0.10	same	OK	THIRD independent separator, no overlap: learning arms (dense/97.5/95/99) 0.240-0.280 vs non-learning (99.75/random) 0.080-0.100; higher = policy became consistent
