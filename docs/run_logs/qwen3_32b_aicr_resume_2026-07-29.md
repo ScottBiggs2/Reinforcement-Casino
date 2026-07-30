@@ -191,6 +191,64 @@ checkpoint-500.
 | A | 238613 | started on b0030 within 13 s |
 | B | 238614 | afterok:238613 |
 | C | 238615 | afterok:238614 |
+| D | 238673 | afterok:238615 (insurance) |
+| E | 238674 | afterok:238673 (insurance) |
+
+## B200 step time: 103 s/it — the chain is feasible after all
+
+**Measured, not estimated.** Steps 252 and 253 of 238613 took 102 s and 103 s on
+2×B200. The Explorer run was **177–422 s/it on 3×H200**, so B200 is 1.7–4× faster
+and every earlier feasibility estimate (including the "cannot complete" verdict in
+`DO_NOT_REPEAT.md`, which was written against the Explorer rate and an 8 h wall)
+is superseded for this cluster.
+
+Resume correctness confirmed from the same log: training restarted at **251/500**
+with `learning_rate=2.7778e-07`, exactly 5e-7 × 250/450 for the linear schedule
+with 50-step warmup. `rewards/accuracies` reads 1.0 and `margins` ≈ 3.8, which is
+the ~21-epoch overfit regime the rebuttal already discloses for Light-R1 — the 32B
+arm behaves like the 8B one.
+
+Setup overhead per slot ≈ 10 min: base model 3.3 min, ref model 5 s (page cache),
+tokenisation 70 s, and `optimizer.pt` (66 GiB) off NFS at **688 MiB/s** ≈ 100 s.
+That is 4% of a 4 h devel slot.
+
+**Budget at the measured rate**, including the ~200 s cost of writing a 136 GB
+checkpoint every `save_steps=10`:
+
+| stage | work | estimate |
+|---|---|---|
+| p1 remaining | 250 steps | ~93 steps per devel slot → **3 slots** (5 queued) |
+| p2 mask | 32.8B ckpt-diff on cpu | ~2 h |
+| p3 sparse | 500 steps | ~18 h — **fits one batch slot**, no split needed |
+
+Against the 08-03 deadline: p1 lands ~07-31 early morning, p2 by mid-morning, and
+p3 completes ~08-02 even if it waits 24–36 h for 4 B200s. There is real margin.
+
+## p3 fallback: rtx-batch works (probe 238642)
+
+`rtx-batch` is a **separate 32-GPU QOS pool** that does not consume the b200
+ceiling, and 6× RTX PRO 6000 (95 GiB each, 570 GB) covers p3's ~480 GB. The open
+question was the kernel: every sparse measurement we have is B200 `sm_100`, and
+RTX PRO 6000 Blackwell is `sm_120`. Probe 238642 ran SparseAdamW + the Triton
+kernel there for three steps **with the learning rate changing each step** — the
+`tl.constexpr` recompile path real training takes — and passed. So p3 has a second
+route if the B200 queue does not clear. Caveat: RTX is bandwidth-poorer than B200,
+so assume a slower s/it and re-measure rather than reusing 103.
+
+## Continuation chain (supersedes 238324–238330)
+
+p2 and p3 are re-chained onto the devel p1 slots, with p3 split into 12 h slots
+because a shorter `--time` backfills far better than a 24 h ask:
+
+| stage | job | dependency |
+|---|---|---|
+| p2 mask | 238677 | afterok:238674 |
+| p3 slot A | 238678 | afterok:238677 |
+| p3 slot B | 238679 | afterok:238678 |
+
+The original batch chain 238324–238330 is **inert**: its p1 slots are
+`JobHeldUser`, so they cannot start and the p2/p3 jobs behind them can never fire.
+Left in place rather than cancelled, per the standing "ask before scancel" rule.
 
 ## Read-out plan
 
