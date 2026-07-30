@@ -1,6 +1,6 @@
 ---
 name: rc-experiment-worker
-description: Execute ONE Reinforcement-Casino experiment end to end on the Discovery cluster - one coherent change, a smoke test, then exactly one real run. Use when an experiment has been decided and needs to be built, validated and launched.
+description: Execute ONE Reinforcement-Casino experiment end to end on the AICR B200 cluster (primary node; Explorer/Discovery is fallback only) - one coherent change, a smoke test, then exactly one real run. Use when an experiment has been decided and needs to be built, validated and launched.
 tools: Read, Grep, Glob, Bash, Write, Edit
 ---
 
@@ -43,20 +43,29 @@ real command. If you cannot state the smoke command, you are not ready to edit.
    jobs that produced nothing. Confirm the output file exists and recompute the headline
    number from it.
 
-## Discovery cluster facts that change how you submit
+## AICR cluster facts that change how you submit
 
-- `multigpu` has **one** H200 node. QOS caps you at **4 running / 8 submitted**. Check
-  `squeue -u $USER -h -r | wc -l` before submitting or the submit is rejected.
-- Analysis that needs no GPU belongs on `short` (~18 idle nodes, schedules in minutes).
-  Mask audits, checkpoint diffs and eval-metric recomputation are all CPU work.
-- `--requeue` does **not** fire on TIME LIMIT — an 8 h wall hit is `CANCELLED`. Wrap
-  training in `timeout` at ~90% of the wall and resubmit from the job tail on rc=124
-  only. Never resubmit on a real failure; it will fail again.
+AICR (`ssh aicr`, account `p2026_0038_neu`) is the primary node since 2026-07-29.
+
+- Training goes to `b200-batch`: 28 nodes × 8 B200 (sm_100, 178 GiB), 24 h walltime,
+  per-user `gres/gpu=32` and **no MaxJobsPU** — you are not competing with yourself, so
+  independent arms should be submitted as independent jobs.
+- Smoke tests, probes and evals go to `b200-devel` (2 GPUs, 4 h).
+- Analysis that needs no GPU belongs on `cpu` (5 nodes, 1.13 TB RAM, no `--gres` at all).
+  There is **no idle-GPU canceller** on AICR, so a GPU-less job is correct, not a risk.
+- `--requeue` does **not** fire on TIME LIMIT — a wall hit is `CANCELLED`. Wrap training
+  in `timeout` at ~90% of the wall and resubmit from the job tail on rc=124 only. Never
+  resubmit on a real failure; it will fail again.
 - Right-size `--mem`. An over-large request sits in the queue while the same job at a
   realistic size starts immediately.
 - Do not run python from `/tmp` — a stray `inspect.py` there shadows the stdlib.
-- Training jobs use `--gres=gpu:h200:N` when the result includes timing. Quality-only
-  results do not need H200 and should not compete for that node.
+- Check inputs are **complete**, not merely present: a partial rsync leaves a growing
+  `.<name>.<random>` beside the target, and a job fed a truncated `.pt` dies in seconds.
+- `/scratch/xie_yiyi_neu` has a **30-day purge** — anything you want to keep needs a
+  provenance log in git.
+- Explorer/Discovery is the fallback only. Its queued jobs stay queued as insurance;
+  never cancel them, and do not port its rules here (no `--gres=gpu:h200:N`, no backfill
+  trick, no keep-alive sidecar, no 8 h norm).
 
 ## Do not cancel a queued job to "speed it up"
 

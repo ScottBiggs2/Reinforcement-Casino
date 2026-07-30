@@ -9,11 +9,20 @@
 # Usage:  bash scripts/rc_watch.sh
 set -uo pipefail
 
-PY="/home/xie.yiyi/.conda/envs/rl_casino/bin/python"
-S="/scratch/xie.yiyi"
+# Runs on either cluster: AICR (primary since 2026-07-29) or Explorer (fallback queue).
+# Detected from $USER so the same file works over `ssh aicr` and `ssh Discovery_Cluster`.
+if [ "${USER}" = "xie_yiyi_neu" ]; then
+  CLUSTER="AICR (primary)"
+  PY="${PY:-/work/neu/p2026_0038_neu/xie_yiyi/envs/rl_casino/bin/python}"
+  S="${S:-/scratch/xie_yiyi_neu}"
+else
+  CLUSTER="Explorer (fallback)"
+  PY="${PY:-/home/xie.yiyi/.conda/envs/rl_casino/bin/python}"
+  S="${S:-/scratch/xie.yiyi}"
+fi
 SINCE="${SINCE:-2026-07-26}"
 
-echo "===== RC WATCH  $(date '+%Y-%m-%d %H:%M:%S %Z') ====="
+echo "===== RC WATCH  $CLUSTER  $(date '+%Y-%m-%d %H:%M:%S %Z') ====="
 
 echo
 echo "--- QUEUE ---"

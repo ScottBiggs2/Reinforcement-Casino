@@ -41,7 +41,9 @@ Upstream had already encoded the fixes:
 The upstream files target `.pi`/OpenCode and a NanoChat + HF Jobs project. Claude Code
 agents only read `name` / `description` / `tools` frontmatter, so `defaultContext`,
 `inheritSkills` and `maxSubagentDepth` are dropped. Every command was replaced with the
-Slurm/Discovery equivalent. **The structure is what transfers; none of the text does.**
+Slurm equivalent — retargeted 2026-07-29 from Explorer/Discovery to **AICR** (`ssh aicr`,
+`b200-batch`), which is the primary node; Explorer survives as the fallback queue.
+**The structure is what transfers; none of the text does.**
 
 ## Already live (safe, data-only)
 
