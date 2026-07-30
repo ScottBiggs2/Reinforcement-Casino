@@ -64,3 +64,11 @@ docs/multiautoresearch_agents/
 
 # Local Claude Code subagents (Irene's tools — same status as AGENT_PLAYBOOK.md)
 .claude/agents/
+
+# Rest of the local agent harness: same status as .claude/agents/ above.
+# Settings and skills are machine-local (absolute paths, personal cluster env).
+.claude/
+.codex/
+
+# Scratch working directory (page renders, one-off extracts)
+tmp/
