@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 # Shared RL Casino full-pipeline logic (sourced by run_full_pipeline.sh and pipeline_stage_*.sh).
 # For 8h cluster caps, use: bash scripts/submit_pipeline_chain.sh
 set -euo pipefail

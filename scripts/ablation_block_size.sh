@@ -18,6 +18,7 @@
 #SBATCH --mem=128G
 #SBATCH --time=06:00:00
 
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 set -euo pipefail
 
 # ── Repo root ───────────────────────────────────────────────────────────────

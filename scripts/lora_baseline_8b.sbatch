@@ -44,6 +44,7 @@
 #SBATCH --requeue
 #SBATCH --array=0-3
 
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 set -uo pipefail   # NOT -e: we need to inspect the training return code ourselves
 
 CONDA_SH="/shared/EL9/explorer/miniconda3/24.11.1/miniconda3/etc/profile.d/conda.sh"

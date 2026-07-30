@@ -13,6 +13,7 @@
 #SBATCH --mem=128G
 #SBATCH --time=04:00:00
 
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 # ── Repo root ────────────────────────────────────────────────────────────────
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
   REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"

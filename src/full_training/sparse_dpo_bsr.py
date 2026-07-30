@@ -172,7 +172,7 @@ def train(
         
         run_name = "_".join(parts)
     
-    wandb_project = "huggingface"
+    wandb_project = os.environ.get("WANDB_PROJECT", "huggingface")
     os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join(output_base_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)

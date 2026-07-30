@@ -10,6 +10,7 @@
 #SBATCH --time=6:00:00
 #SBATCH --partition=gpu
 
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 # Source conda and activate environment
 source ~/miniconda3/etc/profile.d/conda.sh || source ~/anaconda3/etc/profile.d/conda.sh || source /opt/conda/etc/profile.d/conda.sh
 conda activate /scratch/biggs.s/conda_envs/rl_casino

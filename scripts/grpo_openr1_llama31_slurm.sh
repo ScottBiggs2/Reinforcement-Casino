@@ -31,6 +31,7 @@
 #SBATCH --output=logs/grpo_openr1_%j.out
 #SBATCH --error=logs/grpo_openr1_%j.err
 # If the scheduler rejects gpu:h200:1 (or you need a different GPU type), replace the --gres line above, e.g.:
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 # #SBATCH --gres=gpu:1
 
 set -euo pipefail

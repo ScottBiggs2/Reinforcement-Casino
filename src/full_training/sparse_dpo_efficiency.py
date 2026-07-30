@@ -87,7 +87,7 @@ def train(
     if run_name is None:
         run_name = f"sparse_dpo_efficiency_{optimizer_type}_{sanitize_model_name(model_name)}_{dataset_sanitized}"
     
-    wandb_project = "huggingface"
+    wandb_project = os.environ.get("WANDB_PROJECT", "huggingface")
     os.environ["WANDB_PROJECT"] = wandb_project
     run_dir = os.path.join(output_base_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)

@@ -11,6 +11,7 @@
 #SBATCH --mem=128G
 #SBATCH --time=00:30:00
 
+export WANDB_PROJECT="${WANDB_PROJECT:-rl_casino}"
 # Slurm copies batch scripts to spool — use submit directory as repo root.
 if [ -n "${SLURM_SUBMIT_DIR:-}" ] && [ -d "${SLURM_SUBMIT_DIR}" ]; then
   REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
