@@ -77,6 +77,21 @@ tracks dense. **Do not repeat "GRPO resists masking" or cite Fig 8/9 as evidence
 that figure's dense/sparse arms differed in scheduler, horizon, and global clip. Full
 numbers: `grpo_matched_aicr_2026-07-29.md` §4a.
 
+### Do not carry "the mask matters for GRPO" past the training objective — it does not transfer
+Measured 2026-07-30 on GSM8K test (n=1319, greedy, training-identical scorer, paired
+McNemar; jobs `238428`–`238437`). On **training reward** oracle led random by +0.0687
+(1.8 SE) and on 9 of 10 windows. On **held-out GSM8K** that gap is **z = −0.22** — gone,
+with random nominally ahead. Nor does any sparse arm separate from the base model at any
+ρ; **only dense does** (+1.97 pp, z = +2.60, and even that is marginal under a
+nine-arm Bonferroni threshold of p < 0.0056).
+
+Base Llama-3.1-8B-Instruct already scores **0.8089** on GSM8K, so this benchmark is near
+ceiling and out-of-distribution relative to OpenR1-Math-220k — that may be why it cannot
+resolve the arms. **But that is a hypothesis to test, not a defence to assert.** Until a
+harder / in-distribution eval runs (MATH-500, or OpenR1 held-out with the training index
+list excluded), the defensible claims are training-objective claims only. Full numbers:
+`grpo_matched_aicr_2026-07-29.md` §4c.
+
 ### Sparse GRPO at ρ=97.5% learns — do not repeat "the method fails for GRPO"
 The three runs above are single-variable (same model, `open-r1/OpenR1-Math-220k`,
 `n_steps=500`, lr 5e-6, β=0.025, reward profile, per `run_manifest.json`) and **all end
@@ -153,6 +168,29 @@ level is uninformative *as a mechanism probe* but can be the strongest *rhetoric
 evidence — a measured plateau beats an argument about why the point is uninteresting;
 (b) reward saturates across 70–99, so **KL displacement is the metric that resolves
 sparsity tolerance**. Numbers: `grpo_rho_sweep_aicr_2026-07-29.md` §4a.
+
+**Extended 2026-07-31 to ρ = 60 and 50** (jobs `240322`, `240323`; all 11 arms still end
+at exactly 6.0923e-11). Both land in the middle of the plateau — reward +0.1313 / +0.1000
+against dense's +0.1012, KL fold 6.4× / 6.6× against dense's 5.9×. The plateau is now
+**nine oracle levels spanning ρ = 50 → 99**, i.e. a 50× range of parameter budget with no
+resolvable difference from dense on either metric. As the original entry predicted, these
+two added nothing about the knee — they keep 40–50% of parameters, four to five times past
+the measured keep-10% saturation — so treat them as *rhetorical* width, not mechanism.
+
+**What the full curve does pin down.** Absolute end-of-run KL declines monotonically once
+the budget gets tight, even where the fold-change and the reward cannot see it:
+
+| keep | 5% | 2.5% | 1% | 0.25% | random 2.5% |
+|---|---|---|---|---|---|
+| end KL | 0.00280 | 0.00214 | 0.00135 | 0.00052 | 0.00035 |
+| KL fold | 6.3× | 6.2× | 5.0× | **2.0×** | 1.4× |
+
+So the GRPO oracle's tolerance limit sits **between keeping 1% and 0.25%** of parameters —
+the quantitative answer to the "lower bound" question. **Caveat on every σ in this
+family:** the SEs treat training steps as independent samples, and RL steps are
+autocorrelated, so the effective n is below 50 and the significance figures are
+optimistic. That weakens "each arm learns" slightly and *strengthens* "the arms do not
+differ from each other".
 
 ### Changed variable: base model → Qwen3-32B
 ~7 min/step, ≈58 h per phase against an 8 h walltime cap. Stalled at dense 250/500 since

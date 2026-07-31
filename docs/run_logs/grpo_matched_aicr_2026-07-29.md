@@ -209,6 +209,62 @@ suppresses absolute accuracy. (c) Single seed per arm. (d) Training curves only 
 held-out math benchmark yet; the checkpoints exist and a GSM8K/MATH eval of the three
 checkpoint-500s is the highest-value follow-up.
 
+## 4c. HELD-OUT EVAL (2026-07-30) — the training-curve result does NOT transfer
+
+GSM8K test, all 1319 problems, greedy decoding, scored with the **training-identical**
+prompt suffix and `accuracy_reward` extractor (`src/evaluation/grpo_heldout_eval.py`,
+jobs `238428`–`238437`). Every arm sees the same problems, so comparisons are paired
+(McNemar), not two independent binomials.
+
+| arm | accuracy | ±SE | vs base | McNemar vs base |
+|---|---|---|---|---|
+| base Llama-3.1-8B-Instruct | 0.8089 | 0.0108 | — | — |
+| **dense** | **0.8287** | 0.0104 | **+1.97 pp** | **z = +2.60 (63/37)** |
+| ρ=70 | 0.8135 | 0.0107 | +0.45 pp | — |
+| ρ=80 | 0.8294 | 0.0104 | +2.05 pp | — |
+| ρ=90 | 0.8188 | 0.0106 | +0.99 pp | — |
+| ρ=95 | 0.8097 | 0.0108 | +0.08 pp | — |
+| ρ=97.5 | 0.8135 | 0.0107 | +0.45 pp | z = +0.72 (38/32) |
+| ρ=99 | 0.8143 | 0.0107 | +0.53 pp | — |
+| ρ=99.75 | 0.8127 | 0.0107 | +0.38 pp | — |
+| random ρ=97.5 | 0.8150 | 0.0107 | +0.61 pp | z = +1.09 (31/23) |
+
+Key paired contrasts: **dense − oracle ρ=97.5 z = +1.89** (66/46, not separated);
+**oracle − random z = −0.22** (39/41, nothing).
+
+**What this changes.**
+
+1. **Only dense produces a held-out gain.** +1.97 pp at z = 2.60 (p ≈ 0.009). Note that
+   with nine arms compared against base, Bonferroni would demand p < 0.0056, so even this
+   is marginal — call it suggestive, not established.
+2. **No sparse arm separates from base**, at any ρ, including the one that matched dense
+   on training reward.
+3. **The oracle-vs-random gap disappears.** On training reward oracle led random by
+   +0.0687 (1.8 SE) and led on 9 of 10 windows; on held-out GSM8K the paired test gives
+   z = −0.22 — random is nominally *ahead*. **The "mask selection matters" claim does not
+   survive the transfer to capability.**
+4. Truncation is *not* a confound here (0.4–0.8% of completions, mean 218–229 tokens of a
+   2048 cap), unlike the training runs at 71–84%.
+
+**Two readings, and they are testable.**
+
+- (a) The sparse arms' training gains were specific to the training reward (heavily
+  formatting-weighted, in-distribution) and did not become transferable math ability.
+- (b) GSM8K lacks the power: base is already at **80.9%**, near ceiling for this model,
+  and it is a different, easier distribution than OpenR1-Math-220k. A 1–2 pp difference
+  among arms is below what n=1319 can resolve at this baseline.
+
+Discriminating between them needs a harder and/or in-distribution benchmark — MATH-500,
+or held-out OpenR1 problems with the exact training index list excluded. Until that runs,
+**(b) is a hypothesis, not a defence**: the honest statement is that sparse GRPO matches
+dense *on the training objective* and has *not been shown* to match it on held-out math.
+
+**Consequence for the rebuttal.** Claims 1 and 2 of §4a (sparse GRPO trains; D.4's
+failure is a confound) stand — they are statements about optimisation under a matched
+schedule and this eval does not touch them. Claim 3 (the mask matters) must be stated as
+training-objective-only, with this null explicitly disclosed. Do not present held-out
+capability parity.
+
 ## 5. Related
 
 - [grpo_schedule_confound_2026-07-25.md](grpo_schedule_confound_2026-07-25.md) — the D.4 confound
