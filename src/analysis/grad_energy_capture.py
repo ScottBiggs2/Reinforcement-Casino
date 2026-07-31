@@ -159,9 +159,12 @@ def build_gradient(args, device):
     if seen == 0:
         raise SystemExit("no batches consumed")
 
-    grads, seen_ptrs = {}, set()
+    # 1-D weights (RMSNorm vectors) are collected as well as 2-D ones: the checkpoint-diff mask
+    # finder emits masks that cover all 291 weight tensors, not just the 226 two-dimensional
+    # ones, and a mask's denominator has to span exactly what that mask covers.
+    grads, two_d, seen_ptrs = {}, set(), set()
     for name, param in model.named_parameters():
-        if param.grad is None or "weight" not in name or param.dim() != 2:
+        if param.grad is None or "weight" not in name or param.dim() not in (1, 2):
             continue
         ptr = param.data_ptr()
         if ptr in seen_ptrs:
@@ -169,6 +172,8 @@ def build_gradient(args, device):
             continue
         seen_ptrs.add(ptr)
         grads[name] = param.grad.detach().div_(float(seen))
+        if param.dim() == 2:
+            two_d.add(name)
 
     meta = {
         "model_name": args.model_name,
@@ -185,10 +190,11 @@ def build_gradient(args, device):
         "precompute_ref_log_probs": False,
         "mean_microbatch_loss": sum(losses) / len(losses),
         "microbatch_losses": losses,
-        "n_grad_tensors_2d": len(grads),
+        "n_grad_tensors": len(grads),
+        "n_grad_tensors_2d": len(two_d),
         "grad_dtype": str(next(iter(grads.values())).dtype) if grads else None,
     }
-    return grads, meta, model
+    return grads, two_d, meta, model
 
 
 def tensor_energies(grads):
@@ -227,7 +233,7 @@ def synthetic_mask(grads, density, seed):
     return masks, {"synthetic": True, "density": density, "seed": seed}
 
 
-def analyze_mask(label, mask_path, grads, den_all, args):
+def analyze_mask(label, mask_path, grads, two_d, den_all, args):
     """phi for one mask, plus its per-tensor and per-layer profile."""
     if mask_path == "__synthetic__":
         mask_tensors, mask_meta = synthetic_mask(grads, args.synthetic_mask_density, args.seed)
@@ -248,7 +254,7 @@ def analyze_mask(label, mask_path, grads, den_all, args):
     if missing or mism:
         raise SystemExit(
             f"mask {label} does not match the model:\n"
-            f"  {len(missing)} keys absent from the 2-D weight set: {missing[:5]}\n"
+            f"  {len(missing)} keys absent from the weight set: {missing[:5]}\n"
             f"  {len(mism)} shape mismatches: {mism[:5]}"
         )
 
@@ -256,6 +262,10 @@ def analyze_mask(label, mask_path, grads, den_all, args):
     num = masked_energy(grads, mask_tensors, names)
 
     rows, sum_num, sum_den, sum_k, sum_n, sum_rate_energy = [], 0.0, 0.0, 0, 0, 0.0
+    # Parallel accumulators restricted to 2-D weights. Masks differ in whether they cover the 65
+    # RMSNorm vectors, and phi is only comparable across masks over a common scope.
+    d2_num = d2_den = d2_rate_energy = 0.0
+    d2_k = d2_n = d2_tensors = 0
     for name in names:
         m = mask_tensors[name]
         n_t = int(m.numel())
@@ -267,10 +277,18 @@ def analyze_mask(label, mask_path, grads, den_all, args):
         sum_k += k_t
         sum_n += n_t
         sum_rate_energy += (k_t / n_t) * d_t
+        if name in two_d:
+            d2_num += n_num
+            d2_den += d_t
+            d2_k += k_t
+            d2_n += n_t
+            d2_rate_energy += (k_t / n_t) * d_t
+            d2_tensors += 1
         rows.append({
             "mask": label,
             "tensor": name,
             "layer": _layer_index(name),
+            "is_2d": name in two_d,
             "n_elements": n_t,
             "k_kept": k_t,
             "keep_rate": k_t / n_t,
@@ -311,6 +329,14 @@ def analyze_mask(label, mask_path, grads, den_all, args):
         "chance_energy_weighted": (sum_rate_energy / sum_den) ** 0.5 if sum_den > 0 else None,
         "masked_grad_energy": sum_num,
         "grad_energy_covered": sum_den,
+        # 2-D-only scope: the common denominator across every mask, and the only tensors that
+        # sparse training actually masks (it replaces nn.Linear layers).
+        "n_tensors_2d": d2_tensors,
+        "n_elements_2d": d2_n,
+        "phi_2d": (d2_num / d2_den) ** 0.5 if d2_den > 0 else None,
+        "chance_energy_weighted_2d": (d2_rate_energy / d2_den) ** 0.5 if d2_den > 0 else None,
+        "chance_uniform_global_2d": (d2_k / d2_n) ** 0.5 if d2_n else None,
+        "realized_keep_rate_2d": d2_k / d2_n if d2_n else None,
         "per_layer": per_layer_out,
         "mask_metadata": {
             k: v for k, v in (mask_meta or {}).items()
@@ -375,33 +401,41 @@ def main():
     print(f"  g       : mean over {args.microbatches} × {args.per_device_train_batch_size} "
           f"= {args.microbatches * args.per_device_train_batch_size} examples", flush=True)
 
-    grads, meta, model = build_gradient(args, device)
-    print(f"  2-D weight tensors with gradients: {len(grads)}", flush=True)
+    grads, two_d, meta, model = build_gradient(args, device)
+    print(f"  weight tensors with gradients: {len(grads)} ({len(two_d)} of them 2-D)", flush=True)
 
     den_all = tensor_energies(grads)
     total_energy = sum(den_all.values())
     total_elements = sum(int(g.numel()) for g in grads.values())
-    print(f"  total 2-D elements: {total_elements:,}   ||g||² = {total_energy:.6e}", flush=True)
+    energy_2d = sum(v for k, v in den_all.items() if k in two_d)
+    elements_2d = sum(int(g.numel()) for k, g in grads.items() if k in two_d)
+    print(f"  all weights : {total_elements:,} elements, ||g||² = {total_energy:.6e}")
+    print(f"  2-D weights : {elements_2d:,} elements, ||g||² = {energy_2d:.6e} "
+          f"({energy_2d / total_energy:.4f} of the total)", flush=True)
 
     results, all_rows = [], []
     for label, path in masks:
         print(f"\n--- {label}", flush=True)
-        res, rows = analyze_mask(label, path, grads, den_all, args)
+        res, rows = analyze_mask(label, path, grads, two_d, den_all, args)
         results.append(res)
         all_rows.extend(rows)
-        print(f"  tensors={res['n_tensors_covered']}  elements={res['n_elements_covered']:,}  "
-              f"keep={res['realized_keep_rate']:.5f}")
-        print(f"  phi={res['phi']:.6f}   chance(energy-weighted)={res['chance_energy_weighted']:.6f}"
-              f"   chance(uniform-global)={res['chance_uniform_global']:.6f}")
-        print(f"  phi / chance_energy_weighted = "
-              f"{res['phi'] / res['chance_energy_weighted']:.4f}", flush=True)
+        print(f"  tensors={res['n_tensors_covered']} ({res['n_tensors_2d']} 2-D)  "
+              f"elements={res['n_elements_covered']:,}  keep={res['realized_keep_rate']:.5f}")
+        print(f"  phi     ={res['phi']:.6f}   chance(energy-weighted)={res['chance_energy_weighted']:.6f}"
+              f"   ratio={res['phi'] / res['chance_energy_weighted']:.4f}")
+        print(f"  phi_2d  ={res['phi_2d']:.6f}   chance_2d(energy-weighted)="
+              f"{res['chance_energy_weighted_2d']:.6f}"
+              f"   ratio={res['phi_2d'] / res['chance_energy_weighted_2d']:.4f}", flush=True)
 
     out = {
         "gradient": meta,
         "grad_totals": {
-            "n_tensors_2d": len(grads),
-            "n_elements_2d": total_elements,
-            "grad_energy_2d": total_energy,
+            "n_tensors": len(grads),
+            "n_tensors_2d": len(two_d),
+            "n_elements": total_elements,
+            "n_elements_2d": elements_2d,
+            "grad_energy": total_energy,
+            "grad_energy_2d": energy_2d,
         },
         "masks": results,
     }
@@ -415,10 +449,16 @@ def main():
         w.writeheader()
         w.writerows(all_rows)
 
-    print(f"\n=== summary ===")
-    print(f"{'mask':<28} {'phi':>10} {'chance_ew':>10} {'ratio':>8} {'tensors':>8} {'keep':>9}")
+    print(f"\n=== summary (2-D scope: comparable across masks) ===")
+    print(f"{'mask':<26} {'phi_2d':>10} {'chance_ew':>10} {'ratio':>8} {'tensors':>8} {'keep':>9}")
     for r in results:
-        print(f"{r['label']:<28} {r['phi']:>10.6f} {r['chance_energy_weighted']:>10.6f} "
+        print(f"{r['label']:<26} {r['phi_2d']:>10.6f} {r['chance_energy_weighted_2d']:>10.6f} "
+              f"{r['phi_2d']/r['chance_energy_weighted_2d']:>8.3f} {r['n_tensors_2d']:>8} "
+              f"{r['realized_keep_rate_2d']:>9.5f}")
+    print(f"\n=== same, over each mask's full coverage ===")
+    print(f"{'mask':<26} {'phi':>10} {'chance_ew':>10} {'ratio':>8} {'tensors':>8} {'keep':>9}")
+    for r in results:
+        print(f"{r['label']:<26} {r['phi']:>10.6f} {r['chance_energy_weighted']:>10.6f} "
               f"{r['phi']/r['chance_energy_weighted']:>8.3f} {r['n_tensors_covered']:>8} "
               f"{r['realized_keep_rate']:>9.5f}")
     print(f"\nwrote {json_path}")
