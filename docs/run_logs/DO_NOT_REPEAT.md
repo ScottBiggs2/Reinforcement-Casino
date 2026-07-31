@@ -23,6 +23,41 @@ sparse-vs-`adamw_torch` figure — a numerical coincidence.
 **Do not concede this.** Conceding would falsely confirm the overstatement charge
 already in the meta-review.
 
+### "The magnitude-rewinding masks hold ~2× the weights and half of them get dense updates" (2026-07-31)
+**Not true of our Llama-3.1-8B masks.** The claim came to us as a mask-construction
+hashing bug severe enough to justify rerunning the campaign. Measured against the exact
+files behind Figure 5, Table 1 and the held-out margins (Explorer job `8862814`):
+
+| reported mask | kept 2-D | density | 2-D params unresolved | elements taking a dense update |
+|---|---|---|---|---|
+| oracle ρ=97.5 | 200,751,844 | 2.5000% | 0 | **0** |
+| random seed 42 | 200,749,875 | 2.5000% | 0 | **0** |
+| warm-mag k=200 | **200,751,842** | 2.5000% | 0 | **0** |
+| warm-mag k=100 | 200,751,742 | 2.5000% | 0 | **0** |
+| warm-mag k=50 | 200,751,205 | 2.5000% | 0 | **0** |
+
+warm-mag k=200 differs from the oracle by **2 elements**, not by 2×, and every one of the
+226 two-dimensional parameters resolves to a mask key in every arm, so nothing reaches
+`SparseAdamW._dense_step`.
+
+**The real bug exists, but on `origin/rebuttal-e1-e2` and on Olmo-3-7B.** Scott's
+`even_better_mask_finder.py` de-duplicates same-shape tensors with
+`if fp == prev_fp and torch.equal(t, prev_t)`. Because bf16 quantization leaves ~99% of
+deltas exactly zero, two distinct attention projections can both be all-zero, compare
+equal, and one is dropped — his masks carry 213/216/219 of 226 tensors, and the dropped
+ones train densely. **Our branch has never contained that code**: `torch.equal`,
+`seen_by_shape`, `Tied (dedup`, `fingerprint` all return zero matches, including at
+`dccdd49` (2026-04-12), the commit in force when the 2026-05-01 masks were built.
+
+**Do not rerun the campaign on this report, and check the branch and the backbone before
+accepting a cross-branch bug as ours.** What *does* transfer is the upstream cause in his
+§3.0 — at lr=5e-7 in bf16 an update is ~2 orders of magnitude below `ulp(w)`, so most
+weights never move — and we share both the regime and the tie-break machinery
+(`mask_utils.py:150`/`:487`, `tie_break_noise_scale=1e-6` at `:558`). Whether the ρ=97.5
+budget exceeds our signal support, which would make the k-sweep Jaccard largely shared
+noise, is measured separately (job `242674`); that question is open and is the one worth
+spending time on.
+
 ### "Theorem 1's bounded-gradient assumption is used but never stated."
 **False.** It is in the theorem's hypotheses (submitted PDF p.4 l.151, `‖∇L(θ)‖ ≤ ε`).
 Only the `_inf` subscript is missing, supplied at l.694. Do not apologise for an
