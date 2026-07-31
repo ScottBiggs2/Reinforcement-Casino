@@ -92,8 +92,15 @@ def build_gradient(args, device):
             f"dataset {args.dataset} yielded {len(dataset)} examples, need {n_samples}"
         )
 
+    if args.dtype == "bfloat16" and device == "cpu":
+        raise SystemExit(
+            "bf16 requires a GPU (transformers rejects bf16 on CPU). For a CPU smoke test pass "
+            "--dtype float32; the real measurement must run on GPU in bf16 so the numeric path "
+            "matches the training runs."
+        )
+    torch_dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float32
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_name, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
+        args.model_name, torch_dtype=torch_dtype, low_cpu_mem_usage=True
     )
     model.config.use_cache = False
     # Move the policy before DPOTrainer.__init__: with ref_model=None and no PEFT, TRL calls
@@ -110,7 +117,7 @@ def build_gradient(args, device):
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=1,
         max_steps=1,
-        bf16=True,
+        bf16=(args.dtype == "bfloat16"),
         beta=args.beta,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
@@ -173,6 +180,7 @@ def build_gradient(args, device):
         "max_prompt_length": args.max_prompt_length,
         "beta": args.beta,
         "seed": args.seed,
+        "dtype": args.dtype,
         "gradient_checkpointing": bool(args.gradient_checkpointing),
         "precompute_ref_log_probs": False,
         "mean_microbatch_loss": sum(losses) / len(losses),
@@ -330,6 +338,9 @@ def parse_args():
     p.add_argument("--max_prompt_length", type=int, default=512)
     p.add_argument("--beta", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--dtype", choices=("bfloat16", "float32"), default="bfloat16",
+                   help="bfloat16 matches the training runs and needs a GPU. float32 exists so "
+                        "the instrument can be smoke-tested on a CPU node.")
     p.add_argument("--gradient_checkpointing", dest="gradient_checkpointing",
                    action="store_true", default=True)
     p.add_argument("--no_gradient_checkpointing", dest="gradient_checkpointing",
