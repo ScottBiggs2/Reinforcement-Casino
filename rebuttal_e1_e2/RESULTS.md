@@ -139,10 +139,10 @@ block-bootstrap CI over contiguous 10-step blocks (10,000 draws).
 | arm | coverage | Jaccard vs k=250 | d | 95% CI | V |
 |---|---|---|---|---|---|
 | oracle deltalog (reference) | 213 tensors | — | 0 | — | 0 (definitional) |
-| warm k=250 | 216 tensors | 1.0 | **0.005851** | [0.005166, 0.006645] | PENDING |
-| warm k=50 | 216 tensors | 0.8399 | PENDING | | PENDING |
-| warm k=100 | 216 tensors | 0.9502 | PENDING | | PENDING |
-| random, as originally built | 226 tensors | — | **0.168163** | [0.166386, 0.169921] | PENDING |
+| warm k=250 | 216 tensors | 1.0 | **0.005851** | [0.005166, 0.006645] | 0.143982 |
+| warm k=50 | 216 tensors | 0.8399 | PENDING | | 0.157780 |
+| warm k=100 | 216 tensors | 0.9502 | PENDING | | 0.149917 |
+| random, as originally built | 226 tensors | — | **0.168163** | [0.166386, 0.169921] | 0.511664 |
 | random, coverage-matched to 216 | 216 tensors | 0.0400 | PENDING | | (same mask, subset) |
 
 All four masks passed the gate in `scripts/verify_mask_against_reference.py` (identical key sets and
@@ -151,10 +151,57 @@ shapes, keep rate 0.025000, `pooling_mode=global_with_layer_floor`,
 0.8399 at k=50 and 0.9502 at k=100 against the k=250 reference — which is the check that caught the
 CPU-built mask described in §3.2.
 
-V values come from `mask_score_gap_gap_diagnostics.json` under the hybrid τ rule
-(`cert_tau_rule=hybrid_global_phase`, `cert_hybrid_min_layer_keep_ratio=0.0025`) so the estimator
+### V under hybrid τ
+
+From `cert_olmo3_hybrid_mat/mask_score_gap_gap_diagnostics.json`, with
+`cert_tau_rule=hybrid_global_phase` and `cert_hybrid_min_layer_keep_ratio=0.0025` so the estimator
 matches how production masks are actually built — the surviving Llama artifact used global τ with
 `min_layer_keep_ratio=0`, a mismatch §4.4 currently glosses.
+
+| arm | V | certifiability_strict_fraction | τ̂ |
+|---|---|---|---|
+| k=50 | 0.157780 | 0.8422197 | 4.2746e-10 |
+| k=100 | 0.149917 | 0.8500832 | 1.3970e-09 |
+| k=150 | 0.146467 | 0.8535334 | 2.9395e-09 |
+| k=200 | 0.144732 | 0.8552682 | 5.0932e-09 |
+| k=250 | 0.143982 | 0.8560182 | 7.8580e-09 |
+| random, seed 42 | 0.511664 | 0.4883365 | 0.97266 |
+
+`k_keep = 182,450,278` and `N = 7,298,011,136` throughout; oracle τ̂ = 4.2201e-09.
+
+**Two independent checks on the τ machinery.** The random arm's τ̂ = 0.97266, and uniform[0,1]
+scores cut at the top 2.5% must give ≈0.975. And V(random) = 0.511664 against the surviving Llama
+figure of 0.51164 — two different models agreeing to four decimals.
+
+**V is monotone in k and saturating**, with successive differences −0.0079, −0.0035, −0.0017,
+−0.0008, i.e. roughly halving each step. Total spread 0.0138 across k ∈ [50, 250], about 3× the
+Llama global-τ spread over a comparable range. So the pre-registered flatness caveat fired in the
+useful direction: Olmo3 under hybrid τ is not as flat as Llama under global τ, which gives the
+k-cluster slightly more lever arm than the plan expected — though 0.0138 is still a narrow x-axis.
+
+**What V is actually measuring at this sparsity.** τ̂ grows ~18× across the k range
+(4.27e-10 → 7.86e-09) while V falls. Since ~98.8% of coordinates have score exactly zero (§3.1),
+their margin is `|0 − τ̂| = τ̂`, so for the overwhelming majority of weights the certifiability
+condition reduces to "is the oracle's displacement at this coordinate below τ̂". V is therefore
+largely a statement about how many coordinates the oracle barely moved, mediated by a threshold
+that is itself only ~3–4× the tie-break noise scale (1.03e-10 at k=50, 4.52e-10 at k=100). That is
+worth saying plainly: at ρ=97.5% on this run, V is not primarily a measure of selection quality.
+
+**A degeneracy that limits what the k-cluster can show.** Within the warm family V is a monotone
+function of k, and so is mask distance to the oracle (Jaccard vs k=250: 0.8399, 0.9502, 1.0 for
+k=50, 100, 250). Any V–d correlation restricted to the warm family therefore cannot distinguish
+"V predicts d" from "mask distance to the oracle predicts d". Only the random arm breaks that
+degeneracy, which is why the coverage-matched random point matters so much.
+
+**Scope mismatch to note.** V is computed over all 355 parameter tensors (N = 7,298,011,136),
+while the trained masks cover 216 two-dimensional weights (7,129,710,592). V and d are thus
+measured over slightly different tensor sets.
+
+**τ̂ is an approximation, by the pipeline's own admission.** The artifact records
+`cert_tau_note: "hybrid_global_phase: τ is the global-phase cutoff after per-layer floors
+(mask_utils-style), not the pure-global Theorem-3 τ"`, and `cert_mode` adds that hybrid masks
+"are not equivalent to a single scalar τ". So hybrid τ matches mask *construction* better than
+global τ does, but it is not literally the τ of Theorem 3.
 
 The paired Δ(t) traces (`delta_traces.png`) are the more informative panel: the random arm
 diverges steadily from the oracle trajectory through the first ~250 steps and plateaus near 0.17,
