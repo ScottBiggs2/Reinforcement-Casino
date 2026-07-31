@@ -203,6 +203,38 @@ measured over slightly different tensor sets.
 "are not equivalent to a single scalar τ". So hybrid τ matches mask *construction* better than
 global τ does, but it is not literally the τ of Theorem 3.
 
+### `d = mean|ΔL|` measures noise for arms that track the oracle closely
+
+Reporting `d` exactly as pre-registered, and alongside it the signed mean deviation, because the
+absolute value turns out to matter a great deal:
+
+| arm | V | d = mean\|ΔL\| | signed mean(L_M − L_oracle) | 95% CI on signed |
+|---|---|---|---|---|
+| warm k=250 | 0.14398 | 0.005851 | **−0.001171** | [−0.002019, +0.000130] |
+| warm k=50 | 0.15778 | 0.006381 | **+0.003445** | [+0.002172, +0.004839] |
+| random, 226 coverage | 0.51166 | 0.168163 | **+0.168163** | [+0.166386, +0.169921] |
+
+For the random arm the sign never flips, so `d` and the signed mean agree to six decimals. For
+warm k=250 the systematic gap is 0.0012 while `d` is 0.0059, i.e. **roughly 80% of `d` is per-step
+noise**: symmetric fluctuation around zero becomes a positive floor once you take absolute values.
+So `d` is a poor discriminator exactly where the interesting arms live — close to the oracle. The
+signed mean is the better primary statistic, and `d` should be read as an upper bound inflated by
+noise.
+
+Read on the signed statistic, the three points are **monotone in V with every gap resolved**:
+k=250 is statistically indistinguishable from the oracle (its CI contains zero), k=50 sits
+significantly above it, and random sits far above. The arm-vs-arm difference confirms the
+within-family gap that the overlapping `d` intervals could not:
+
+| A − B | mean | 95% CI | excludes 0 |
+|---|---|---|---|
+| warm_k50 − warm_k250 | +0.004616 | [+0.003005, +0.005782] | yes |
+| warm_k50 − random_226 | −0.164718 | [−0.166091, −0.163033] | yes |
+| warm_k250 − random_226 | −0.169334 | [−0.170770, −0.167216] | yes |
+
+Differencing two arms cancels the reference *and* the shared per-step batch effect, which is why it
+resolves a 0.0046 gap that individual `d` intervals of width ~0.0015 could not.
+
 The paired Δ(t) traces (`delta_traces.png`) are the more informative panel: the random arm
 diverges steadily from the oracle trajectory through the first ~250 steps and plateaus near 0.17,
 while the warm k=250 arm tracks it within ±0.01 for the entire run. Because all arms see an
