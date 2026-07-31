@@ -159,8 +159,12 @@ def config_guard(ref_label, ref_fields, label, fields):
     """Field-by-field comparison. Returns the list of guarded mismatches (empty = pass)."""
     bad = []
     if ref_fields is None or fields is None:
-        bad.append(("<training_args.bin>", "present" if ref_fields else "missing",
-                    "present" if fields else "missing"))
+        # Unverifiable, not mismatched — still fails closed, but the distinction matters when
+        # diagnosing. The usual cause is a run that has not written a checkpoint yet: save_steps
+        # is 500, so training_args.bin only appears once the run completes.
+        bad.append(("<training_args.bin unreadable — cannot verify config>",
+                    "present" if ref_fields else "absent",
+                    "present" if fields else "absent"))
         return bad
     for key in GUARD_FIELDS + ["accelerator_config.use_seedable_sampler"]:
         a, b = ref_fields.get(key, "<absent>"), fields.get(key, "<absent>")
