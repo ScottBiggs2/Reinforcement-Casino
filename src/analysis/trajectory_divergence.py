@@ -191,19 +191,25 @@ def block_bootstrap(values, block=10, n_boot=10000, seed=42):
     }
 
 
-def analyze_pair(ref_log, arm_log, final_steps, block, n_boot):
-    """Delta(t) on the shared step grid, and d over the final window."""
+def analyze_pair(ref_log, arm_log, final_steps, block, n_boot, last_step):
+    """Delta(t) on the shared step grid, and d over the final window.
+
+    `last_step` is supplied by the caller and is common to every arm. Deriving it per pair would
+    silently give a truncated arm a different window from the others (the sparse runs sit ~24 min
+    inside their walltime, so a truncated arm is a live possibility), and d values measured over
+    different windows are not comparable.
+    """
     steps = sorted(set(ref_log) & set(arm_log))
     if not steps:
         raise SystemExit("no shared steps between reference and arm")
     delta = [(s, arm_log[s]["loss"] - ref_log[s]["loss"]) for s in steps
              if isinstance(arm_log[s].get("loss"), float) and isinstance(ref_log[s].get("loss"), float)]
-    tail = [d for s, d in delta if s > max(steps) - final_steps]
+    tail = [d for s, d in delta if last_step - final_steps < s <= last_step]
     return {
         "n_shared_steps": len(steps),
         "first_step": steps[0],
         "last_step": steps[-1],
-        "window": [max(steps) - final_steps + 1, max(steps)],
+        "window": [last_step - final_steps + 1, last_step],
         "d": float(np.mean(np.abs(tail))) if tail else None,
         "d_ci": block_bootstrap(np.abs(tail), block, n_boot),
         "signed_delta_ci": block_bootstrap(tail, block, n_boot),
@@ -365,7 +371,7 @@ def main():
     else:
         diag, v_only = {}, {}
 
-    results, excluded = [], []
+    results, excluded, kept = [], [], []
     for label, path in parse_kv(args.arm, "arm").items():
         run_dir = find_run_dir(path)
         log, dropped = read_training_log(run_dir)
@@ -403,19 +409,32 @@ def main():
         else:
             print(f"  gates PASS (config guard + step-1 grad_norm={s1_arm})")
 
-        res = analyze_pair(ref_log, log, args.final_steps, args.bootstrap_block,
-                           args.bootstrap_draws)
+        kept.append({"label": label, "run_dir": run_dir, "log": log,
+                     "step1_grad_norm": s1_arm, "gate_warnings": gate_msgs})
+
+    # One window for every arm, set by the shortest surviving trajectory.
+    last_step = min([max(ref_log)] + [max(a["log"]) for a in kept]) if kept else max(ref_log)
+    if kept and any(max(a["log"]) != last_step for a in kept) or max(ref_log) != last_step:
+        print(f"\nNOTE: trajectories differ in length; using a common window ending at "
+              f"step {last_step} for every arm "
+              f"(reference={max(ref_log)}, arms="
+              f"{ {a['label']: max(a['log']) for a in kept} }).")
+
+    for a in kept:
+        res = analyze_pair(ref_log, a["log"], args.final_steps, args.bootstrap_block,
+                           args.bootstrap_draws, last_step)
         res.update({
-            "label": label,
-            "run_dir": run_dir,
-            "V": v_all.get(label),
-            "step1_grad_norm": s1_arm,
-            "gate_warnings": gate_msgs,
-            "final_loss": log[max(log)]["loss"] if log else None,
+            "label": a["label"],
+            "run_dir": a["run_dir"],
+            "V": v_all.get(a["label"]),
+            "step1_grad_norm": a["step1_grad_norm"],
+            "gate_warnings": a["gate_warnings"],
+            "final_loss": a["log"][max(a["log"])]["loss"],
+            "arm_last_step": max(a["log"]),
         })
         results.append(res)
         ci = res["d_ci"]
-        print(f"  d={res['d']:.6f}  95% CI [{ci['ci_lo']:.6f}, {ci['ci_hi']:.6f}] "
+        print(f"\n{a['label']}: d={res['d']:.6f}  95% CI [{ci['ci_lo']:.6f}, {ci['ci_hi']:.6f}] "
               f"(block={ci['block']}, n={ci['n']})   V={res['V']}")
 
     if results:
@@ -436,6 +455,7 @@ def main():
         "reference": {"label": ref_label, "run_dir": ref_dir, "training_args": ref_args_path,
                       "fields": ref_fields, "step1_grad_norm": ref_log.get(1, {}).get("grad_norm")},
         "final_steps": args.final_steps,
+        "common_window_last_step": last_step,
         "v_json": args.v_json,
         "v_measured": v_all,
         "v_only": v_only,
