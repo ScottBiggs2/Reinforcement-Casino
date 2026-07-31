@@ -90,8 +90,13 @@ class FlexibleCheckpointCallback(TrainerCallback):
                 for name, param in model.named_parameters():
                     if name in self.base_state:
                         current = param.detach().float().cpu()
-                        diff = current - self.base_state[name]
-                        full_deltas_to_save[name] = diff
+                        # Upcast base defensively (it may be bf16, as GRPO_train.py /
+                        # DPO_train.py store it) so the subtraction is done in fp32, then
+                        # store the delta in bf16: deltas only feed |Δθ| mask selectors, so
+                        # bf16 is sufficient and halves each deltas_step_*.pt on disk. Matches
+                        # GRPO_train.py:79/87 and DPO_train.py:466 exactly.
+                        diff = current - self.base_state[name].float()
+                        full_deltas_to_save[name] = diff.bfloat16()
 
             delta_file = os.path.join(self.delta_log_dir, f"deltas_step_{step}.pt")
             torch.save(full_deltas_to_save, delta_file)

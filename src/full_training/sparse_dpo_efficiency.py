@@ -95,6 +95,8 @@ def train(
     precompute_ref_log_probs: bool = False,
     max_grad_norm: float = 1.0,
     sparse_adamw_max_grad_norm: float = 0.0,
+    delta_log_interval: Optional[int] = None,
+    delta_log_end_step: Optional[int] = None,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -144,9 +146,6 @@ def train(
         f"warmup_ratio={warmup_ratio}, lr_scheduler=linear (Trainer; align with DPO_train.py / pipeline NUM_STEPS_DPO)"
     )
     print(f"HF rolling checkpoints: {use_hf_rolling} resume={resume_ckpt!r}")
-
-    # Callback only uses this for optional full-delta dumps; not tied to dense delta_logs.
-    checkpoint_schedule = [n_steps] if n_steps > 0 else []
 
     # Load Components (optional reuse for multi-phase drivers that preload once)
     if tokenizer_obj is not None and train_dataset is not None:
@@ -275,17 +274,38 @@ def train(
     if use_wandb:
         callbacks.append(WandbRunIdCallback(run_dir))
 
-    if not resume_ckpt:
+    # Weight-delta logging on a milestone schedule (source of the magnitude masks). Gated on
+    # --delta_log_interval so ONLY the dense arm emits deltas; the sparse arms don't build masks.
+    # Mirrors GRPO_train.py:344-370 exactly (same range(interval, end+1, interval) schedule, bf16
+    # base_state, base_state.pt dump) so the DPO and GRPO dense arms produce magnitude masks on an
+    # identical step schedule — a precondition for the mag k=50/100/250 masks being comparable
+    # across objectives. This script runs under device_map="auto" (not FSDP), so a plain
+    # model.named_parameters() pass gives full-shaped params — no accelerator.get_state_dict gather.
+    interval = delta_log_interval
+    if interval is not None and interval > 0 and not resume_ckpt:
+        end = delta_log_end_step
+        if end is None:
+            end = min(n_steps, max(interval, n_steps // 10))
+        else:
+            end = min(n_steps, end)
+        schedule = list(range(interval, end + 1, interval))
+        if not schedule and n_steps > 0:
+            schedule = [n_steps]
+        delta_log_dir = os.path.join(run_dir, "deltas")
+        os.makedirs(delta_log_dir, exist_ok=True)
         base_state = {}
         with torch.no_grad():
             for name, param in model.named_parameters():
-                base_state[name] = param.detach().float().cpu().clone()
+                # bf16 base (matches GRPO_train.py:359 / DPO_train.py:480): deltas feed |Δθ|
+                # mask selectors, so bf16 is sufficient and halves base_state.pt on disk.
+                base_state[name] = param.detach().to(torch.bfloat16).cpu().clone()
+        torch.save(base_state, os.path.join(delta_log_dir, "base_state.pt"))
         callbacks.append(
             FlexibleCheckpointCallback(
                 base_state=base_state,
-                delta_log_dir=os.path.join(run_dir, "deltas"),
-                checkpoint_schedule=checkpoint_schedule,
-                threshold=1e-3,
+                delta_log_dir=delta_log_dir,
+                checkpoint_schedule=schedule,
+                threshold=1e-5,
                 model_name=model_name,
                 dataset_name=dataset_name,
                 subset_size=subset_size,
@@ -297,11 +317,13 @@ def train(
                 wandb_project=wandb_project,
             )
         )
+        print(f"Delta logging enabled: schedule steps {schedule[:5]}"
+              f"{'...' if len(schedule) > 5 else ''}")
+    elif resume_ckpt:
+        print("Resume: skipping FlexibleCheckpointCallback weight-delta logging "
+              "(base_state would not match a cold start).")
     else:
-        print(
-            "Resume: skipping FlexibleCheckpointCallback weight-delta logging "
-            "(base_state would not match a cold start)."
-        )
+        print("Delta logging OFF (no --delta_log_interval): sparse arms don't emit masks.")
 
     if save_csv:
         callbacks.append(CSVLoggerCallback(output_dir=run_dir))
@@ -446,9 +468,24 @@ if __name__ == "__main__":
     )
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--max_prompt_length", type=int, default=512)
+    parser.add_argument(
+        "--delta_log_interval",
+        type=int,
+        default=None,
+        help="If set, log bf16 weight deltas vs init every N steps (source of magnitude masks). "
+        "Pass ONLY on the dense arm; sparse arms don't build masks. Default: off. Match GRPO's value.",
+    )
+    parser.add_argument(
+        "--delta_log_end_step",
+        type=int,
+        default=None,
+        help="Last step (inclusive) for delta logs when --delta_log_interval is set (e.g. 250 for "
+        "mag k=50/100/250 with interval 50). Match GRPO's value for cross-objective comparability.",
+    )
     parser.add_argument("--dpo_beta", type=float, default=0.1)
     parser.add_argument("--subset_size", type=int, default=None)
-    parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "sparse_adamw"], default="sparse_adamw")
+    parser.add_argument("--optimizer", type=str, choices=["sgd", "adamw", "adamw_torch", "sparse_adamw"], default="sparse_adamw",
+                        help="Dense DPO arm uses adamw_torch (== adamw here); sparse arms use sparse_adamw.")
     parser.add_argument("--block_size", type=int, default=32)
     parser.add_argument(
         "--mlp_only",
@@ -527,6 +564,8 @@ if __name__ == "__main__":
         warmup_ratio=args.warmup_ratio,
         max_grad_norm=args.max_grad_norm,
         sparse_adamw_max_grad_norm=args.sparse_adamw_max_grad_norm,
+        delta_log_interval=args.delta_log_interval,
+        delta_log_end_step=args.delta_log_end_step,
         weight_decay=args.weight_decay,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,
