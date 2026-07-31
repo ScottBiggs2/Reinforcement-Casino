@@ -101,6 +101,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--warmup_ratio", type=float, default=0.0, help="Warmup ratio for LR schedule.")
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay.")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0,
+                        help="Global-norm gradient clip. MUST equal sparse_dpo_efficiency.py "
+                        "--max_grad_norm for equal footing (Table 7 = 1.0).")
     parser.add_argument("--max_length", type=int, default=1024, help="Max total sequence length.")
     parser.add_argument("--max_prompt_length", type=int, default=512, help="Max prompt length.")
     parser.add_argument("--dpo_beta", type=float, default=0.1, help="DPO beta.")
@@ -334,6 +337,9 @@ def main() -> None:
         learning_rate=args.learning_rate,
         warmup_ratio=args.warmup_ratio,
         weight_decay=args.weight_decay,
+        # Global-norm clip pinned explicitly so dense matches the sparse arm's single clip
+        # (sparse_dpo_efficiency.py; SparseAdamW per-param clip disabled there).
+        max_grad_norm=args.max_grad_norm,
         lr_scheduler_type="linear",
         max_steps=-1 if num_epochs is not None else num_steps,
         num_train_epochs=num_epochs if num_epochs is not None else 1,

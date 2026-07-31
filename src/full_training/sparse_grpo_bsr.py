@@ -108,11 +108,13 @@ def train(
     block_size_adam: int,
     optimizer_type: str,
     max_grad_norm: float,
+    sparse_adamw_max_grad_norm: float,
     adam_beta1: float,
     adam_beta2: float,
     adam_eps: float,
     grpo_beta: float,
     warmup_steps: int,
+    warmup_ratio: float,
     disable_tf32: bool,
     save_model: bool,
     dataset_key: str,
@@ -232,8 +234,10 @@ def train(
             eps=adam_eps,
             block_size=block_size_adam,
             mlp_only=mlp_only,
-            max_grad_norm=max_grad_norm,
-            eager_state_init=not lazy_sparse_adamw_state,
+            # Single-clip regime: the Trainer's global-norm clip (GRPOConfig.max_grad_norm) is
+            # the only clip, identical to the dense arm. SparseAdamW's per-param clip is OFF by
+            # default (0.0) so sparse is not double-clipped with a differently-shaped clip.
+            max_grad_norm=sparse_adamw_max_grad_norm,
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
@@ -257,6 +261,9 @@ def train(
         "output_dir": output_dir,
         "resume_from_checkpoint": resume_ckpt,
         "grpo_reward_profile": reward_prof,
+        # Clipping provenance for the equal-footing gate (verify_grpo_config_consistency.py):
+        "trainer_max_grad_norm": max_grad_norm,
+        "sparse_adamw_max_grad_norm": sparse_adamw_max_grad_norm,
     }
 
     callbacks: List[TrainerCallback] = [
@@ -324,8 +331,14 @@ def train(
         max_completion_length=max_completion_length,
         max_prompt_length=max_prompt_length,
         beta=grpo_beta,
+        # Warmup on the SAME axis as dense (GRPO_train.py uses warmup_ratio). HF uses warmup_steps
+        # only when > 0, else warmup_ratio; keep warmup_steps=0 so warmup_ratio governs both arms.
         warmup_steps=warmup_steps,
+        warmup_ratio=warmup_ratio,
         lr_scheduler_type=lr_scheduler_type,
+        # Global-norm gradient clip (HF Trainer). Set explicitly so sparse does not silently take
+        # the TRL default (1.0); must equal the dense arm's GRPO_train.py --max_grad_norm.
+        max_grad_norm=max_grad_norm,
     )
 
     trainer = GRPOTrainer(
@@ -403,8 +416,12 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--mask", type=str, default="masks/top_10.0pct_momentum_w25_step25.pt")
     parser.add_argument("--n_steps", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--grad_accum", type=int, default=8)
+    # Effective-batch knobs default to the dense GRPO_train.py values (batch 2, grad_accum 4,
+    # num_generations 8, generation_batch_size 8) so dense and sparse are on equal footing.
+    parser.add_argument("--batch_size", type=int, default=2,
+                        help="per_device_train_batch_size; must equal dense GRPO_train.py (2).")
+    parser.add_argument("--grad_accum", type=int, default=4,
+                        help="gradient_accumulation_steps; must equal dense GRPO_train.py (4).")
     parser.add_argument("--num_generations", type=int, default=8)
     parser.add_argument("--generation_batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=5e-6)
@@ -433,12 +450,29 @@ if __name__ == "__main__":
         raise argparse.ArgumentTypeError("Boolean value expected.")
 
     parser.add_argument("--save_model", type=str2bool, default=True)
-    parser.add_argument("--max_grad_norm", type=float, default=1.0)
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=0.1,
+        help="Global-norm gradient clip (HF Trainer). MUST equal the dense arm's "
+        "GRPO_train.py --max_grad_norm for equal footing. Default 0.1 matches dense.",
+    )
+    parser.add_argument(
+        "--sparse_adamw_max_grad_norm",
+        type=float,
+        default=0.0,
+        help="Per-parameter clip inside SparseAdamW; 0 disables it (default). Kept off so the "
+        "ONLY clip is the Trainer global clip above, matching the dense arm's single clip.",
+    )
     parser.add_argument("--adam_beta1", type=float, default=0.9)
     parser.add_argument("--adam_beta2", type=float, default=0.999)
     parser.add_argument("--adam_eps", type=float, default=1e-8)
     parser.add_argument("--grpo_beta", type=float, default=0.025)
-    parser.add_argument("--warmup_steps", type=int, default=0)
+    parser.add_argument("--warmup_steps", type=int, default=0,
+                        help="Keep 0 so --warmup_ratio governs (matches dense GRPO_train.py axis).")
+    parser.add_argument("--warmup_ratio", type=float, default=0.1,
+                        help="Warmup fraction of max_steps. MUST equal dense GRPO_train.py "
+                        "--warmup_ratio for equal footing (default 0.1).")
     parser.add_argument(
         "--lr_scheduler_type",
         type=str,
@@ -501,11 +535,13 @@ if __name__ == "__main__":
         block_size_adam=args.block_size_adam,
         optimizer_type=args.optimizer,
         max_grad_norm=args.max_grad_norm,
+        sparse_adamw_max_grad_norm=args.sparse_adamw_max_grad_norm,
         adam_beta1=args.adam_beta1,
         adam_beta2=args.adam_beta2,
         adam_eps=args.adam_eps,
         grpo_beta=args.grpo_beta,
         warmup_steps=args.warmup_steps,
+        warmup_ratio=args.warmup_ratio,
         lr_scheduler_type=args.lr_scheduler_type,
         disable_tf32=args.disable_tf32,
         save_model=args.save_model,

@@ -41,7 +41,9 @@ export DPO_DATASET_KEY="${DPO_DATASET_KEY:-light-r1}"
 MIN_LAYER_KEEP_RATIO="${MIN_LAYER_KEEP_RATIO:-0.0025}"
 ORACLE_TARGET_STEP="${ORACLE_TARGET_STEP:-500}"
 # Space-separated list of sparsity percentages to build.
-SPARSITY_LIST="${SPARSITY_LIST:-90 99}"
+# NOTE: captured into a DIFFERENTLY-named var *before* sourcing pipeline_common.sh,
+# which hard-sets SPARSITY_LIST=("97.5") and would otherwise clobber this value.
+ORACLE_SPARSITY_LIST="${SPARSITY_LIST:-90 99}"
 
 if [ -z "${DENSE_RUN_ID:-}" ]; then
   echo "ERROR: DENSE_RUN_ID is required." >&2
@@ -83,7 +85,7 @@ mkdir -p "$MASK_DIR" logs
 echo "===== Delta-log oracle masks: Olmo-3-7B / light-r1 (DENSE_RUN_ID=${DENSE_RUN_ID}) ====="
 echo "  delta dir     : ${DELTA_DIR}"
 echo "  target step   : ${ORACLE_TARGET_STEP}"
-echo "  sparsities    : ${SPARSITY_LIST}"
+echo "  sparsities    : ${ORACLE_SPARSITY_LIST}"
 echo "  mask dir      : ${MASK_DIR}"
 if [ ! -f "${DELTA_DIR}/deltas_step_${ORACLE_TARGET_STEP}.pt" ]; then
   echo "ERROR: missing ${DELTA_DIR}/deltas_step_${ORACLE_TARGET_STEP}.pt" >&2
@@ -91,7 +93,7 @@ if [ ! -f "${DELTA_DIR}/deltas_step_${ORACLE_TARGET_STEP}.pt" ]; then
 fi
 
 fail=0
-for SP in ${SPARSITY_LIST}; do
+for SP in ${ORACLE_SPARSITY_LIST}; do
   OUT="${MASK_DIR}/oracle_deltalog_${SUBDIR}_sp${SP}pct_step${ORACLE_TARGET_STEP}.pt"
   echo ""
   echo "---- oracle (delta-log ground_truth) sparsity=${SP}% ----"
@@ -115,7 +117,7 @@ done
 
 echo ""
 echo "===== Done (${fail} sparsity step(s) failed) ====="
-for SP in ${SPARSITY_LIST}; do
+for SP in ${ORACLE_SPARSITY_LIST}; do
   echo "  sp${SP}: ${MASK_DIR}/oracle_deltalog_${SUBDIR}_sp${SP}pct_step${ORACLE_TARGET_STEP}.pt"
 done
 echo ""

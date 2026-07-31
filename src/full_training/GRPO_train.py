@@ -76,12 +76,15 @@ class DeltaLoggingCallback(TrainerCallback):
         with torch.no_grad():
             for name, param in model.named_parameters():
                 current = param.detach().float().cpu()
-                diff = current - self.base_state[name]
+                diff = current - self.base_state[name].float()
                 l2 = torch.norm(diff).item()
                 frac_big = (diff.abs() > self.threshold).float().mean().item()
                 layer_stats[name] = {"l2_from_init": l2, "frac_big_from_init": frac_big}
                 if step in self.checkpoint_schedule:
-                    full_deltas_to_save[name] = diff.clone()
+                    # bf16 on disk: weights are bf16, so the diff carries no more than bf16
+                    # signal and |Δθ| mask selection is a ranking. Matches DPO_train.py:460;
+                    # halves each ~32 GB (8B) delta file.
+                    full_deltas_to_save[name] = diff.bfloat16()
 
         stats_path = os.path.join(self.delta_log_dir, f"stats_step_{step}.json")
         with open(stats_path, "w", encoding="utf-8") as f:
@@ -351,7 +354,9 @@ def main() -> None:
         base_state: Dict[str, torch.Tensor] = {}
         with torch.no_grad():
             for name, param in trainer.model.named_parameters():
-                base_state[name] = param.detach().float().cpu().clone()
+                # bf16 base (matches DPO_train.py:480): weights are bf16, deltas feed |Δθ|
+                # mask selectors, and this halves base_state.pt on disk.
+                base_state[name] = param.detach().to(torch.bfloat16).cpu().clone()
         os.makedirs(delta_log_dir, exist_ok=True)
         torch.save(base_state, os.path.join(delta_log_dir, "base_state.pt"))
         trainer.add_callback(

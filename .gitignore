@@ -65,6 +65,9 @@ _py_testdeps/
 outputs
 outputs/*
 
+rebuttal_e1_e2/*
+rebuttal_e1_e2
+
 hpc_paper_snippets.md
 methods_text.md
 paper_snippets.md

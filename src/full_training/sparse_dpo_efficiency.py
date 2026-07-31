@@ -36,7 +36,7 @@ from typing import Any, Dict, Optional, Union
 
 from src.utils.mask_manager import SparseMaskManager
 from src.utils.scratch_paths import default_hf_datasets_cache, default_rl_casino_outputs
-from src.utils.data_utils import dpo_collator_fn
+from src.utils.data_utils import make_dpo_collator
 from src.utils.dataset_registry import get_dataset_config, load_dpo_dataset as registry_load_dpo
 from src.utils.logging_utils import (
     FlexibleCheckpointCallback,
@@ -93,6 +93,8 @@ def train(
     tokenizer_obj=None,
     load_in_8bit: bool = False,
     precompute_ref_log_probs: bool = False,
+    max_grad_norm: float = 1.0,
+    sparse_adamw_max_grad_norm: float = 0.0,
 ):
     # Determine model path
     if checkpoint_path is None or str(checkpoint_path).lower() == "none":
@@ -233,11 +235,16 @@ def train(
             ) from e
     elif optimizer_type == "sparse_adamw":
         optimizer = SparseAdamW(
-            list(model.named_parameters()), 
-            mask_manager, 
-            lr=learning_rate, 
+            list(model.named_parameters()),
+            mask_manager,
+            lr=learning_rate,
             block_size=block_size,
-            mlp_only=mlp_only
+            mlp_only=mlp_only,
+            # Single-clip regime (matches dense DPO_train.py): the Trainer's global-norm clip
+            # (DPOConfig.max_grad_norm) is the only clip. SparseAdamW's per-param clip is OFF by
+            # default (0.0) so sparse is not double-clipped with a differently-shaped clip — the
+            # same fix as GRPO, and the gap the E2 config guard could not see.
+            max_grad_norm=sparse_adamw_max_grad_norm,
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_type}")
@@ -259,6 +266,10 @@ def train(
         "resume_from_checkpoint": resume_ckpt,
         "hf_rolling_save_steps": save_steps,
         "hf_save_total_limit": hf_save_total_limit if use_hf_rolling else None,
+        # Clipping provenance for the footing gate (verify_grpo_config_consistency.py works for
+        # DPO arms too — DPOConfig-absent fields compare as None uniformly).
+        "trainer_max_grad_norm": max_grad_norm,
+        "sparse_adamw_max_grad_norm": sparse_adamw_max_grad_norm,
     }
     callbacks.append(RunManifestCallback(run_dir, manifest))
     if use_wandb:
@@ -330,6 +341,10 @@ def train(
         max_steps=n_steps,
         num_train_epochs=1,
         lr_scheduler_type="linear",
+        # Global-norm clip (HF Trainer). Set explicitly so it is pinned rather than left to the HF
+        # default; MUST equal the dense DPO_train.py value. This is the only clip (SparseAdamW's
+        # per-param clip is disabled above).
+        max_grad_norm=max_grad_norm,
         logging_steps=1,
         save_strategy=save_strategy,
         save_steps=cfg_save_steps,
@@ -357,7 +372,14 @@ def train(
         model=model,
         args=dpo_config,
         train_dataset=dpo_dataset,
-        data_collator=lambda x: dpo_collator_fn(x, tokenizer),
+        # Configurable, shared collator so dense (this script, --optimizer adamw_torch) and sparse
+        # arms tokenize identically. Truncation from the script's args (prompt 1024) — the previous
+        # data_utils.dpo_collator_fn hardcoded prompt=512, diverging from dense DPO_train.py's 1024.
+        data_collator=make_dpo_collator(
+            tokenizer,
+            max_prompt_length=max_prompt_length,
+            max_chosen_rejected_length=max_length,
+        ),
         optimizers=(optimizer, None),
         callbacks=callbacks,
     )
@@ -408,6 +430,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--warmup_ratio", type=float, default=0.0)
     parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=1.0,
+        help="Global-norm gradient clip (HF Trainer). MUST equal the dense DPO_train.py value "
+        "for equal footing (Table 7 = 1.0).",
+    )
+    parser.add_argument(
+        "--sparse_adamw_max_grad_norm",
+        type=float,
+        default=0.0,
+        help="Per-parameter clip inside SparseAdamW; 0 disables it (default). Kept off so the ONLY "
+        "clip is the Trainer global clip above, matching the dense arm's single clip.",
+    )
     parser.add_argument("--max_length", type=int, default=1024)
     parser.add_argument("--max_prompt_length", type=int, default=512)
     parser.add_argument("--dpo_beta", type=float, default=0.1)
@@ -489,6 +525,8 @@ if __name__ == "__main__":
         output_base_dir=args.output_base_dir,
         dataset_cache_dir=args.dataset_cache_dir,
         warmup_ratio=args.warmup_ratio,
+        max_grad_norm=args.max_grad_norm,
+        sparse_adamw_max_grad_norm=args.sparse_adamw_max_grad_norm,
         weight_decay=args.weight_decay,
         max_length=args.max_length,
         max_prompt_length=args.max_prompt_length,

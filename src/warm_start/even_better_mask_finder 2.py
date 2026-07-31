@@ -134,8 +134,26 @@ def compute_ground_truth_mask_streaming(
     # already negligible (<0.003% of parameters); now they're consistently excluded.
     # Also deduplicate tied weights (e.g. Qwen3's lm_head.weight == embed_tokens.weight):
     # identical delta tensors inflate the global budget and the grad-clip norm.
-    names = _select_2d_weight_names(final_deltas, mlp_only)
-    scores = {name: final_deltas[name].abs() for name in names}
+    scores = {}
+    _seen_shapes_hashes: dict = {}  # shape -> list of (name, hash) to spot ties
+    for name, delta in final_deltas.items():
+        if mlp_only and not is_mlp_param(name):
+            continue
+        if "weight" not in name or delta.dim() != 2:
+            continue
+        shape = tuple(delta.shape)
+        delta_hash = delta.sum().item()  # fast approximate tie detector
+        if shape in _seen_shapes_hashes:
+            tied = False
+            for prev_name, prev_hash in _seen_shapes_hashes[shape]:
+                if abs(delta_hash - prev_hash) < 1e-9:
+                    print(f"  Tied (dedup): skipping '{name}' (matches '{prev_name}')")
+                    tied = True
+                    break
+            if tied:
+                continue
+        _seen_shapes_hashes.setdefault(shape, []).append((name, delta_hash))
+        scores[name] = delta.abs()
     
     masks = create_mask_from_scores_gpu_efficient(
         scores,
@@ -180,7 +198,21 @@ def compute_absolute_magnitude_mask_streaming(
         # Initialize on first pass: 2D weight tensors only, deduplicated by approximate
         # value hash to skip tied weights (lm_head == embed_tokens on Qwen3).
         if param_names is None:
-            param_names = _select_2d_weight_names(deltas, mlp_only)
+            param_names = []
+            _seen_sh: dict = {}
+            for _n in deltas.keys():
+                _t = deltas[_n]
+                if not (not mlp_only or is_mlp_param(_n)):
+                    continue
+                if "weight" not in _n or _t.dim() != 2:
+                    continue
+                _sh = tuple(_t.shape)
+                _h = _t.sum().item()
+                _skip = any(abs(_h - ph) < 1e-9 for _, ph in _seen_sh.get(_sh, []))
+                if _skip:
+                    continue
+                _seen_sh.setdefault(_sh, []).append((_n, _h))
+                param_names.append(_n)
             for name in param_names:
                 aggregated[name] = torch.zeros_like(deltas[name], device=score_device)
         
@@ -255,7 +287,20 @@ def compute_momentum_mask_streaming(
         curr_deltas = torch.load(delta_path, map_location=score_device)
         
         if param_names is None:
-            param_names = _select_2d_weight_names(curr_deltas, mlp_only)
+            param_names = []
+            _seen_sh: dict = {}
+            for _n in curr_deltas.keys():
+                _t = curr_deltas[_n]
+                if not (not mlp_only or is_mlp_param(_n)):
+                    continue
+                if "weight" not in _n or _t.dim() != 2:
+                    continue
+                _sh = tuple(_t.shape)
+                _h = _t.sum().item()
+                if any(abs(_h - ph) < 1e-9 for _, ph in _seen_sh.get(_sh, [])):
+                    continue
+                _seen_sh.setdefault(_sh, []).append((_n, _h))
+                param_names.append(_n)
 
         if prev_deltas is not None:
             # Compute velocity: v_t = delta_t - delta_{t-1}
@@ -362,7 +407,20 @@ def compute_fisher_mask_streaming(
         deltas = torch.load(delta_path, map_location=score_device)
         
         if param_names is None:
-            param_names = _select_2d_weight_names(deltas, mlp_only)
+            param_names = []
+            _seen_sh: dict = {}
+            for _n in deltas.keys():
+                _t = deltas[_n]
+                if not (not mlp_only or is_mlp_param(_n)):
+                    continue
+                if "weight" not in _n or _t.dim() != 2:
+                    continue
+                _sh = tuple(_t.shape)
+                _h = _t.sum().item()
+                if any(abs(_h - ph) < 1e-9 for _, ph in _seen_sh.get(_sh, [])):
+                    continue
+                _seen_sh.setdefault(_sh, []).append((_n, _h))
+                param_names.append(_n)
             for name in param_names:
                 sum_delta[name] = torch.zeros_like(deltas[name], device=score_device)
                 sum_delta_sq[name] = torch.zeros_like(deltas[name], device=score_device)
