@@ -250,6 +250,54 @@ a per-step training loss usable here at all.
 These were not the object of either experiment. They emerged from the verification gates and they
 affect how existing results should be read.
 
+### 3.0 Root cause: at lr=5e-7 in bf16, most weights never move at all
+
+This is causally upstream of everything in §3.1–3.3, so it comes first.
+
+Training runs with `bf16=True`, so the weights themselves are bfloat16 — confirmed directly:
+`base_state.pt` has `dtype=torch.bfloat16`. bf16 carries 8 significand bits, so the representable
+spacing at a weight `w` is `ulp(w) = 2^floor(log2|w|) · 2⁻⁷`. At lr=5e-7 a single AdamW step moves
+a weight by roughly `lr`, which for `|w| ~ 1e-2` (ulp ~ 6e-5) is about two orders of magnitude
+below the spacing. **The update rounds away and the weight does not change.**
+
+The decisive test is that nonzero deltas land on exact integer multiples of `ulp(base)`:
+
+| tensor | numel | nonzero frac | median \|Δ\|/ulp | median distance to integer multiple | frac within 1e-3 of an integer | frac exactly 1 ulp |
+|---|---|---|---|---|---|---|
+| layers.10.q_proj | 16,777,216 | 0.082471 | 29.0 | **0.000000** | 0.9615 | 0.0618 |
+| layers.10.gate_proj | 45,088,768 | 0.002771 | 13.0 | **0.000000** | 0.9623 | 0.0904 |
+| embed_tokens | 410,738,688 | 0.000089 | 9.0 | **0.000000** | 0.9673 | 0.1090 |
+
+An fp32 weight differenced and then cast to bf16 *for storage* would land on the delta's own bf16
+grid, which is far finer than `ulp(base)` because `|Δ| ≪ |w|`. Landing on integer multiples of the
+**base weight's** ulp is only possible if the weight itself lives on that grid. So the zeros are
+not a logging artifact and not a storage-precision choice; they are weights that genuinely never
+moved.
+
+**Corollary, and it inverts a standard intuition.** `ulp ∝ |w|`, so larger weights are quantized
+more coarsely and are *less* able to move. The three sampled tensors order perfectly inversely:
+
+| tensor | median \|w\| | median ulp | nonzero fraction |
+|---|---|---|---|
+| layers.10.q_proj | 1.08e-02 | 6.10e-05 | 8.25% |
+| layers.10.gate_proj | 1.60e-02 | 1.22e-04 | 0.28% |
+| embed_tokens | 7.91e-02 | 4.88e-04 | 0.009% |
+
+In this regime the warm-start signal is therefore concentrated in **small-magnitude** weights,
+because only they can register a 5e-7 update in bf16 — the opposite of what magnitude-based pruning
+intuition would suggest. Any claim that warm-start displacement identifies "important" weights has
+to contend with the fact that, at this learning rate and precision, it substantially identifies
+*representably movable* weights.
+
+A sanity note on the arithmetic: predicting the zero fraction as `P(ulp(base) > lr × steps)` gives
+0.709 / 0.869 / 0.972 for the three tensors, against observed 0.918 / 0.997 / 0.99991. Predicted
+sits below observed in every case, as it must — `lr × steps` is an upper bound on how far a
+coordinate could travel, and real AdamW updates partially cancel. The ordering matches exactly.
+
+**What would change this.** Delta storage precision is not the lever (bf16 stores a 2.5e-5 delta
+with ~1e-7 relative error). The levers are fp32 master weights or a larger learning rate. This is
+worth knowing before drawing conclusions about *which* weights matter from any run in this regime.
+
 ### 3.1 Most of a warm-start mask is chosen by RNG, not by signal
 
 `scripts/measure_mask_tiebreak_share.py`, restricted to each mask's own 216 tensors:
