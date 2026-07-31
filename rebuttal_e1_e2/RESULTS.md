@@ -80,6 +80,22 @@ signal. Instead **every GRPO mask captures more DPO gradient energy than either 
 mask** (2.31–2.50× versus 1.68–2.04×), despite coming from a different objective *and* a different
 dataset (Open-R1 rather than Tülu3).
 
+**A competing explanation, which the per-block panel raises and we cannot fully exclude.** Per-block
+keep rates (`e1_phi_by_layer.png`) are [0.0250, 0.0250] for both random masks, [0.0248, 0.0257] for
+the warm DPO Tülu3 mask, [0.0240, 0.0280] for the oracle DPO mask, but [0.0103, 0.0303] for the
+GRPO masks. Near-uniform allocation across blocks is precisely the signature of tie-break dilution
+measured directly on Olmo3 in §3.1: when most of a mask is filled by uniform noise, every block
+receives about the same share. So the DPO-vs-GRPO φ gap may reflect **how much of each mask is
+noise** rather than anything about objectives — a mask that is 3/4 arbitrary is mechanically pulled
+toward chance.
+
+This is testable in principle but not with surviving data: computing the tie-break share requires
+the source delta logs, and the Tülu3 run's are deleted. The Open-R1 GRPO delta logs do survive
+(`rl_casino_grpo/dense/grpo_dense_openr1_steps500_evolstudy/deltas`), so the GRPO side could be
+measured; without the Tülu3 side there is nothing to compare it against. **Until that is resolved,
+the ordering below should be read as a difference between mask *constructions*, not established as a
+difference between objectives.**
+
 Two consequences worth stating plainly:
 
 1. The cross-objective transfer gap in Figure 3 is **not** explained by gradient-space
@@ -120,14 +136,20 @@ Two consequences worth stating plainly:
 `d(M) = mean_t |L_M(t) − L_oracle(t)|` over steps 401–500, joined on `step`, with a
 block-bootstrap CI over contiguous 10-step blocks (10,000 draws).
 
-| arm | coverage | d | 95% CI | V |
-|---|---|---|---|---|
-| oracle deltalog (reference) | 213 tensors | 0 | — | 0 (definitional) |
-| warm k=250 | 216 tensors | **0.005851** | [0.005166, 0.006645] | PENDING |
-| warm k=50 | 216 tensors | PENDING | | PENDING |
-| warm k=100 | 216 tensors | PENDING | | PENDING |
-| random, as originally built | 226 tensors | **0.168163** | [0.166386, 0.169921] | PENDING |
-| random, coverage-matched to 216 | 216 tensors | PENDING | | (same mask, subset) |
+| arm | coverage | Jaccard vs k=250 | d | 95% CI | V |
+|---|---|---|---|---|---|
+| oracle deltalog (reference) | 213 tensors | — | 0 | — | 0 (definitional) |
+| warm k=250 | 216 tensors | 1.0 | **0.005851** | [0.005166, 0.006645] | PENDING |
+| warm k=50 | 216 tensors | 0.8399 | PENDING | | PENDING |
+| warm k=100 | 216 tensors | 0.9502 | PENDING | | PENDING |
+| random, as originally built | 226 tensors | — | **0.168163** | [0.166386, 0.169921] | PENDING |
+| random, coverage-matched to 216 | 216 tensors | 0.0400 | PENDING | | (same mask, subset) |
+
+All four masks passed the gate in `scripts/verify_mask_against_reference.py` (identical key sets and
+shapes, keep rate 0.025000, `pooling_mode=global_with_layer_floor`,
+`min_layer_keep_ratio=0.0025`, no all-zero tensors). Jaccard rises with k as it should —
+0.8399 at k=50 and 0.9502 at k=100 against the k=250 reference — which is the check that caught the
+CPU-built mask described in §3.2.
 
 V values come from `mask_score_gap_gap_diagnostics.json` under the hybrid τ rule
 (`cert_tau_rule=hybrid_global_phase`, `cert_hybrid_min_layer_keep_ratio=0.0025`) so the estimator
@@ -234,6 +256,36 @@ coverage-matched high-V point for the V-vs-d question.
 
 The k-cluster is unaffected: the k=50 mask's key set is **identical** to k=250's, so those arms
 differ only in which coordinates within identical coverage were selected.
+
+### 3.4 The random baseline is not fully independent of the warm masks
+
+`generate_random_mask.py:70-95` seeds `torch.manual_seed(42)` and draws `torch.rand` per tensor in
+parameter order. The warm masks' tie-break noise does the same thing with the same seed
+(`mask_utils.py:169`/`:513`). Where the two RNG streams coincide, a "random" mask and the
+tie-broken portion of a warm mask select the *same* coordinates.
+
+Measured against the independence expectation computed from each mask's own per-tensor keep rates
+(`E|A ∩ B| = Σ_t r_At · r_Bt · n_t`), for random_216 against warm k=250:
+
+| | value |
+|---|---|
+| observed \|A ∩ B\| | 13,715,206 |
+| independence expectation | 4,455,948 |
+| excess factor | **3.08** |
+| observed / independence Jaccard | 0.040013 / 0.012658 |
+| **median excess across the 216 tensors** | **1.0200** |
+
+The excess is concentrated, not diffuse: `embed_tokens` at 7.36× (1,287,728 observed against
+174,869 expected) and the early MLP `gate_proj` layers 2/5/6/7 at ~6.28×, while the bottom tensors
+sit at 0.979–0.983 (slightly under 1, as a fixed keep budget implies). That is the signature of
+RNG-stream coincidence on the first tensors drawn, with the streams diverging as per-tensor draw
+counts accumulate.
+
+Scale of the problem: ~9.3 M coordinates of excess overlap, 5.2% of the mask. The median tensor is
+independent, so the control is *approximately* valid. The direction is conservative — shared
+coordinates pull `d(random)` toward `d(warm)`, so the warm-vs-random gap is if anything understated.
+Worth fixing by seeding the random baseline differently from the tie-break, but it does not
+invalidate the comparison.
 
 ---
 
