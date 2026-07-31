@@ -466,7 +466,7 @@ def write_table_view(cells: Sequence[Cell], rho: float, out_dir: Path) -> Path:
         f"# Certifiability margins at rho = {rho:g}%",
         "",
         "| model | arm | tau_hat | degenerate | signal support | keep budget | "
-        "share of keep from tie-break | share of nonzero captured | s_i == 0 share | cert P[delta<m] |",
+        "share of selection from tie-break | share of nonzero captured | s_i == 0 share | cert P[delta<m] |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for cell in cells:
@@ -483,7 +483,7 @@ def write_table_view(cells: Sequence[Cell], rho: float, out_dir: Path) -> Path:
                     deg="yes" if t["tau_degenerate"] else "no",
                     sup=int(t["n_raw_positive"]),
                     keep=int(t["keep_count"]),
-                    tb=_fmt(rec.get("frac_of_keep_from_tie_break")),
+                    tb=_fmt(rec.get("frac_of_selection_from_tie_break")),
                     cap=_fmt(rec.get("frac_of_nonzero_captured")),
                     zs=_fmt(rec.get("frac_score_exactly_zero")),
                     cert=_fmt(rec.get("cert_strict_fraction")),

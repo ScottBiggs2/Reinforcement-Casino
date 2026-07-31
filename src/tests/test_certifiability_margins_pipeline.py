@@ -118,6 +118,23 @@ def test_all_arms_share_one_coverage(tmp_path):
     assert len(keeps) == 2, keeps  # one keep budget per rho, identical across arms
 
 
+def test_selection_accounting_is_self_consistent(tmp_path):
+    """Every coordinate at or above tau either had signal or was picked by the tie-break; the two
+    counts must partition the selection exactly, and it must be the right size."""
+    out_dir = _run_pipeline(tmp_path)
+    diag = json.loads((out_dir / "certifiability_diagnostics.json").read_text())
+    for tag, rec in diag["arms"].items():
+        n_sel = rec["n_at_or_above_tau"]
+        if n_sel == 0:
+            continue
+        assert rec["selected_with_zero_score"] + rec["nonzero_captured"] == n_sel, tag
+        # The global-phase selection sits between the global-phase budget and the full keep budget.
+        t = rec["tau"]
+        assert n_sel <= t["keep_count"] * 1.02, (tag, n_sel, t["keep_count"])
+        assert n_sel >= t["r_remaining"] * 0.98, (tag, n_sel, t["r_remaining"])
+        assert rec["nonzero_captured"] <= rec["nonzero_total"], tag
+
+
 def test_random_arm_tau_is_near_the_quantile(tmp_path):
     """Sanity anchor with a known answer: U(0,1) scores put tau at ~1 - keep_fraction."""
     out_dir = _run_pipeline(tmp_path)

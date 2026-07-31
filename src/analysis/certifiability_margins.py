@@ -512,6 +512,10 @@ class ArmMeasurement:
     nonzero_total: int = 0
     n_score_zero: int = 0
     n_score_total: int = 0
+    # |{i : sel_i >= tau}| — the global-phase keep set. Reported explicitly rather than reusing
+    # keep_count, because under the hybrid rule keep_count also covers the per-layer floors and the
+    # two are only approximately equal.
+    n_at_or_above_tau: int = 0
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -532,6 +536,7 @@ class ArmMeasurement:
             "nonzero_total": int(self.nonzero_total),
             "n_score_zero": int(self.n_score_zero),
             "n_score_total": int(self.n_score_total),
+            "n_at_or_above_tau": int(self.n_at_or_above_tau),
         }
 
 
@@ -626,6 +631,7 @@ def measure_arm(
                     )
                     add_tie_break_noise_(sel, scale=tr.tie_break_scale, generator=g)
                 kept = sel >= tau
+                m.n_at_or_above_tau += int(kept.sum().item())
                 m.selected_with_zero_score += int((kept & (s_raw == 0)).sum().item())
                 m.nonzero_captured += int((kept & (s_raw > 0)).sum().item())
                 m.nonzero_total += n_pos_local
@@ -723,8 +729,11 @@ def write_merged_artifacts(
                 "selected_with_zero_score": m.selected_with_zero_score,
                 "nonzero_captured": m.nonzero_captured,
                 "nonzero_total": m.nonzero_total,
-                "frac_of_keep_from_tie_break": (
-                    m.selected_with_zero_score / tr.keep_count if tr.keep_count else float("nan")
+                "n_at_or_above_tau": m.n_at_or_above_tau,
+                # Share of the global-phase keep set that carries no signal, so its selection was
+                # decided purely by the tie-break perturbation.
+                "frac_of_selection_from_tie_break": (
+                    m.selected_with_zero_score / m.n_at_or_above_tau if m.n_at_or_above_tau else float("nan")
                 ),
                 "frac_of_nonzero_captured": (
                     m.nonzero_captured / m.nonzero_total if m.nonzero_total else float("nan")
@@ -993,6 +1002,7 @@ def stage_merge(args: argparse.Namespace) -> None:
                 nonzero_total=int(d["nonzero_total"]),
                 n_score_zero=int(d.get("n_score_zero", 0)),
                 n_score_total=int(d.get("n_score_total", 0)),
+                n_at_or_above_tau=int(d.get("n_at_or_above_tau", 0)),
             )
     if missing:
         raise FileNotFoundError(f"Missing arm shards for {missing} under {sd}")
