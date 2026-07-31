@@ -215,26 +215,36 @@ def analyze_pair(ref_log, arm_log, final_steps, block, n_boot):
 
 def plot_v_vs_d(results, v_only, out_dir):
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
-    xs = [r["V"] for r in results if r["V"] is not None and r["d"] is not None]
-    ys = [r["d"] for r in results if r["V"] is not None and r["d"] is not None]
-    labels = [r["label"] for r in results if r["V"] is not None and r["d"] is not None]
-    for r in results:
-        if r["V"] is None or r["d"] is None:
-            continue
+    plotted = [r for r in results if r["V"] is not None and r["d"] is not None]
+
+    for r in plotted:
         lo = r["d_ci"]["ci_lo"] if r.get("d_ci") else r["d"]
         hi = r["d_ci"]["ci_hi"] if r.get("d_ci") else r["d"]
         ax.errorbar(r["V"], r["d"], yerr=[[r["d"] - lo], [hi - r["d"]]],
                     fmt="o", ms=8, capsize=4, color="C0", zorder=3)
-        ax.annotate(r["label"], (r["V"], r["d"]), textcoords="offset points",
-                    xytext=(8, 6), fontsize=9)
     # Definitional anchor: at k=T, s_warm == s_oracle, so V=0 and d=0 by construction.
     ax.plot([0.0], [0.0], marker="o", ms=9, mfc="none", mec="0.35", mew=1.6, zorder=3)
-    ax.annotate("oracle (definitional\nanchor, not a data point)", (0.0, 0.0),
-                textcoords="offset points", xytext=(10, 4), fontsize=8, color="0.35")
-    for label, v in v_only.items():
+
+    # V-only markers first, so the margin expansion below accounts for them.
+    for v in v_only.values():
         ax.axvline(v, ls=":", lw=1.0, color="0.6", zorder=1)
-        ax.annotate(f"{label}\n(V only)", (v, ax.get_ylim()[1]), textcoords="offset points",
-                    xytext=(3, -26), fontsize=7.5, color="0.45")
+
+    # Headroom for the labels, then annotate: the warm-family points cluster tightly in V, so
+    # labels placed naively land on top of each other.
+    ax.margins(x=0.15, y=0.16)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    for r in plotted:
+        right_half = r["V"] > x0 + 0.6 * (x1 - x0)
+        ax.annotate(r["label"], (r["V"], r["d"]), textcoords="offset points",
+                    xytext=(-8 if right_half else 8, 7), fontsize=9,
+                    ha="right" if right_half else "left")
+    ax.annotate("oracle (definitional\nanchor, not a data point)", (0.0, 0.0),
+                textcoords="offset points", xytext=(10, 2), fontsize=8, color="0.35")
+    # Stagger the V-only labels down the axis; their V values differ in the 3rd decimal.
+    for i, (label, v) in enumerate(sorted(v_only.items(), key=lambda kv: kv[1])):
+        ax.annotate(f"{label} (V only)", (v, y1), textcoords="offset points",
+                    xytext=(3, -14 - 13 * i), fontsize=7.5, color="0.45", rotation=0)
     ax.set_xlabel("V(M) = fraction of weights violating the Theorem 2 condition")
     ax.set_ylabel(f"d(M) = mean |L_M - L_oracle| over the final steps")
     ax.set_title("Does certifiability predict trajectory divergence?")
