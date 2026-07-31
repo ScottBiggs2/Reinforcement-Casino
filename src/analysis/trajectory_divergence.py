@@ -441,6 +441,38 @@ def main():
         print(f"\n{a['label']}: d={res['d']:.6f}  95% CI [{ci['ci_lo']:.6f}, {ci['ci_hi']:.6f}] "
               f"(block={ci['block']}, n={ci['n']})   V={res['V']}")
 
+    # Arm-vs-arm differences. Comparing two d values means comparing two quantities that share a
+    # reference and a batch sequence, so most of their noise is common and their individual CIs
+    # overstate the uncertainty on the *difference*. Differencing the arms directly cancels both
+    # the reference and the shared per-step batch effect, which resolves gaps that
+    # overlapping d intervals cannot.
+    pairwise = []
+    for i, a in enumerate(kept):
+        for b in kept[i + 1:]:
+            steps = sorted(set(a["log"]) & set(b["log"]))
+            diff = [a["log"][s]["loss"] - b["log"][s]["loss"] for s in steps
+                    if last_step - args.final_steps < s <= last_step]
+            if not diff:
+                continue
+            ci = block_bootstrap(diff, args.bootstrap_block, args.bootstrap_draws)
+            resolved = (ci["ci_lo"] > 0) or (ci["ci_hi"] < 0)
+            pairwise.append({
+                "arm_a": a["label"], "arm_b": b["label"],
+                "mean_loss_difference": ci["mean"],
+                "ci_lo": ci["ci_lo"], "ci_hi": ci["ci_hi"],
+                "excludes_zero": bool(resolved),
+                "n": ci["n"],
+            })
+
+    if pairwise:
+        print("\n=== arm-vs-arm paired loss differences over the same window ===")
+        print(f"{'A - B':<34} {'mean':>10} {'95% CI':>26}  resolved")
+        for p in pairwise:
+            lab = f"{p['arm_a']} - {p['arm_b']}"
+            print(f"{lab:<34} {p['mean_loss_difference']:>10.6f} "
+                  f"[{p['ci_lo']:>10.6f},{p['ci_hi']:>10.6f}]  "
+                  f"{'yes' if p['excludes_zero'] else 'no'}")
+
     if results:
         plot_v_vs_d(results, v_only, args.out_dir)
         plot_traces(results, args.final_steps, args.out_dir)
@@ -466,6 +498,7 @@ def main():
         "v_by_k": {str(k): v for k, v in sorted(v_by_k.items())},
         "arms": [{k: v for k, v in r.items() if k not in ("trace_steps", "trace_delta")}
                  for r in results],
+        "pairwise_arm_differences": pairwise,
         "excluded_arms": excluded,
         "note": ("The oracle reference contributes V=0, d=0 by construction (at k=T, "
                  "s_warm == s_oracle) and is a definitional anchor, not a measured point. "
