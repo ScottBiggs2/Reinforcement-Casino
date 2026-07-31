@@ -11,7 +11,7 @@ See mask_utils._create_mask_global_flat tie-break noise (seed 42, scale ∝ max|
 from __future__ import annotations
 
 import heapq
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import torch
 
@@ -202,6 +202,195 @@ def streaming_global_topk_threshold(
         return float("nan"), k, total_n
     tau = float(heap[0])
     return tau, k, total_n
+
+
+def tie_break_scale(max_abs: float, relative_scale: float) -> float:
+    """Absolute tie-break amplitude from a *purely relative* setting; 0 disables perturbation.
+
+    Deliberately has no absolute floor. ``mask_utils`` uses ``max(max|s| * 1e-6, 1e-12)``, and in the
+    lr=5e-7 / bf16 regime both terms outrank genuine scores (RESULTS.md §3.1: selection captured only
+    ~73% of nonzero-score coordinates). A relative amplitude keeps the perturbation below the
+    resolution of the scores it is breaking ties among.
+    """
+    if relative_scale <= 0.0 or not (max_abs > 0.0):
+        return 0.0
+    return float(max_abs) * float(relative_scale)
+
+
+def add_tie_break_noise_(
+    x: torch.Tensor,
+    *,
+    scale: float,
+    generator: torch.Generator,
+) -> torch.Tensor:
+    """In-place tie-break perturbation of a 1-D selection vector, drawn in ``x``'s dtype.
+
+    At the relative amplitudes we use (~1e-12 of max|s|) the addition rounds away entirely for
+    coordinates carrying real signal, so ranking among them is untouched; it only separates
+    coordinates that are numerically indistinguishable. Consequence: exact ties above the noise
+    floor stay tied and fall back to ``topk``'s deterministic index order rather than to RNG.
+    """
+    if scale <= 0.0:
+        return x
+    noise = torch.randn(x.numel(), generator=generator, dtype=x.dtype)
+    x.add_(noise, alpha=scale)
+    return x
+
+
+def _finite_min_max(chunks: Iterable[torch.Tensor]) -> Tuple[float, float, int, int]:
+    """(min, max, n_finite, n_total) over finite entries; -inf floors are excluded, not clamped."""
+    lo = float("inf")
+    hi = float("-inf")
+    n_finite = 0
+    n_total = 0
+    for ch in chunks:
+        v = ch.reshape(-1)
+        n_total += int(v.numel())
+        f = v[torch.isfinite(v)]
+        if f.numel() == 0:
+            continue
+        n_finite += int(f.numel())
+        lo = min(lo, float(f.min().item()))
+        hi = max(hi, float(f.max().item()))
+    return lo, hi, n_finite, n_total
+
+
+def streaming_exact_kth_largest(
+    chunk_source: Callable[[], Iterable[torch.Tensor]],
+    k: int,
+    *,
+    num_bins: int = 4096,
+    candidate_cap: int = 40_000_000,
+    max_rounds: int = 8,
+) -> Tuple[float, Dict[str, object]]:
+    """k-th largest value over the logical concatenation of all chunks, in bounded memory.
+
+    ``chunk_source`` must return a *fresh* iterable each call — the algorithm makes several passes.
+    Non-finite entries (``-inf`` per-layer floors) are ignored.
+
+    Range-narrowing histogram: each round bins the surviving interval into ``num_bins`` linear bins
+    and keeps the bin the k-th largest falls in, so the interval shrinks by ~``num_bins`` per round
+    and reaches float resolution in 2-3 rounds. This replaces ``streaming_min_of_global_top_r``'s
+    top-R buffer (R ~ 1.6e8 here, one ``topk`` per 4 M-element chunk) and the size-k Python heap in
+    ``streaming_global_topk_threshold``, neither of which is tractable at ρ=97.5% on a 7 B model.
+
+    Mass points are handled without materializing them: if the interval collapses to a single float
+    the answer *is* that float, which is the common case here because bf16-quantized deltas pile onto
+    exact multiples of ``ulp(w)``.
+
+    Returns ``(tau, info)``; ``info`` carries the bracket and how it terminated.
+    """
+    lo, hi, n_finite, n_total = _finite_min_max(chunk_source())
+    info: Dict[str, object] = {"n_total": n_total, "n_finite": n_finite, "rounds": 0}
+    if k <= 0 or n_finite == 0:
+        info["status"] = "empty"
+        return float("nan"), info
+    if k > n_finite:
+        # Fewer finite candidates than the keep budget: the k-th largest does not exist.
+        info["status"] = "k_exceeds_finite"
+        info["finite_min"] = lo
+        info["finite_max"] = hi
+        return float("nan"), info
+    if lo == hi:
+        info["status"] = "degenerate_range"
+        info["tau_bracket"] = (lo, hi)
+        return float(lo), info
+
+    n_above = 0  # count of values strictly greater than the current bracket's top
+    for rnd in range(max_rounds):
+        edges = torch.linspace(lo, hi, num_bins + 1, dtype=torch.float64)
+        counts = torch.zeros(num_bins, dtype=torch.int64)
+        above = 0
+        for ch in chunk_source():
+            v = ch.reshape(-1).double()
+            v = v[torch.isfinite(v)]
+            if v.numel() == 0:
+                continue
+            above += int((v > hi).sum().item())
+            sel = v[(v >= lo) & (v <= hi)]
+            if sel.numel() == 0:
+                continue
+            # right=False → bin i holds (edges[i], edges[i+1]], so counts[b+1:] is exactly
+            # count(v > edges[b+1]) and the next bracket cannot double-count its own top edge.
+            # v == lo lands in bin 0 after the clamp.
+            idx = torch.bucketize(sel, edges, right=False) - 1
+            idx.clamp_(0, num_bins - 1)
+            counts += torch.bincount(idx, minlength=num_bins).to(torch.int64)
+
+        n_above = above
+        need = k - n_above  # rank within the bracket
+        if need <= 0:
+            # Everything at or above `hi` already fills the budget; boundary sits at hi.
+            info["rounds"] = rnd + 1
+            info["status"] = "boundary_at_bracket_top"
+            info["tau_bracket"] = (lo, hi)
+            return float(hi), info
+
+        cum_from_top = torch.cumsum(counts.flip(0), dim=0)
+        j = int(torch.searchsorted(cum_from_top, torch.tensor(need, dtype=torch.int64)).item())
+        j = min(max(j, 0), num_bins - 1)
+        b = num_bins - 1 - j  # bin index (ascending) holding the k-th largest
+        n_above = n_above + int(counts[b + 1 :].sum().item())
+        new_lo = float(edges[b].item())
+        new_hi = float(edges[b + 1].item())
+        bin_count = int(counts[b].item())
+        lo, hi = new_lo, new_hi
+        info["rounds"] = rnd + 1
+
+        if new_lo == new_hi:
+            info["status"] = "mass_point"
+            info["tau_bracket"] = (lo, hi)
+            return float(new_lo), info
+        if bin_count <= candidate_cap:
+            break
+
+    # Materialize the surviving bracket and finish exactly.
+    need = k - n_above
+    if need <= 0:
+        info["status"] = "boundary_at_bracket_top"
+        info["tau_bracket"] = (lo, hi)
+        return float(hi), info
+    parts: List[torch.Tensor] = []
+    held = 0
+    for ch in chunk_source():
+        v = ch.reshape(-1).double()
+        v = v[torch.isfinite(v)]
+        sel = v[(v >= lo) & (v <= hi)]
+        if sel.numel():
+            parts.append(sel)
+            held += int(sel.numel())
+        if held > candidate_cap * 4:
+            # Refusing to grow without bound; the bracket is already at ~1e-12 relative width.
+            info["status"] = "bracket_width_fallback"
+            info["tau_bracket"] = (lo, hi)
+            return float(lo), info
+    if not parts:
+        info["status"] = "empty_bracket"
+        info["tau_bracket"] = (lo, hi)
+        return float(lo), info
+    cand = torch.cat(parts, dim=0)
+    take = min(need, int(cand.numel()))
+    vals, _ = torch.topk(cand, take, largest=True)
+    info["status"] = "exact"
+    info["tau_bracket"] = (lo, hi)
+    info["candidates"] = int(cand.numel())
+    return float(vals.min().item()), info
+
+
+def tau_relative(x: torch.Tensor, tau: float) -> torch.Tensor:
+    """Scale-free score s/τ̂_ρ. Rank-preserving for τ̂>0, so the top-k set is unchanged."""
+    if not (tau > 0.0):
+        raise ValueError(f"tau_relative requires tau > 0, got {tau!r}")
+    return x / float(tau)
+
+
+def normalized_margin(x: torch.Tensor, tau: float) -> torch.Tensor:
+    """m̃_i = |s_i − τ̂_ρ| / τ̂_ρ — distance to the selection boundary in units of the boundary.
+
+    Coordinates with no resolvable signal (s_i = 0) land at exactly 1.0, so the mass at 1.0 is the
+    fraction of the score vector the mask cannot distinguish (see RESULTS.md §3.1).
+    """
+    return (tau_relative(x, tau) - 1.0).abs()
 
 
 def scores_for_cert_selection(

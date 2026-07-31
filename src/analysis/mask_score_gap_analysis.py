@@ -2,6 +2,23 @@
 """
 Compare mask construction scores against an oracle: per-weight gaps v_i = |s_i^other - s_i^oracle|.
 
+SUPERSEDED for the certifiability-margin figure by ``src/analysis/certifiability_margins.py``.
+Kept as-is so the artifacts cited in ``rebuttal_e1_e2/RESULTS.md`` still reproduce; its magnitude
+cache builder (``build_magnitude_milestone_caches``, below) is imported by the new module, so the
+``magnitude_caches/`` on-disk format is shared and caches are interchangeable between them.
+
+Three reasons the certifiability numbers here should not be quoted:
+  * tau and every margin are computed in ``flatten_dtype = --checkpoint_dtype`` (default bfloat16,
+    8 mantissa bits). A global top-k over ~7e9 bf16 values puts a large tie plateau exactly at the
+    keep boundary, so tau is decided by quantization and membership by the tie-break noise.
+  * the analysis key scope is all parameters, including the 1-D norm weights (145 of 399 on
+    Qwen3-8B, 129 of 355 on Olmo3-7B), while the mask builder scopes to 2-D ``*.weight`` tensors --
+    so tau is computed over a different N than the mask it describes.
+  * warm scores at milestone k sum k/interval snapshots while the oracle is a single difference, and
+    the margins are reported in raw score units, so they shrink toward the oracle as k grows by
+    construction.
+
+
 Oracle scores: |w_final - w_initial| (same as checkpoint_diff_mask_finder).
 Warm magnitude milestones: sum of |w_snapshot - w_base| over snapshots with step ≤ t
 (even_better_mask_finder semantics), evaluated at each intermediate step (default 50,100,150,200).
