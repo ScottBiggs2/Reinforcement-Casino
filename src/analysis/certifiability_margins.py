@@ -80,7 +80,10 @@ from src.warm_start.even_better_mask_finder import (  # noqa: E402
     is_mlp_param,
 )
 
-SHARD_VERSION = 2
+# 3: arm shards carry the conditional (signal-restricted) margin histograms, and were written with
+# the noise-floor _tau_usable gate. A version-2 shard is silently missing both, so merging one would
+# either KeyError or quietly emit margin_rel for arms whose tau is noise -- reject it by version.
+SHARD_VERSION = 3
 DEFAULT_MILESTONES = "50,100,150,200"
 DEFAULT_SPARSITIES = "97.5"
 # Production hybrid floor (mask_utils.DEFAULT_MIN_LAYER_KEEP_RATIO, and the Olmo3 mask slurm scripts).
@@ -1048,8 +1051,13 @@ def stage_merge(args: argparse.Namespace) -> None:
             missing.append(arm.name)
             continue
         payload = torch.load(path, map_location="cpu", weights_only=False)
-        if int(payload.get("version", -1)) != SHARD_VERSION:
-            raise ValueError(f"{path}: shard version mismatch")
+        got = int(payload.get("version", -1))
+        if got != SHARD_VERSION:
+            raise ValueError(
+                f"{path}: shard version {got}, expected {SHARD_VERSION}. Rerun the arm stage for "
+                f"this cell (STAGES=arm,merge) -- the caches and certifiability_tau.json are reused, "
+                f"so only ~40 min/arm is repeated."
+            )
         for rho_key, d in payload["measurements"].items():
             rho = float(rho_key)
             measurements[(arm.name, rho)] = ArmMeasurement(
