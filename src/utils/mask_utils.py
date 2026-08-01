@@ -1,0 +1,986 @@
+"""
+Utilities for building binary parameter masks from score tensors and saving them.
+
+**Memory / device choices**
+
+- **Saved masks**: ``save_masks`` stores ``torch.bool`` tensors (compact on disk).
+- **Global ranking** (``create_mask_from_scores_gpu_efficient``): for very large models the
+  selector copies scores to **CPU float32** and uses chunked histogram/top-k logic to avoid
+  multi-billion-element CUDA allocations and CUDA ``topk`` limits. Training-time SNIP/GRaSP
+  **scoring** still runs on GPU; mask selection favoring host RAM is intentional.
+- **Debug**: set ``RL_CASINO_MASK_ASSERT_BOOL=1`` to assert all masks are bool before save.
+
+**Block-structured masks**: see ``pool_element_scores_to_blocks`` and
+``build_binary_masks_from_scores_blockwise`` — pool element-wise scores to B×B blocks, select
+blocks globally, then expand (same pattern as ``generate_block_random_masks_cpu`` in
+``h200_sparse_dpo_bsr_benchmark.py``). Nominal ``sparsity_percent`` applies to **block grid**
+elements; realized **weight** sparsity after expansion may differ slightly from that nominal value.
+"""
+
+import torch
+import os
+import sys
+import json
+from typing import Any, Dict, Optional, Tuple
+
+
+def _mask_log(*args, **kwargs) -> None:
+    """Diagnostics to stderr: avoids wandb ``console_capture`` on stdout (NFS errno 116 on Slurm)."""
+    kwargs.setdefault("file", sys.stderr)
+    print(*args, **kwargs)
+
+# Default masking mode:
+# - global ranking across all scored weights
+# - plus a small per-tensor keep floor to reduce collapse under high sparsity
+DEFAULT_MIN_LAYER_KEEP_RATIO = 0.0025
+DEFAULT_CHUNKED_SELECTOR_MIN_NUMEL = 250_000_000
+DEFAULT_SELECTOR_CHUNK_NUMEL = 25_000_000
+DEFAULT_SELECTOR_HIST_BINS = 2048
+DEFAULT_SELECTOR_MAX_REFINEMENT_PASSES = 12
+DEFAULT_SELECTOR_MAX_CANDIDATES = 8_000_000
+
+# Global top-k over ~5B+ scores exceeds 2^32 elements; CUDA topk (gatherTopK) can assert
+# on such 1D tensors. Use CPU top-k above this threshold unless RL_CASINO_MASK_TOPK_ALLOW_GPU=1.
+_CUDA_TOPK_SAFE_NUMEL = 2_000_000_000
+
+
+def pooling_metadata(
+    *,
+    local_pool: bool,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+) -> Dict[str, Any]:
+    """
+    Fields to merge into saved mask metadata so runs are reproducible and comparable.
+
+    - pooling_mode ``global``: one ranking across all scored weight elements.
+    - pooling_mode ``global_with_layer_floor``: global top-k after reserving a per-layer
+      keep floor (the default when ``min_layer_keep_ratio`` is left unchanged).
+    - pooling_mode ``local_per_tensor``: each 2D weight matrix keeps keep_frac of its
+      own elements independently (``--local_pool``).
+
+    Random baselines: ``generate_random_mask.py`` uses a single global threshold on
+    concatenated scores; ``random_mask_baseline.py`` uses
+    ``create_mask_from_scores_gpu_efficient``.
+
+    For very large models, materializing ``torch.cat`` over all scores may be expensive;
+    future work: threshold search with per-chunk counts (exact global sparsity) or
+    oversampled per-block top-k then a final global top-k (approximate unless oversample
+    is large enough to include all true global top-k).
+    """
+    if local_pool:
+        return {"pooling_mode": "local_per_tensor", "local_pool": True}
+    if min_layer_keep_ratio > 0:
+        return {
+            "pooling_mode": "global_with_layer_floor",
+            "local_pool": False,
+            "min_layer_keep_ratio": float(min_layer_keep_ratio),
+        }
+    return {"pooling_mode": "global", "local_pool": False}
+
+
+def _topk_indices_safe(scores_1d: torch.Tensor, k: int, largest: bool = True) -> torch.Tensor:
+    """Top-k indices; CPU fallback for very large tensors to avoid CUDA gatherTopK failures."""
+    n = scores_1d.numel()
+    k = max(0, min(int(k), n))
+    if k == 0:
+        return scores_1d.new_empty((0,), dtype=torch.long)
+    allow_gpu = os.environ.get("RL_CASINO_MASK_TOPK_ALLOW_GPU", "").lower() in ("1", "true", "yes")
+    force_cpu = os.environ.get("RL_CASINO_MASK_TOPK_CPU", "").lower() in ("1", "true", "yes")
+    use_cpu = scores_1d.is_cuda and (force_cpu or (n > _CUDA_TOPK_SAFE_NUMEL and not allow_gpu))
+    if use_cpu:
+        _mask_log(
+            f"  Note: top-k on CPU ({n:,} scores, k={k:,}) — "
+            "CUDA top-k can fail when the score vector is extremely large."
+        )
+        idx = torch.topk(scores_1d.detach().cpu(), k=k, largest=largest, sorted=False).indices
+        return idx.to(scores_1d.device, non_blocking=False)
+    return torch.topk(scores_1d, k=k, largest=largest, sorted=False).indices
+
+
+def _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale):
+    """Per-layer top-k: each weight matrix independently keeps keep_frac of its elements."""
+    keep_frac = 1.0 - sparsity_percent / 100.0
+    _mask_log(f"\n=== Creating Per-layer Local Masks (target sparsity: {sparsity_percent}%) ===")
+
+    masks = {}
+    total_params = 0
+    total_kept = 0
+
+    for name, score in scores_dict.items():
+        if score is None or score.numel() == 0:
+            masks[name] = torch.zeros_like(score, dtype=torch.bool).cpu()
+            continue
+
+        s = score.to(device=device, dtype=torch.float32)
+        n = s.numel()
+        n_keep = max(1, int(keep_frac * n))
+
+        flat = s.reshape(-1)
+        if add_tie_break_noise:
+            scale = max(flat.abs().max().item() * tie_break_noise_scale, 1e-12)
+            flat = flat + torch.randn_like(flat) * scale
+
+        idx = _topk_indices_safe(flat, k=n_keep, largest=True)
+        mask_flat = torch.zeros(n, device=device, dtype=torch.bool)
+        mask_flat[idx] = True
+
+        masks[name] = mask_flat.reshape(score.shape).cpu()
+        total_params += n
+        total_kept += n_keep
+
+    actual_sparsity = 100.0 - (total_kept / max(total_params, 1) * 100.0)
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Actual keep: {total_kept:,} | Actual sparsity: {actual_sparsity:.4f}%")
+    return masks
+
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _flatten_cpu_chunks(flat: torch.Tensor, chunk_numel: int):
+    n = flat.numel()
+    for start in range(0, n, chunk_numel):
+        end = min(n, start + chunk_numel)
+        yield start, end, flat[start:end]
+
+
+def _compute_noise_scale(valid_scores: Dict[str, torch.Tensor], tie_break_noise_scale: float) -> float:
+    max_abs = 0.0
+    for score in valid_scores.values():
+        local_max = float(score.abs().max().item())
+        if local_max > max_abs:
+            max_abs = local_max
+    return max(max_abs * tie_break_noise_scale, 1e-12)
+
+
+def _apply_tie_break_noise_inplace(
+    valid_scores: Dict[str, torch.Tensor],
+    tie_break_noise_scale: float,
+) -> None:
+    scale = _compute_noise_scale(valid_scores, tie_break_noise_scale)
+    # Hardcoded seed for reproducibility during tie-breaking
+    torch.manual_seed(42)
+    for name, score in valid_scores.items():
+        noise = torch.randn_like(score) * scale
+        valid_scores[name] = score + noise
+    _mask_log(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
+
+
+def _select_floor_indices(
+    valid_scores: Dict[str, torch.Tensor],
+    min_layer_keep_ratio: float,
+    keep_count: int,
+):
+    floor_indices = {}
+    floor_selected = 0
+    if min_layer_keep_ratio <= 0:
+        for name in valid_scores.keys():
+            floor_indices[name] = torch.empty(0, dtype=torch.long)
+        return floor_indices, floor_selected
+
+    min_layer_keep_ratio = float(max(0.0, min(1.0, min_layer_keep_ratio)))
+    layer_floors = []
+    for name, score in valid_scores.items():
+        layer_n = score.numel()
+        local_floor = int(min_layer_keep_ratio * layer_n)
+        local_floor = max(0, min(local_floor, layer_n))
+        layer_floors.append((name, local_floor, layer_n))
+
+    requested_floor_total = sum(f for _, f, _ in layer_floors)
+    if requested_floor_total > keep_count:
+        _mask_log(
+            f"⚠ Requested per-layer floor keeps {requested_floor_total:,} params, "
+            f"but global keep budget is {keep_count:,}. Scaling floors down proportionally."
+        )
+        scale = keep_count / max(1, requested_floor_total)
+        layer_floors = [
+            (name, max(0, min(layer_n, int(local_floor * scale))), layer_n)
+            for name, local_floor, layer_n in layer_floors
+        ]
+
+    for name, local_floor, _layer_n in layer_floors:
+        if local_floor <= 0:
+            floor_indices[name] = torch.empty(0, dtype=torch.long)
+            continue
+        flat = valid_scores[name].reshape(-1)
+        idx = _topk_indices_safe(flat, k=local_floor, largest=True).detach().cpu()
+        floor_indices[name] = torch.sort(idx).values
+        floor_selected += int(local_floor)
+
+    _mask_log(f"Per-layer floor selected: {floor_selected:,} parameters")
+    return floor_indices, floor_selected
+
+
+def _count_scores_above_threshold(
+    valid_scores: Dict[str, torch.Tensor],
+    floor_indices: Dict[str, torch.Tensor],
+    threshold: float,
+    chunk_numel: int,
+) -> int:
+    total = 0
+    for name, score in valid_scores.items():
+        flat = score.reshape(-1)
+        floor_idx = floor_indices[name]
+        for start, end, chunk in _flatten_cpu_chunks(flat, chunk_numel):
+            if floor_idx.numel() > 0:
+                left = torch.searchsorted(floor_idx, start)
+                right = torch.searchsorted(floor_idx, end)
+                if right > left:
+                    local_exclude = floor_idx[left:right] - start
+                    available = torch.ones(chunk.numel(), dtype=torch.bool)
+                    available[local_exclude] = False
+                    total += int((chunk[available] > threshold).sum().item())
+                    continue
+            total += int((chunk > threshold).sum().item())
+    return total
+
+
+def _refine_threshold_interval(
+    valid_scores: Dict[str, torch.Tensor],
+    floor_indices: Dict[str, torch.Tensor],
+    remaining_keep: int,
+    chunk_numel: int,
+):
+    finite_min = None
+    finite_max = None
+    for name, score in valid_scores.items():
+        flat = score.reshape(-1)
+        floor_idx = floor_indices[name]
+        for start, end, chunk in _flatten_cpu_chunks(flat, chunk_numel):
+            if floor_idx.numel() > 0:
+                left = torch.searchsorted(floor_idx, start)
+                right = torch.searchsorted(floor_idx, end)
+                if right > left:
+                    local_exclude = floor_idx[left:right] - start
+                    available = torch.ones(chunk.numel(), dtype=torch.bool)
+                    available[local_exclude] = False
+                    chunk = chunk[available]
+            if chunk.numel() == 0:
+                continue
+            local_min = float(chunk.min().item())
+            local_max = float(chunk.max().item())
+            finite_min = local_min if finite_min is None else min(finite_min, local_min)
+            finite_max = local_max if finite_max is None else max(finite_max, local_max)
+
+    if finite_min is None or finite_max is None:
+        return None
+
+    hist_bins = _get_env_int("RL_CASINO_SELECTOR_HIST_BINS", DEFAULT_SELECTOR_HIST_BINS)
+    max_passes = _get_env_int(
+        "RL_CASINO_SELECTOR_MAX_REFINEMENT_PASSES",
+        DEFAULT_SELECTOR_MAX_REFINEMENT_PASSES,
+    )
+    candidate_limit = _get_env_int(
+        "RL_CASINO_SELECTOR_MAX_CANDIDATES",
+        DEFAULT_SELECTOR_MAX_CANDIDATES,
+    )
+
+    lo = finite_min
+    hi = finite_max
+    count_above = 0
+    candidate_count = None
+
+    for _ in range(max_passes):
+        if hi <= lo:
+            break
+        hist = torch.zeros(hist_bins, dtype=torch.float64)
+        span = hi - lo
+        for name, score in valid_scores.items():
+            flat = score.reshape(-1)
+            floor_idx = floor_indices[name]
+            for start, end, chunk in _flatten_cpu_chunks(flat, chunk_numel):
+                if floor_idx.numel() > 0:
+                    left = torch.searchsorted(floor_idx, start)
+                    right = torch.searchsorted(floor_idx, end)
+                    if right > left:
+                        local_exclude = floor_idx[left:right] - start
+                        available = torch.ones(chunk.numel(), dtype=torch.bool)
+                        available[local_exclude] = False
+                        chunk = chunk[available]
+                if chunk.numel() == 0:
+                    continue
+                in_range = (chunk >= lo) & (chunk <= hi)
+                if not torch.any(in_range):
+                    continue
+                hist += torch.histc(chunk[in_range], bins=hist_bins, min=lo, max=hi).to(torch.float64)
+
+        target_rank = remaining_keep - count_above
+        if target_rank <= 0:
+            break
+
+        running = 0
+        selected_bin = hist_bins - 1
+        for bin_idx in range(hist_bins - 1, -1, -1):
+            bin_count = int(hist[bin_idx].item())
+            if running + bin_count >= target_rank:
+                selected_bin = bin_idx
+                candidate_count = bin_count
+                count_above += running
+                break
+            running += bin_count
+
+        bin_width = span / hist_bins
+        new_lo = lo + selected_bin * bin_width
+        new_hi = hi if selected_bin == hist_bins - 1 else lo + (selected_bin + 1) * bin_width
+
+        if candidate_count is not None and candidate_count <= candidate_limit:
+            lo, hi = new_lo, new_hi
+            break
+
+        lo, hi = new_lo, new_hi
+
+    return lo, hi
+
+
+def _create_mask_global_chunked(
+    valid_scores: Dict[str, torch.Tensor],
+    sparsity_percent: float,
+    add_tie_break_noise: bool,
+    tie_break_noise_scale: float,
+    min_layer_keep_ratio: float,
+):
+    _mask_log("Mask selection backend: exact chunked global selector")
+    total_params = sum(score.numel() for score in valid_scores.values())
+    keep_percent = 100.0 - sparsity_percent
+    keep_count = max(1, min(total_params, int(keep_percent / 100.0 * total_params)))
+
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Target keep count: {keep_count:,} ({keep_percent:.2f}%)")
+    if min_layer_keep_ratio > 0:
+        _mask_log(f"Using hybrid global mask with per-layer keep floor ratio={min_layer_keep_ratio:.4f}")
+
+    if add_tie_break_noise:
+        _apply_tie_break_noise_inplace(valid_scores, tie_break_noise_scale)
+
+    floor_indices, floor_selected = _select_floor_indices(
+        valid_scores,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+        keep_count=keep_count,
+    )
+
+    remaining_keep = keep_count - floor_selected
+    masks_bool = {
+        name: torch.zeros_like(score, dtype=torch.bool, device="cpu")
+        for name, score in valid_scores.items()
+    }
+    for name, idx in floor_indices.items():
+        if idx.numel() == 0:
+            continue
+        masks_bool[name].view(-1)[idx] = True
+
+    if remaining_keep > 0:
+        chunk_numel = _get_env_int(
+            "RL_CASINO_SELECTOR_CHUNK_NUMEL",
+            DEFAULT_SELECTOR_CHUNK_NUMEL,
+        )
+        interval = _refine_threshold_interval(
+            valid_scores,
+            floor_indices,
+            remaining_keep=remaining_keep,
+            chunk_numel=chunk_numel,
+        )
+        if interval is None:
+            raise ValueError("Chunked selector found no available scores after floor reservation.")
+
+        lo, hi = interval
+        boundary_values = []
+        boundary_refs = []
+        definitely_selected = 0
+
+        for name, score in valid_scores.items():
+            flat = score.reshape(-1)
+            floor_idx = floor_indices[name]
+            above_parts = []
+            boundary_parts = []
+            for start, end, chunk in _flatten_cpu_chunks(flat, chunk_numel):
+                available = torch.ones(chunk.numel(), dtype=torch.bool)
+                if floor_idx.numel() > 0:
+                    left = torch.searchsorted(floor_idx, start)
+                    right = torch.searchsorted(floor_idx, end)
+                    if right > left:
+                        local_exclude = floor_idx[left:right] - start
+                        available[local_exclude] = False
+                if not torch.any(available):
+                    continue
+                available_chunk = chunk[available]
+                available_idx = torch.nonzero(available, as_tuple=False).squeeze(-1) + start
+                above_mask = available_chunk > (hi + 1e-9)
+                if torch.any(above_mask):
+                    above_parts.append(available_idx[above_mask])
+                boundary_mask = (available_chunk >= (lo - 1e-9)) & (available_chunk <= (hi + 1e-9))
+                if torch.any(boundary_mask):
+                    boundary_idx = available_idx[boundary_mask]
+                    boundary_parts.append((boundary_idx, available_chunk[boundary_mask]))
+
+            if above_parts:
+                above_idx = torch.cat(above_parts)
+                masks_bool[name].view(-1)[above_idx] = True
+                definitely_selected += int(above_idx.numel())
+
+            for idx_chunk, val_chunk in boundary_parts:
+                boundary_values.append(val_chunk)
+                boundary_refs.append((name, idx_chunk))
+
+        needed_from_boundary = remaining_keep - definitely_selected
+        if needed_from_boundary < 0:
+            raise ValueError(
+                "Chunked selector selected more values above the refined threshold than the remaining budget allows."
+            )
+
+        if needed_from_boundary > 0:
+            if not boundary_values:
+                raise ValueError("Chunked selector could not locate boundary candidates for the remaining budget.")
+            concat_values = torch.cat(boundary_values)
+            if needed_from_boundary > concat_values.numel():
+                # Float32 threshold tolerance can push a handful of elements into
+                # "definitely above" that the float64 histogram counted as "boundary",
+                # leaving slightly fewer boundary candidates than needed.  The shortfall
+                # is typically O(thousands) out of billions of weights — negligible.
+                _mask_log(
+                    f"  Warning: only {concat_values.numel():,} boundary candidates for "
+                    f"{needed_from_boundary:,} required positions "
+                    f"(~{needed_from_boundary - concat_values.numel():,} weights short due to "
+                    f"float32/float64 threshold rounding). Keeping all boundary candidates."
+                )
+                needed_from_boundary = concat_values.numel()
+            selected = _topk_indices_safe(concat_values, k=needed_from_boundary, largest=True).cpu()
+            concat_names = []
+            concat_indices = []
+            for name, idx_chunk in boundary_refs:
+                concat_names.extend([name] * idx_chunk.numel())
+                concat_indices.append(idx_chunk)
+            concat_indices = torch.cat(concat_indices)
+            for sel in selected.tolist():
+                masks_bool[concat_names[sel]].view(-1)[int(concat_indices[sel].item())] = True
+
+    masks = {}
+    total_kept = 0
+    _mask_log("Applying global mask to layers...")
+    for idx, (name, mask) in enumerate(masks_bool.items()):
+        if idx % 50 == 0:
+            _mask_log(f"  Processing layer {idx+1}/{len(masks_bool)}")
+        total_kept += int(mask.sum().item())
+        masks[name] = mask.to(dtype=torch.bool)
+
+    actual_sparsity = 100.0 - (total_kept / total_params * 100.0)
+    _mask_log("\nVerification:")
+    _mask_log(f"  Target keep: {keep_count:,} ({keep_percent:.2f}%)")
+    _mask_log(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.2f}%)")
+    _mask_log(f"  Actual sparsity: {actual_sparsity:.4f}% (target: {sparsity_percent}%)")
+    _mask_log(f"  Error: {abs(actual_sparsity - sparsity_percent):.6f}%")
+    return masks
+
+
+def _create_mask_global_flat(
+    valid_scores: Dict[str, torch.Tensor],
+    sparsity_percent: float,
+    add_tie_break_noise: bool,
+    tie_break_noise_scale: float,
+    min_layer_keep_ratio: float,
+):
+    keep_percent = 100.0 - sparsity_percent
+    total_params = sum(score.numel() for score in valid_scores.values())
+    keep_count = max(1, int(keep_percent / 100.0 * total_params))
+    keep_count = min(keep_count, total_params)
+
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Target keep count: {keep_count:,} ({keep_percent:.2f}%)")
+    if min_layer_keep_ratio > 0:
+        _mask_log(f"Using hybrid global mask with per-layer keep floor ratio={min_layer_keep_ratio:.4f}")
+
+    # Flatten all scores globally.
+    offsets = []
+    flat_chunks = []
+    cursor = 0
+    for name, s in valid_scores.items():
+        n = s.numel()
+        offsets.append((name, cursor, cursor + n, s.shape))
+        flat_chunks.append(s.reshape(-1))
+        cursor += n
+
+    all_scores = torch.cat(flat_chunks, dim=0)
+    torch.nan_to_num_(all_scores, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if add_tie_break_noise:
+        scale = max(all_scores.abs().max().item() * tie_break_noise_scale, 1e-12)
+        torch.manual_seed(42)
+        all_scores = all_scores + torch.randn_like(all_scores) * scale
+        _mask_log(f"Applied tie-break noise (scale={scale:.3e}, seed=42)")
+
+    global_mask_flat = torch.zeros_like(all_scores, dtype=torch.bool)
+
+    floor_selected = 0
+    if min_layer_keep_ratio > 0:
+        min_layer_keep_ratio = float(max(0.0, min(1.0, min_layer_keep_ratio)))
+        layer_floors = []
+        for name, start, end, _shape in offsets:
+            layer_n = end - start
+            local_floor = int(min_layer_keep_ratio * layer_n)
+            local_floor = max(0, min(local_floor, layer_n))
+            layer_floors.append((name, start, end, local_floor))
+
+        requested_floor_total = sum(f for _, _, _, f in layer_floors)
+        if requested_floor_total > keep_count:
+            _mask_log(
+                f"⚠ Requested per-layer floor keeps {requested_floor_total:,} params, "
+                f"but global keep budget is {keep_count:,}. Scaling floors down proportionally."
+            )
+            scale = keep_count / max(1, requested_floor_total)
+            scaled_floors = []
+            for name, start, end, f in layer_floors:
+                layer_n = end - start
+                nf = int(f * scale)
+                nf = max(0, min(nf, layer_n))
+                scaled_floors.append((name, start, end, nf))
+            layer_floors = scaled_floors
+
+        for name, start, end, local_floor in layer_floors:
+            if local_floor <= 0:
+                continue
+            layer_scores = all_scores[start:end]
+            local_idx = _topk_indices_safe(layer_scores, k=local_floor, largest=True)
+            global_mask_flat[start:end][local_idx] = True
+            floor_selected += int(local_floor)
+
+        _mask_log(f"Per-layer floor selected: {floor_selected:,} parameters")
+
+    remaining = keep_count - floor_selected
+    if remaining > 0:
+        all_scores[global_mask_flat] = float("-inf")
+        keep_indices = _topk_indices_safe(all_scores, k=remaining, largest=True)
+        global_mask_flat[keep_indices] = True
+
+    masks = {}
+    total_kept = 0
+    _mask_log("Applying global mask to layers...")
+    for idx, (name, start, end, shape) in enumerate(offsets):
+        if idx % 50 == 0:
+            _mask_log(f"  Processing layer {idx+1}/{len(offsets)}")
+        m = global_mask_flat[start:end].reshape(shape)
+        total_kept += int(m.sum().item())
+        masks[name] = m.to(dtype=torch.bool).cpu()
+
+    actual_sparsity = 100.0 - (total_kept / total_params * 100.0)
+    _mask_log("\nVerification:")
+    _mask_log(f"  Target keep: {keep_count:,} ({keep_percent:.2f}%)")
+    _mask_log(f"  Actual keep: {int(total_kept):,} ({100.0 - actual_sparsity:.2f}%)")
+    _mask_log(f"  Actual sparsity: {actual_sparsity:.4f}% (target: {sparsity_percent}%)")
+    _mask_log(f"  Error: {abs(actual_sparsity - sparsity_percent):.6f}%")
+    return masks
+
+
+def create_mask_from_scores_gpu_efficient(
+    scores_dict,
+    sparsity_percent,
+    device='cuda',
+    add_tie_break_noise: bool = True,
+    tie_break_noise_scale: float = 1e-6,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+    local_pool: bool = False,
+):
+    """
+    Create sparse masks from score tensors.
+
+        Default (local_pool=False): *global* ranking with a small per-tensor keep floor,
+        so high-scoring layers still compete globally but each scored tensor keeps at least
+        a small fraction of weights unless the global budget is too small.
+
+        local_pool=True: *per-layer* ranking — each weight matrix independently
+        keeps its top keep_frac elements, giving uniform sparsity per layer.
+
+        Optional hybrid mode (local_pool=False only):
+            - If min_layer_keep_ratio > 0, each non-empty layer keeps at least
+                floor(min_layer_keep_ratio * layer_numel) parameters.
+            - Remaining budget is allocated by global top-k over the full model.
+            - Pass min_layer_keep_ratio=0.0 for pure global selection with no floor.
+    """
+    if local_pool:
+        _mask_log("Mask pooling: local (each weight matrix ranked independently; use --local_pool)")
+        return _create_mask_local(scores_dict, sparsity_percent, device, add_tie_break_noise, tie_break_noise_scale)
+
+    if min_layer_keep_ratio > 0:
+        _mask_log(
+            "Mask pooling: global with per-layer keep floor "
+            f"(min_layer_keep_ratio={min_layer_keep_ratio}; remaining budget is global top-k)"
+        )
+    else:
+        _mask_log("Mask pooling: global (single ranking across all scored weights)")
+
+    _mask_log(f"\n=== Creating Exact Global Masks (target sparsity: {sparsity_percent}%) ===")
+
+    if not scores_dict:
+        raise ValueError(
+            "create_mask_from_scores_gpu_efficient received an empty scores_dict. "
+            "Upstream scoring produced no valid weight-score tensors."
+        )
+
+    # Normalize tensors onto target device and collect valid entries.
+    valid_scores = {}
+    total_params = 0
+    chunked_min_numel = _get_env_int(
+        "RL_CASINO_CHUNKED_SELECTOR_MIN_NUMEL",
+        DEFAULT_CHUNKED_SELECTOR_MIN_NUMEL,
+    )
+    for name, score in scores_dict.items():
+        if score is None or score.numel() == 0:
+            continue
+        total_params += score.numel()
+
+    use_chunked = total_params >= chunked_min_numel
+    selector_device = "cpu" if use_chunked else device
+    if use_chunked:
+        _mask_log(
+            f"Chunked selector enabled for {total_params:,} parameters "
+            f"(threshold: {chunked_min_numel:,}); moving scores to CPU for selection."
+        )
+
+    for name, score in scores_dict.items():
+        if score is None or score.numel() == 0:
+            continue
+        # Defensive: some score tensors can be views/expanded tensors; in-place nan_to_num_
+        # fails when underlying storage has overlapping indices.
+        s = score.to(device=selector_device, dtype=torch.float32).clone()
+        torch.nan_to_num_(s, nan=0.0, posinf=0.0, neginf=0.0)
+        valid_scores[name] = s
+
+    if not valid_scores or total_params == 0:
+        raise ValueError(
+            "No non-empty score tensors were available for global ranking. "
+            "Check upstream scoring/mapping logic."
+        )
+
+    if use_chunked:
+        masks = _create_mask_global_chunked(
+            valid_scores,
+            sparsity_percent=sparsity_percent,
+            add_tie_break_noise=add_tie_break_noise,
+            tie_break_noise_scale=tie_break_noise_scale,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+        )
+    else:
+        masks = _create_mask_global_flat(
+            valid_scores,
+            sparsity_percent=sparsity_percent,
+            add_tie_break_noise=add_tie_break_noise,
+            tie_break_noise_scale=tie_break_noise_scale,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+        )
+
+    for name, score in scores_dict.items():
+        if name in masks or score is None:
+            continue
+        # Unscored tensors: all False (same semantics as float zeros; bool on disk).
+        masks[name] = torch.zeros_like(score, dtype=torch.bool).cpu()
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return masks
+
+
+def compute_jaccard_similarity(pred_masks, true_masks):
+    """
+    Computes Jaccard similarity, spatial overlap, and cosine similarity
+    between predicted and reference masks. Uses GPU for faster computation.
+    """
+    _mask_log("\n=== Computing Similarity Metrics ===")
+    
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    per_layer_jaccard = {}
+    total_intersection = 0
+    total_union = 0
+    total_pred_kept = 0
+    total_true_kept = 0
+    
+    for name in pred_masks.keys():
+        if name not in true_masks:
+            continue
+        
+        pred = pred_masks[name].to(device).bool()
+        true = true_masks[name].to(device).bool()
+        
+        intersection = (pred & true).sum().item()
+        union = (pred | true).sum().item()
+        
+        jaccard = intersection / union if union > 0 else 0.0
+        per_layer_jaccard[name] = jaccard
+        
+        total_intersection += intersection
+        total_union += union
+        total_pred_kept += pred.sum().item()
+        total_true_kept += true.sum().item()
+        
+        del pred, true
+    
+    torch.cuda.empty_cache()
+    
+    aggregate_jaccard = total_intersection / total_union if total_union > 0 else 0.0
+    
+    # Calculate additional metrics
+    overlap_pred = total_intersection / total_pred_kept if total_pred_kept > 0 else 0.0
+    overlap_true = total_intersection / total_true_kept if total_true_kept > 0 else 0.0
+    cosine_similarity = total_intersection / ((total_pred_kept * total_true_kept) ** 0.5) if (total_pred_kept * total_true_kept) > 0 else 0.0
+    
+    if len(per_layer_jaccard) > 0:
+        mean_jaccard = sum(per_layer_jaccard.values()) / len(per_layer_jaccard)
+        min_jaccard = min(per_layer_jaccard.values())
+        max_jaccard = max(per_layer_jaccard.values())
+        
+        _mask_log(f"Aggregate Jaccard Similarity:     {aggregate_jaccard:.4f}")
+        _mask_log(f"Overlap (Intersect / Pred_Size):  {overlap_pred:.4f} ({overlap_pred*100:.1f}%)")
+        _mask_log(f"Overlap (Intersect / True_Size):  {overlap_true:.4f} ({overlap_true*100:.1f}%)")
+        _mask_log(f"Global Cosine Similarity:         {cosine_similarity:.4f}")
+        _mask_log(f"Mean per-layer Jaccard:           {mean_jaccard:.4f}")
+        
+        return {
+            "aggregate_jaccard": aggregate_jaccard,
+            "mean_jaccard": mean_jaccard,
+            "min_jaccard": min_jaccard,
+            "max_jaccard": max_jaccard,
+            "per_layer": per_layer_jaccard,
+            "overlap_fraction_predicted": overlap_pred,
+            "overlap_fraction_reference": overlap_true,
+            "cosine_similarity": cosine_similarity
+        }
+    else:
+        _mask_log("No matching layers found for similarity computation.")
+        return None
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def assert_masks_are_bool(masks: Dict[str, torch.Tensor], *, context: str = "") -> None:
+    """Raise if any mask is not torch.bool (optional guard via RL_CASINO_MASK_ASSERT_BOOL)."""
+    bad = [k for k, v in masks.items() if getattr(v, "dtype", None) != torch.bool]
+    if bad:
+        pref = f"{context}: " if context else ""
+        raise AssertionError(f"{pref}expected torch.bool masks; non-bool keys (sample): {bad[:12]}")
+
+
+def pool_element_scores_to_blocks(
+    scores: Dict[str, torch.Tensor],
+    block_size: int,
+    *,
+    reduction: str = "mean",
+) -> Dict[str, torch.Tensor]:
+    """
+    Pool each 2D score matrix into a block grid (ceil(M/B), ceil(N/B)) via mean or max over each B×B tile.
+
+    Partial edge tiles include padded zeros in the mean (matches standard avg-pool padding behavior).
+    """
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1, got {block_size}")
+    out: Dict[str, torch.Tensor] = {}
+    for name, s in scores.items():
+        if s.dim() != 2:
+            continue
+        s32 = s.detach().float().cpu().contiguous()
+        M, N = s32.shape
+        bm = (M + block_size - 1) // block_size
+        bn = (N + block_size - 1) // block_size
+        pad_m = bm * block_size - M
+        pad_n = bn * block_size - N
+        padded = torch.nn.functional.pad(s32, (0, pad_n, 0, pad_m), value=0.0)
+        # (bm, B, bn, B) -> (bm, bn, B*B)
+        x = padded.reshape(bm, block_size, bn, block_size).transpose(1, 2).contiguous()
+        flat = x.reshape(bm, bn, block_size * block_size)
+        if reduction == "mean":
+            out[name] = flat.mean(dim=-1)
+        elif reduction == "max":
+            out[name] = flat.max(dim=-1).values
+        else:
+            raise ValueError(f"Unknown reduction: {reduction!r}")
+    return out
+
+
+def expand_block_bool_masks_to_weights(
+    block_masks: Dict[str, torch.Tensor],
+    weight_shapes: Dict[str, torch.Size],
+    block_size: int,
+) -> Dict[str, torch.Tensor]:
+    """
+    Expand boolean block masks to full weight shapes using repeat_interleave, then crop (H200 benchmark pattern).
+    """
+    if block_size < 1:
+        raise ValueError(f"block_size must be >= 1, got {block_size}")
+    final: Dict[str, torch.Tensor] = {}
+    for name, b_mask in block_masks.items():
+        if name not in weight_shapes:
+            continue
+        M, N = int(weight_shapes[name][0]), int(weight_shapes[name][1])
+        if b_mask.dim() != 2:
+            raise ValueError(f"block mask for {name} must be 2D, got {tuple(b_mask.shape)}")
+        expanded = b_mask.bool().repeat_interleave(block_size, dim=0).repeat_interleave(block_size, dim=1)
+        w = expanded[:M, :N]
+        if w.shape != (M, N):
+            raise RuntimeError(f"expand/crop shape mismatch for {name}: got {tuple(w.shape)}, want {(M, N)}")
+        final[name] = w
+    return final
+
+
+def build_binary_masks_from_scores_blockwise(
+    element_scores: Dict[str, torch.Tensor],
+    *,
+    sparsity_percent: float,
+    block_size: int,
+    device: str = "cpu",
+    local_pool: bool = False,
+    min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+    reduction: str = "mean",
+    add_tie_break_noise: bool = False,
+) -> Dict[str, torch.Tensor]:
+    """
+    Build inclusion masks by global selection on **block-pooled** scores, then expand to weight shapes.
+
+    ``sparsity_percent`` is applied by ``create_mask_from_scores_gpu_efficient`` on the **block**
+    score tensors (fewer elements than full weights). Tie-break noise defaults off for stable block boundaries.
+    """
+    if not element_scores:
+        return {}
+    block_scores = pool_element_scores_to_blocks(element_scores, block_size, reduction=reduction)
+    weight_shapes = {k: v.shape for k, v in element_scores.items() if k in block_scores}
+    block_masks = create_mask_from_scores_gpu_efficient(
+        block_scores,
+        sparsity_percent,
+        device=device,
+        add_tie_break_noise=add_tie_break_noise,
+        tie_break_noise_scale=1e-6,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+        local_pool=local_pool,
+    )
+    masks = expand_block_bool_masks_to_weights(block_masks, weight_shapes, block_size)
+    total_p = sum(m.numel() for m in masks.values())
+    kept = sum(m.sum().item() for m in masks.values())
+    eff = 100.0 * (1.0 - kept / max(total_p, 1))
+    _mask_log(
+        f"[block masks] block_size={block_size} reduction={reduction!r} "
+        f"→ realized weight sparsity ≈ {eff:.4f}% (nominal {sparsity_percent}% targets block-grid selection)"
+    )
+    return masks
+
+
+def save_masks(masks, output_file, metadata=None):
+    """Save ``{"masks": bool_tensors, "metadata": ...}`` via ``torch.save``."""
+    if os.path.dirname(output_file):
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    # Enforce torch.bool on disk: binary masks, minimal storage, no spurious float dtype.
+    masks = {
+        k: (v if v.dtype == torch.bool else v.ne(0).to(dtype=torch.bool))
+        for k, v in masks.items()
+    }
+    if _env_truthy("RL_CASINO_MASK_ASSERT_BOOL"):
+        assert_masks_are_bool(masks, context="save_masks")
+
+    save_dict = {"masks": masks}
+    if metadata:
+        save_dict["metadata"] = metadata
+    
+    torch.save(save_dict, output_file)
+    _mask_log(f"\nMasks saved to: {output_file}")
+    
+    total_params = sum(m.numel() for m in masks.values())
+    kept_params = sum(m.sum().item() for m in masks.values())
+    actual_sparsity = 100.0 - (kept_params / total_params * 100)
+    
+    _mask_log(f"Total parameters: {total_params:,}")
+    _mask_log(f"Kept parameters: {int(kept_params):,}")
+    _mask_log(f"Final sparsity: {actual_sparsity:.2f}%")
+
+
+def load_masks_file(path: str) -> Tuple[Dict[str, torch.Tensor], Optional[Dict[str, Any]], bool]:
+    """
+    Load masks from a .pt file written by warm_start / cold_start tooling.
+
+    Supports:
+    - Wrapped format: ``{"masks": {name: tensor, ...}, "metadata": {...}}``
+    - Legacy raw dict: ``{name: tensor, ...}`` (e.g. early ``mask_finder.py`` outputs).
+
+    Returns
+    -------
+    masks : dict
+        Parameter name -> mask tensor (``torch.bool`` preferred; legacy 0/1 floats still load).
+    metadata : dict or None
+        Present only for wrapped format.
+    uses_wrapped_format : bool
+        True if the file used the wrapped layout (so saves can match the original style).
+    """
+    data = torch.load(path, map_location="cpu", weights_only=True)
+    if isinstance(data, dict) and "masks" in data:
+        return data["masks"], data.get("metadata"), True
+    if isinstance(data, dict):
+        return data, None, False
+    raise ValueError(f"Unrecognized mask file format (expected dict): {path}")
+
+
+def invert_mask_tensors(masks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """
+    Element-wise complement of binary inclusion masks.
+
+    If the original mask has 1 for weights to **include** and 0 for weights to **exclude**,
+    the result has 1 where the original had 0 and 0 where the original had 1 (same dtype/shape
+    per tensor, on CPU like typical saved masks).
+    """
+    inverted: Dict[str, torch.Tensor] = {}
+    for name, m in masks.items():
+        # bool mask inversion: use logical NOT
+        if m.dtype == torch.bool:
+            inverted[name] = ~m.detach().cpu()
+        else:
+            # Fallback for old float masks
+            m32 = m.detach().cpu().to(torch.float32)
+            inv = (1.0 - m32).to(dtype=m.dtype)
+            inverted[name] = inv
+    return inverted
+
+
+def invert_mask_file(
+    input_path: str,
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Load a mask ``.pt`` file, invert each tensor (complement), and save without modifying
+    the source file.
+
+    Output naming (when ``output_path`` is omitted): ``<stem>_inverse.pt`` next to the input,
+    e.g. ``masks/cold_fisher_x_sparsity10pct.pt`` -> ``masks/cold_fisher_x_sparsity10pct_inverse.pt``.
+
+    Wrapped inputs (``{"masks", "metadata"}``) are saved the same way with extra metadata
+    recording the source path. Raw dict masks are saved as a plain dict (legacy format).
+    """
+    masks, metadata, wrapped = load_masks_file(input_path)
+    inverted = invert_mask_tensors(masks)
+
+    if output_path is None:
+        root, ext = os.path.splitext(input_path)
+        output_path = f"{root}_inverse{ext or '.pt'}"
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    abs_in = os.path.abspath(input_path)
+    if wrapped:
+        new_meta: Dict[str, Any] = dict(metadata) if metadata else {}
+        new_meta["inverse_of"] = abs_in
+        new_meta["mask_is_complement"] = True
+        new_meta["complement_definition"] = (
+            "inverted_mask = 1 - original_mask (per element); "
+            "original had 1=include, 0=exclude"
+        )
+        save_masks(inverted, output_path, metadata=new_meta)
+    else:
+        torch.save(inverted, output_path)
+        _mask_log(f"\nInverse masks saved to: {output_path}")
+
+    return output_path

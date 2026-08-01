@@ -1,0 +1,564 @@
+"""
+SQuAD (Stanford Question Answering Dataset) evaluation harness.
+"""
+
+import os
+import sys
+import inspect
+from typing import Dict, Any, Optional, List
+import torch
+# Benchmark-specific imports are moved inside functions to prevent dependency issues 
+# from crashing the entire suite.
+
+# Add project root to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from evaluation.model_loader import load_model_and_tokenizer
+from evaluation.model_args_utils import build_lm_eval_model_args_parts
+from evaluation.chat_template_utils import auto_detect_apply_chat_template
+
+try:
+    from lm_eval import simple_evaluate
+    LM_EVAL_AVAILABLE = True
+except ImportError:
+    LM_EVAL_AVAILABLE = False
+
+
+def evaluate_squad_with_hf_evaluate(
+    model_path: str,
+    split: str = "validation",
+    limit: Optional[int] = None,
+    device: Optional[str] = None,
+    dtype: Optional[torch.dtype] = None,
+    max_length: int = 384,
+    stride: int = 128,
+    trust_remote_code: bool = False,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Evaluate a model on SQuAD using HuggingFace's evaluate library.
+    This works best with question-answering models.
+    
+    Args:
+        model_path: Path to model (HuggingFace ID or local path)
+        split: Dataset split to use ("validation" or "train")
+        limit: Limit number of examples (None = all)
+        device: Device to run on (auto-detect if None)
+        dtype: Model dtype (auto-detect if None)
+        max_length: Maximum sequence length
+        stride: Stride for sliding window
+        trust_remote_code: Whether to trust remote code
+        
+    Returns:
+        Dictionary with evaluation results
+    """
+    if verbose:
+        print("=" * 60)
+        print("SQuAD EVALUATION (HuggingFace evaluate)")
+        print("=" * 60)
+    else:
+        print("SQuAD: Running...", end=" ", flush=True)
+    
+    # Try to load as QA model first, fallback to causal LM
+    try:
+        if verbose:
+            print("Attempting to load as QuestionAnswering model...")
+        if device is None:
+            if torch.cuda.is_available():
+                device = "cuda"
+            elif torch.backends.mps.is_available():
+                device = "mps"
+            else:
+                device = "cpu"
+        
+        if dtype is None:
+            if device == "cuda" and torch.cuda.is_available():
+                dtype = torch.float16
+            elif device == "mps" and torch.backends.mps.is_available():
+                dtype = torch.float16
+            else:
+                dtype = torch.float32
+        
+        model = AutoModelForQuestionAnswering.from_pretrained(
+            model_path,
+            torch_dtype=dtype,
+            trust_remote_code=trust_remote_code,
+            device_map="auto" if device == "cuda" else None,
+        )
+        if device != "cuda" or model.device.type == 'cpu':
+            model.to(device)
+        model.eval()
+        is_qa_model = True
+    except Exception as e:
+        if verbose:
+            print(f"Could not load as QA model: {e}")
+            print("Falling back to CausalLM model...")
+        model, tokenizer = load_model_and_tokenizer(
+            model_path=model_path,
+            dtype=dtype,
+            device=device,
+            trust_remote_code=trust_remote_code,
+        )
+        is_qa_model = False
+    
+    if is_qa_model:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            trust_remote_code=trust_remote_code,
+        )
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+    
+    # Lazy imports
+    from datasets import load_dataset
+    import evaluate
+    
+    # Load SQuAD dataset
+    if verbose:
+        print(f"\nLoading SQuAD {split} dataset...")
+    dataset = load_dataset("squad", split=split)
+    if limit:
+        if limit is not None:
+            dataset = dataset.select(range(min(limit, len(dataset))))
+        print(f"Loaded {len(dataset)} examples")
+    
+    # Load SQuAD metric
+    squad_metric = evaluate.load("squad")
+    
+    # Prepare predictions and references
+    if verbose:
+        print("\nRunning inference...")
+    predictions = []
+    references = []
+    
+    model.eval()
+    with torch.no_grad():
+        for i, example in enumerate(dataset):
+            if verbose and (i + 1) % 100 == 0:
+                print(f"Processing {i+1}/{len(dataset)}...", end='\r')
+            
+            question = example["question"]
+            context = example["context"]
+            answers = example["answers"]
+            
+            # Format input
+            if is_qa_model:
+                inputs = tokenizer(
+                    question,
+                    context,
+                    max_length=max_length,
+                    truncation=True,
+                    stride=stride,
+                    return_tensors="pt",
+                    padding=True,
+                ).to(device)
+                
+                outputs = model(**inputs)
+                start_logits = outputs.start_logits
+                end_logits = outputs.end_logits
+                
+                # Get answer span
+                start_idx = start_logits.argmax().item()
+                end_idx = end_logits.argmax().item()
+                
+                # Decode answer
+                input_ids = inputs["input_ids"][0]
+                answer_tokens = input_ids[start_idx:end_idx+1]
+                prediction_text = tokenizer.decode(answer_tokens, skip_special_tokens=True)
+            else:
+                # For causal LM, use prompt-based approach
+                prompt = f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
+                inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(device)
+                
+                # Allow longer outputs for reasoning-heavy checkpoints, but keep bounded for SQuAD.
+                env_max = os.environ.get("EVAL_MAX_GEN_TOKS")
+                max_new_tokens = int(env_max) if env_max else 128
+                max_new_tokens = max(16, min(max_new_tokens, 256))
+
+                outputs = model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                    do_sample=False,
+                )
+                full_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                # Extract answer robustly (CoT-safe): prefer explicit markers, otherwise take first non-empty line.
+                import re
+
+                tail = full_text
+                if "Answer:" in tail:
+                    tail = tail.split("Answer:")[-1]
+                m = re.search(r"(final answer|answer)\s*:\s*(.+)$", tail, flags=re.IGNORECASE | re.MULTILINE)
+                if m:
+                    tail = m.group(2)
+
+                # Prefer the first non-empty line; SQuAD expects short spans.
+                lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+                prediction_text = lines[0] if lines else tail.strip()
+
+                # Strip common wrappers.
+                prediction_text = prediction_text.strip().strip("`").strip()
+            
+            predictions.append({
+                "id": example["id"],
+                "prediction_text": prediction_text,
+            })
+            references.append({
+                "id": example["id"],
+                "answers": answers,
+            })
+    
+    if verbose:
+        print(f"\nCompleted inference on {len(predictions)} examples")
+        print("\nComputing metrics...")
+    results = squad_metric.compute(predictions=predictions, references=references)
+    
+    if verbose:
+        print("\n" + "=" * 60)
+        print("SQuAD RESULTS")
+        print("=" * 60)
+        print(f"\nExact Match: {results.get('exact_match', 0):.4f}")
+        print(f"F1 Score: {results.get('f1', 0):.4f}")
+    else:
+        em = results.get('exact_match', 0)
+        f1 = results.get('f1', 0)
+        print(f"Exact Match: {em:.4f}, F1: {f1:.4f}")
+    
+    return results
+
+
+def evaluate_squad_with_lm_eval(
+    model_path: str,
+    model: str = "hf",
+    num_fewshot: int = 0,
+    limit: Optional[int] = None,
+    device: Optional[str] = None,
+    dtype: Optional[torch.dtype] = None,
+    batch_size: Any = "auto",
+    trust_remote_code: bool = False,
+    apply_chat_template: Optional[bool] = None,
+    max_gen_toks: Optional[int] = None,
+    max_model_len: Optional[int] = None,
+    verbose: bool = True,
+) -> Dict[str, Any]:
+    """
+    Evaluate a model on SQuAD using lm-evaluation-harness.
+    
+    Args:
+        model_path: Path to model (HuggingFace ID or local path)
+        num_fewshot: Number of few-shot examples
+        limit: Limit number of examples (None = all)
+        device: Device to run on (auto-detect if None)
+        dtype: Model dtype (auto-detect if None)
+        batch_size: Batch size for evaluation
+        trust_remote_code: Whether to trust remote code
+        apply_chat_template: Whether to apply the model's chat template (auto for instruct/chat if None)
+        
+    Returns:
+        Dictionary with evaluation results
+    """
+    if not LM_EVAL_AVAILABLE:
+        raise ImportError(
+            "lm-evaluation-harness is required. Install with: pip install lm-eval"
+        )
+    
+    if verbose:
+        print("=" * 60)
+        print("SQuAD EVALUATION (lm-evaluation-harness)")
+        print("-" * 60)
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA Device: {torch.cuda.get_device_name(0)}")
+            print(f"Total Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        
+        print("-" * 60)
+        print("Environment Variables:")
+        for k, v in os.environ.items():
+            if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
+                print(f"  {k}: {v}")
+        print("=" * 60)
+    
+    # Auto-detect device if not specified
+    if device is None:
+        if model == "vllm":
+            device = "cuda"
+        elif torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+
+    # Auto-detect dtype if not specified
+    if dtype is None:
+        if model == "vllm":
+            dtype_str = "float16"
+        elif device == "cuda" and torch.cuda.is_available():
+            dtype_str = "float16"
+        elif device == "mps" and torch.backends.mps.is_available():
+            dtype_str = "float16"
+        else:
+            dtype_str = "float32"
+    else:
+        dtype_str = str(dtype).replace("torch.", "")
+    
+    # Auto-apply chat templates for instruct/chat models if not explicitly set
+    # NOTE: This codebase uses instruct models, so we should be confident about applying templates
+    apply_chat_template = auto_detect_apply_chat_template(
+        model_path,
+        explicit_value=apply_chat_template,
+        verbose=verbose,
+    )
+    if verbose:
+        print(f"Final decision: apply_chat_template = {apply_chat_template}")
+
+    # Long-CoT parity knobs (global override + per-benchmark default)
+    if max_gen_toks is None:
+        env_max = os.environ.get("EVAL_MAX_GEN_TOKS")
+        max_gen_toks = int(env_max) if env_max else 256
+    if max_model_len is None:
+        env_len = os.environ.get("EVAL_MAX_MODEL_LEN")
+        max_model_len = int(env_len) if env_len else 4096
+
+    # Convert to absolute path if it's a local path (for lm-eval compatibility)
+    if os.path.exists(model_path):
+        model_path = os.path.abspath(model_path)
+    
+    # Build model_args string for lm-eval
+    # lm-eval's from_pretrained will automatically detect and use .safetensors files
+    # Ensure model_path doesn't already have 'pretrained=' prefix
+    clean_model_path = model_path
+    if model_path.startswith("pretrained="):
+        clean_model_path = model_path.replace("pretrained=", "", 1)
+        
+    base_model_args_parts = build_lm_eval_model_args_parts(
+        model_path=clean_model_path,
+        dtype_str=dtype_str,
+        backend=model,
+        trust_remote_code=trust_remote_code,
+    )
+    
+    # vLLM robustness flags
+    if model == "vllm":
+        # Explicit max_model_len to avoid auto-derivation bugs
+        base_model_args_parts.append(f"max_model_len={max_model_len}")
+        # Disable chunked prefill which can cause NoneType errors in 0.6.3
+        base_model_args_parts.append("enable_chunked_prefill=False")
+        # Explicitly set max_num_batched_tokens to avoid NoneType comparison in scheduler
+        base_model_args_parts.append("max_num_batched_tokens=4096")
+        # Explicitly set max_num_seqs because lm-eval defaults it to None, crashing 0.6.3
+        base_model_args_parts.append("max_num_seqs=64")
+        base_model_args_parts.append("gpu_memory_utilization=0.7")
+        
+    base_model_args_str = ",".join(base_model_args_parts)
+    
+    # Try different configurations for chat template
+    configs_to_try = []
+    if apply_chat_template:
+        configs_to_try.append({"apply_chat_template": True, "fewshot_as_multiturn": True})
+        configs_to_try.append({"apply_chat_template": True})
+    configs_to_try.append({})  # Base config without chat template
+    
+    # Run evaluation
+    # Note: simple_evaluate will load the model internally
+    if verbose:
+        print(f"\nRunning SQuAD evaluation...")
+        print(f"Model: {model_path}")
+        print(f"Device: {device}, Dtype: {dtype_str}")
+        if limit:
+            print(f"Limiting to {limit} examples")
+    else:
+        print("SQuAD: Running...", end=" ", flush=True)
+    
+    # squad_completion is our primary focus in recent runs
+    task_candidates = ["squad_completion", "squad", "squad_v2"]
+    
+    # Lazy imports for stability
+    from lm_eval import simple_evaluate
+    import evaluate
+    
+    results = None
+    task_errors = []
+    
+    import logging
+    lm_eval_logger = logging.getLogger("lm_eval")
+    old_level = lm_eval_logger.level
+    if not verbose:
+        lm_eval_logger.setLevel(logging.WARNING)
+
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*chat template.*")
+        
+        for task_name in task_candidates:
+            for config in configs_to_try:
+                try:
+                    eval_kwargs = {
+                        "model": model,
+                        "model_args": base_model_args_str,
+                        "tasks": task_name,
+                        "num_fewshot": num_fewshot,
+                        "limit": limit,
+                        "batch_size": batch_size,
+                        # Set generation parameters for proper evaluation
+                        "gen_kwargs": {
+                            "temperature": 0.0,  # Deterministic for fair evaluation
+                            "max_gen_toks": max_gen_toks,
+                        }
+                    }
+                    # Only pass device for non-vllm models (vllm handles devices internally)
+                    if model != "vllm":
+                        eval_kwargs["device"] = device
+                        
+                    eval_kwargs.update(config)
+                    
+                    # Filter out None values to prevent library-level crashes on comparisons
+                    filtered_eval_kwargs = {k: v for k, v in eval_kwargs.items() if v is not None}
+                    
+                    results = simple_evaluate(**filtered_eval_kwargs)
+                    break
+                except Exception as e:
+                    import traceback
+                    error_msg = str(e)
+                    
+                    # Check for known chat template or fewshot issues
+                    chat_template_errors = [
+                        "apply_chat_template",
+                        "fewshot_as_multiturn",
+                        "Answer is not a string",
+                        "AssertionError"
+                    ]
+                    
+                    if any(err in error_msg for err in chat_template_errors) or isinstance(e, AssertionError):
+                        if verbose:
+                            traceback.print_exc()
+                            print(f"Chat template config or mult-turn fewshot not supported: {config}; retrying with simpler config.")
+                        continue
+                        
+                    if isinstance(e, KeyError) or task_name in str(e) or "not found" in str(e).lower():
+                        task_errors.append(f"{task_name}: {str(e)}")
+                        if verbose:
+                            print(f"Task '{task_name}' not found or failed, trying next alias/config...")
+                        break
+                    
+                    # Print full traceback for unexpected errors
+                    traceback.print_exc()
+                    raise
+            if results is not None:
+                break
+    
+    if not verbose:
+        lm_eval_logger.setLevel(old_level)
+    
+    if results is None:
+        raise RuntimeError(
+            f"Failed to run SQuAD; tried aliases {task_candidates}. Errors: {task_errors}"
+        )
+    
+    # Extract and print key metrics
+    if "results" in results:
+        squad_results = results["results"]
+        for key, data in squad_results.items():
+            if "squad" in key.lower() and isinstance(data, dict):
+                exact_match = data.get("exact_match,none", data.get("exact_match", data.get("contains,none", 0)))
+                f1 = data.get("f1,none", data.get("f1", 0))
+                contains = data.get("contains,none", 0)
+                
+                if verbose:
+                    print("\n" + "=" * 60)
+                    print("SQuAD RESULTS")
+                    print("=" * 60)
+                    print(f"\nTask: {key}")
+                    print(f"Exact Match / Contains: {exact_match:.4f}")
+                    if f1 > 0:
+                        print(f"F1 Score: {f1:.4f}")
+                    if "contains,none" in data and not "exact_match" in data:
+                        print(f"Contains Metric: {contains:.4f}")
+                    print(f"Available metrics for this task: {list(data.keys())}")
+                else:
+                    print(f"Exact Match: {exact_match:.4f}, F1: {f1:.4f}")
+                break
+    
+    return results
+
+
+def evaluate_squad(
+    model_path: str,
+    method: str = "lm_eval",
+    verbose: bool = True,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Evaluate a model on SQuAD benchmark.
+    
+    Args:
+        model_path: Path to model (HuggingFace ID or local path)
+        method: Evaluation method ("lm_eval" or "hf_evaluate")
+        **kwargs: Additional arguments passed to the specific evaluator
+        
+    Returns:
+        Dictionary with evaluation results
+    """
+    if method == "lm_eval":
+        target = evaluate_squad_with_lm_eval
+    elif method == "hf_evaluate":
+        target = evaluate_squad_with_hf_evaluate
+    else:
+        raise ValueError(f"Unknown method: {method}. Use 'lm_eval' or 'hf_evaluate'")
+
+    # Only forward arguments the target evaluator knows how to handle
+    signature = inspect.signature(target)
+    accepted_params = set(signature.parameters.keys()) - {"model_path"}
+    
+    # Map 'model' to 'model' for target function
+    if "model" in kwargs and "model" in accepted_params:
+        kwargs["model"] = kwargs["model"]
+        
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items() if key in accepted_params
+    }
+    # Always pass verbose if the target accepts it
+    if "verbose" in signature.parameters:
+        filtered_kwargs["verbose"] = verbose
+    
+    ignored_kwargs = {
+        key: value for key, value in kwargs.items() if key not in accepted_params and key != "verbose"
+    }
+
+    if ignored_kwargs and verbose:
+        print(
+            f"Ignoring unsupported arguments for SQuAD ({method}): "
+            f"{list(ignored_kwargs.keys())}"
+        )
+
+    return target(model_path=model_path, **filtered_kwargs)
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Evaluate model on SQuAD benchmark")
+    parser.add_argument("--model_path", type=str, required=True,
+                        help="Path to model (HuggingFace ID or local path)")
+    parser.add_argument("--method", type=str, default="lm_eval",
+                        choices=["lm_eval", "hf_evaluate"],
+                        help="Evaluation method")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Limit number of examples")
+    parser.add_argument("--batch_size", type=int, default=8,
+                        help="Batch size for evaluation")
+    parser.add_argument("--device", type=str, default=None,
+                        help="Device to run on (auto-detect if not specified)")
+    parser.add_argument("--trust_remote_code", action="store_true",
+                        help="Trust remote code in model config")
+    
+    args = parser.parse_args()
+    
+    results = evaluate_squad(
+        model_path=args.model_path,
+        method=args.method,
+        limit=args.limit,
+        batch_size=args.batch_size,
+        device=args.device,
+        trust_remote_code=args.trust_remote_code,
+    )

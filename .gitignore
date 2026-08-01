@@ -1,0 +1,55 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# --- Environments ---
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# --- Editor / tooling / agent state ---
+.claude/
+.cursor/
+.idea/
+.vscode/
+.DS_Store
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Experiment tracking ---
+wandb/
+runs/
+
+# --- Model artifacts and checkpoints ---
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+checkpoints*/
+reconstructed_checkpoints/
+
+# --- Pipeline outputs ---
+outputs/
+results/
+masks/
+logs/
+delta_logs*/
+
+# --- Slurm job output ---
+*.out
+*.err
+slurm-*.out
+
+# --- Local scratch ---
+scratch/
+tmp/
+*.log

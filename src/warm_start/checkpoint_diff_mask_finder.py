@@ -1,0 +1,302 @@
+import torch
+import os
+import sys
+import argparse
+import json
+import gc
+from typing import Dict, Optional, Union
+
+# Ensure we can import from src
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
+    build_binary_masks_from_scores_blockwise,
+    create_mask_from_scores_gpu_efficient,
+    save_masks,
+    pooling_metadata,
+)
+
+def _normalize_torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    s = str(dtype).strip().lower()
+    aliases = {
+        "fp32": torch.float32,
+        "float32": torch.float32,
+        "f32": torch.float32,
+        "fp16": torch.float16,
+        "float16": torch.float16,
+        "f16": torch.float16,
+        "bf16": torch.bfloat16,
+        "bfloat16": torch.bfloat16,
+    }
+    if s not in aliases:
+        raise ValueError(f"Unknown dtype {dtype!r}; expected one of {sorted(aliases)}")
+    return aliases[s]
+
+
+def _cast_loaded_state_dict(sd: Dict[str, torch.Tensor], dtype: torch.dtype) -> Dict[str, torch.Tensor]:
+    if dtype == torch.float32:
+        return sd
+    out: Dict[str, torch.Tensor] = {}
+    for k, v in sd.items():
+        if isinstance(v, torch.Tensor) and v.is_floating_point():
+            out[k] = v.to(dtype=dtype)
+        else:
+            out[k] = v
+    return out
+
+
+def load_state_dict(
+    path: str,
+    device: str = "cpu",
+    torch_dtype: Union[str, torch.dtype] = torch.float32,
+) -> Dict[str, torch.Tensor]:
+    """
+    Loads a state dict from a .pt file, .safetensors file, or a HuggingFace model (local/remote).
+
+    Floating-point tensors are cast to ``torch_dtype`` for memory control (e.g. bfloat16 on CPU).
+    """
+    dt = _normalize_torch_dtype(torch_dtype)
+    # 1. Check if it's a local file or directory that exists
+    if os.path.exists(path):
+        if os.path.isfile(path) and path.endswith((".pt", ".safetensors")):
+            print(f"Loading state dict from local file: {path}")
+            if path.endswith(".safetensors"):
+                from safetensors.torch import load_file
+                sd = load_file(path, device=device)
+                return _cast_loaded_state_dict(sd, dt)
+            else:
+                sd = torch.load(path, map_location=device, weights_only=True)
+                return _cast_loaded_state_dict(sd, dt)
+        else:
+            # Treat as local HuggingFace directory
+            print(f"Loading local HuggingFace model directory: {path}")
+            from transformers import AutoModelForCausalLM
+            model = AutoModelForCausalLM.from_pretrained(
+                path, 
+                torch_dtype=dt,
+                device_map=None,
+                low_cpu_mem_usage=True
+            )
+            state_dict = model.state_dict()
+            state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
+            del model
+            gc.collect()
+            return _cast_loaded_state_dict(state_dict, dt)
+
+    # 2. If path doesn't exist locally, check if it might be a HuggingFace Hub ID
+    # Hub IDs usually have 0 or 1 slashes (e.g., 'gpt2' or 'meta-llama/Llama-2-7b')
+    if "/" in path and path.count("/") > 1:
+        raise FileNotFoundError(
+            f"Local path not found: '{path}'. \n"
+            f"If this is a local checkpoint, verify the path exists. \n"
+            f"HuggingFace Hub IDs typically don't have this many slashes."
+        )
+
+    print(f"Path not found locally, attempting HuggingFace Hub load: {path}")
+    from transformers import AutoModelForCausalLM
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            path, 
+            torch_dtype=dt,
+            device_map=None,
+            low_cpu_mem_usage=True
+        )
+        state_dict = model.state_dict()
+        state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
+        del model
+        gc.collect()
+        return _cast_loaded_state_dict(state_dict, dt)
+    except Exception as e:
+        raise ValueError(f"Could not load HuggingFace model or file from '{path}': {e}")
+
+
+
+def is_mlp_param(name):
+    # MLP layer name patterns -- covers LLaMA, Gemma, Mistral, Qwen naming conventions
+    MLP_KEYWORDS = ["gate_proj", "up_proj", "down_proj", "fc1", "fc2",
+                    "feed_forward", "ffn", "mlp.c_fc", "mlp.c_proj"]
+    return any(kw in name.lower() for kw in MLP_KEYWORDS)
+
+def main(args):
+    print(f"\n=== Checkpoint Difference Mask Finder ===")
+    print(f"Initial model: {args.initial_model}")
+    print(f"Final model:   {args.final_model}")
+    print(f"Sparsity:      {args.sparsity_percent}%")
+
+    # Load state dicts on CPU to avoid prompt OOM
+    initial_sd = load_state_dict(args.initial_model, device="cpu")
+    final_sd = load_state_dict(args.final_model, device="cpu")
+
+    # Detect tied parameters in initial_sd by value equality on 2D weight matrices.
+    # Tied pairs (e.g. embed_tokens.weight == lm_head.weight) share identical initial
+    # weights and identical diffs; scoring both inflates the global budget.
+    # We build a set of names to skip: for every duplicate (same shape AND allclose
+    # initial values), keep only the first-encountered key.
+    print("\nDetecting tied parameters in initial checkpoint...")
+    _tied_skip: set = set()
+    _seen_initial: list = []  # list of (name, tensor) to compare against
+    for name, t in initial_sd.items():
+        if "weight" not in name or t.dim() != 2:
+            continue
+        skip = False
+        for seen_name, seen_t in _seen_initial:
+            if seen_t.shape == t.shape and torch.allclose(seen_t, t, atol=0.0, rtol=0.0):
+                _tied_skip.add(name)
+                skip = True
+                print(f"  Tied: '{name}' == '{seen_name}' — skipping duplicate")
+                break
+        if not skip:
+            _seen_initial.append((name, t))
+    del _seen_initial
+
+    print("\nComputing weight differences (scores)...")
+    scores = {}
+    param_count = 0
+    match_count = 0
+    skipped_non2d = 0
+
+    for name in final_sd:
+        param_count += 1
+        if name not in initial_sd:
+            continue
+        if args.mlp_only and not is_mlp_param(name):
+            continue
+        # Mirror generate_random_mask.py: score only 2D named-weight tensors.
+        # This excludes 1D LayerNorm/QK-norm vectors, bias terms, and any
+        # other non-matrix parameters, matching the random-mask parameter universe.
+        # 2D matrices (linear projections, embeddings) are scored normally.
+        if name in _tied_skip:
+            skipped_non2d += 1
+            continue
+        t = final_sd[name]
+        if "weight" not in name or t.dim() != 2:
+            skipped_non2d += 1
+            continue
+
+        # Use float32 for scores to maintain precision during subtraction
+        diff = (t.to(torch.float32) - initial_sd[name].to(torch.float32)).abs()
+        scores[name] = diff
+        match_count += 1
+
+    print(f"Matched {match_count} 2-D weight tensors for scoring (out of {param_count} total keys).")
+    print(f"Skipped {skipped_non2d} non-2D or non-weight tensors (embeds, norms, biases).")
+    print(f"Key coverage (2-D weights, final ∩ initial): {100.0 * match_count / max(param_count, 1):.2f}%")
+    
+    # Clean up to save memory
+    del initial_sd
+    del final_sd
+    gc.collect()
+
+    device = "cuda" if (torch.cuda.is_available() and not args.force_cpu) else "cpu"
+    print(f"Using device for mask generation: {device}")
+
+    # Generate masks
+    mask_granularity = str(getattr(args, "mask_granularity", "element") or "element").strip().lower()
+    if mask_granularity not in ("element", "block"):
+        raise ValueError(f"--mask-granularity must be one of: element, block (got {mask_granularity!r})")
+
+    if mask_granularity == "block":
+        # Block-wise oracle only applies to 2D tensors (weight matrices).
+        # Non-2D tensors get all-False masks so sparse training focuses on masked matmuls.
+        scores_2d = {k: v for k, v in scores.items() if getattr(v, "dim", lambda: -1)() == 2}
+        scores_other = {k: v for k, v in scores.items() if k not in scores_2d}
+        if int(args.mask_block_size) < 1:
+            raise ValueError(f"--mask-block-size must be >= 1 (got {args.mask_block_size})")
+        red = str(args.mask_block_reduction or "mean").strip().lower()
+        if red not in ("mean", "max"):
+            raise ValueError(f"--mask-block-reduction must be one of: mean, max (got {red!r})")
+        print(
+            f"Mask layout: block (block_size={int(args.mask_block_size)}, reduction={red}) "
+            "(nominal sparsity applies to the block grid; realized weight sparsity may differ slightly)"
+        )
+        masks = build_binary_masks_from_scores_blockwise(
+            scores_2d,
+            sparsity_percent=float(args.sparsity_percent),
+            block_size=int(args.mask_block_size),
+            device=device,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=float(args.min_layer_keep_ratio),
+            reduction=red,
+            add_tie_break_noise=False,
+        )
+        for k, v in scores_other.items():
+            masks[k] = torch.zeros_like(v, dtype=torch.bool).cpu()
+    else:
+        print("Mask layout: element")
+        masks = create_mask_from_scores_gpu_efficient(
+            scores,
+            args.sparsity_percent,
+            device=device,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+
+    # Convert to boolean for space efficiency
+    print("Converting masks to boolean...")
+    for name in masks:
+        masks[name] = masks[name].to(torch.bool)
+
+    # Prepare metadata
+    model_name = os.path.basename(os.path.normpath(args.final_model))
+    output_file = args.output_file or f"masks/checkpoint_diff_ground_truth_{model_name}_sparsity{args.sparsity_percent}pct.pt"
+    
+    metadata = {
+        "method": "checkpoint_difference_ground_truth" if mask_granularity == "element" else "checkpoint_difference_ground_truth_block",
+        "sparsity_percent": args.sparsity_percent,
+        "initial_model": args.initial_model,
+        "final_model": args.final_model,
+        "mlp_only": args.mlp_only,
+        "mask_granularity": mask_granularity,
+        "mask_block_size": int(args.mask_block_size) if mask_granularity == "block" else None,
+        "mask_block_reduction": str(args.mask_block_reduction) if mask_granularity == "block" else None,
+        "non2d_policy": "all_false" if mask_granularity == "block" else None,
+        "device": device,
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
+    }
+
+    # Save
+    save_masks(masks, output_file, metadata)
+    print(f"\n✓ Ground truth mask saved to: {output_file}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Find ground truth mask from initial and final checkpoints.")
+    parser.add_argument("--initial_model", type=str, required=True, help="Path to initial model (HF dir or .pt)")
+    parser.add_argument("--final_model", type=str, required=True, help="Path to final model (HF dir or .pt)")
+    parser.add_argument("--sparsity_percent", type=float, default=90.0, help="Target sparsity percentage")
+    parser.add_argument("--output_file", type=str, default=None, help="Output path for the mask .pt file")
+    parser.add_argument("--mlp_only", action="store_true", help="Only mask MLP parameters")
+    parser.add_argument("--local_pool", action="store_true", help="Use local (per-layer) pooling")
+    parser.add_argument("--min_layer_keep_ratio", type=float, default=DEFAULT_MIN_LAYER_KEEP_RATIO, help="Per-layer keep floor")
+    parser.add_argument("--force_cpu", action="store_true", help="Force CPU for mask generation")
+    parser.add_argument(
+        "--mask-granularity",
+        "--mask_granularity",
+        type=str,
+        default="element",
+        choices=["element", "block"],
+        help="Mask layout: element-wise (default) or block-structured (2D weights only).",
+    )
+    parser.add_argument(
+        "--mask-block-size",
+        "--mask_block_size",
+        type=int,
+        default=16,
+        help="Block size B for block-structured oracle masks (B×B). Used only when --mask-granularity=block.",
+    )
+    parser.add_argument(
+        "--mask-block-reduction",
+        "--mask_block_reduction",
+        type=str,
+        default="mean",
+        choices=["mean", "max"],
+        help="How to pool element scores into blocks. Used only when --mask-granularity=block.",
+    )
+    
+    args = parser.parse_args()
+    main(args)

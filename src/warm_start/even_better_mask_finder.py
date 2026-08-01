@@ -1,0 +1,690 @@
+import torch
+import os
+import sys
+import argparse
+from collections import defaultdict
+import json
+import gc
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from src.utils.mask_utils import (
+    DEFAULT_MIN_LAYER_KEEP_RATIO,
+    create_mask_from_scores_gpu_efficient,
+    compute_jaccard_similarity,
+    pooling_metadata,
+    save_masks,
+)
+
+
+def choose_score_device(runtime_device: str) -> str:
+    """
+    Device for streaming delta accumulation and create_mask_from_scores_gpu_efficient.
+
+    - RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu|cuda forces host or device scoring.
+    - Otherwise, when the main runtime is CUDA and PyTorch sees a GPU, use CUDA so
+      Slurm GPU allocations are not idle during warm masks. Set the env var to ``cpu``
+      if you hit GPU OOM or prefer host RAM on CPU-only partitions.
+    """
+    override = os.environ.get("RL_CASINO_WARM_MASK_SCORE_DEVICE")
+    if override in {"cpu", "cuda"}:
+        if override == "cuda" and not torch.cuda.is_available():
+            return "cpu"
+        return override
+    if runtime_device == "cuda":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return runtime_device
+
+def load_deltas_streaming(delta_log_dir, target_step=None):
+    """
+    Returns iterator of (step, delta_path) instead of loading all into memory.
+    """
+    print(f"Scanning deltas from: {delta_log_dir}")
+    
+    delta_files = [f for f in os.listdir(delta_log_dir) 
+                   if f.startswith("deltas_step_") and f.endswith(".pt")]
+    
+    def extract_step(filename):
+        return int(filename.split("_")[-1].replace(".pt", ""))
+    
+    delta_files = sorted(delta_files, key=extract_step)
+    
+    steps_and_paths = []
+    for delta_file in delta_files:
+        step = extract_step(delta_file)
+        if target_step is not None and step > target_step:
+            continue
+        steps_and_paths.append((step, os.path.join(delta_log_dir, delta_file)))
+    
+    print(f"Found {len(steps_and_paths)} delta files")
+    return steps_and_paths
+
+
+
+
+
+def is_mlp_param(name):
+    # MLP layer name patterns -- covers LLaMA, Gemma, Mistral, Qwen naming conventions
+    MLP_KEYWORDS = ["gate_proj", "up_proj", "down_proj", "fc1", "fc2",
+                    "feed_forward", "ffn", "mlp.c_fc", "mlp.c_proj"]
+    return any(kw in name.lower() for kw in MLP_KEYWORDS)
+
+
+def _tie_fingerprint(t):
+    """Cheap multi-statistic fingerprint; a collision only *triggers* an exact check."""
+    tf = t.detach().float()
+    return (round(float(tf.sum()), 6), round(float((tf * tf).sum()), 6), int(t.numel()))
+
+
+def _select_2d_weight_names(tensors, mlp_only):
+    """Ordered names of the 2-D weight tensors to score, de-duplicating only *genuinely*
+    tied weights (e.g. ``lm_head.weight`` sharing storage with ``embed_tokens.weight``).
+
+    Tie detection is by **exact** equality, guarded by a cheap fingerprint. This replaces an
+    earlier ``(shape, delta.sum())`` hash test that false-positived: with ~99% of a bf16 delta
+    exactly zero, unrelated same-shape attention projections collided on their sum and one was
+    silently dropped, so the mask covered fewer tensors than the model has (see RESULTS.md §3.2,
+    and the CPU-vs-GPU non-determinism it caused). Exact equality merges only weights that are
+    bit-identical — the sole real tie — so distinct q/k/v/o projections are always kept.
+    """
+    names = []
+    seen_by_shape = {}  # shape -> list of (name, tensor, fingerprint) kept so far
+    for name, t in tensors.items():
+        if mlp_only and not is_mlp_param(name):
+            continue
+        if "weight" not in name or t.dim() != 2:
+            continue
+        shape = tuple(t.shape)
+        fp = _tie_fingerprint(t)
+        tied = False
+        for prev_name, prev_t, prev_fp in seen_by_shape.get(shape, []):
+            if fp == prev_fp and torch.equal(t, prev_t):
+                print(f"  Tied (dedup, exact): skipping '{name}' (matches '{prev_name}')")
+                tied = True
+                break
+        if tied:
+            continue
+        seen_by_shape.setdefault(shape, []).append((name, t, fp))
+        names.append(name)
+    return names
+
+def compute_ground_truth_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    device="cuda",
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
+    """
+    Computes ground truth mask by loading only the final checkpoint.
+    """
+    print(f"\n=== Computing Ground Truth Mask (target sparsity: {sparsity_percent}%) ===")
+    
+    final_step, final_path = steps_and_paths[-1]
+    print(f"Loading final checkpoint at step {final_step}")
+    
+    score_device = choose_score_device(device)
+    print(f"Loading final deltas on: {score_device}")
+    final_deltas = torch.load(final_path, map_location=score_device)
+    
+    # Compute scores directly on GPU — restrict to 2D named-weight tensors to match
+    # generate_random_mask.py and avoid 1D norm/bias parameters (e.g. Qwen3 QK-norms)
+    # dominating the global budget. Backwards-compatible: Llama's 1D norms were
+    # already negligible (<0.003% of parameters); now they're consistently excluded.
+    # Also deduplicate tied weights (e.g. Qwen3's lm_head.weight == embed_tokens.weight):
+    # identical delta tensors inflate the global budget and the grad-clip norm.
+    names = _select_2d_weight_names(final_deltas, mlp_only)
+    scores = {name: final_deltas[name].abs() for name in names}
+    
+    masks = create_mask_from_scores_gpu_efficient(
+        scores,
+        sparsity_percent,
+        score_device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
+    del final_deltas
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return masks
+
+
+def compute_absolute_magnitude_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    device="cuda",
+    debug=False,
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
+    """
+    Magnitude mask with streaming: accumulate on GPU, never load all checkpoints at once.
+    """
+    print(f"\n=== Computing Absolute Magnitude Mask (target sparsity: {sparsity_percent}%) ===")
+    print("Processing deltas in streaming fashion...")
+    
+    score_device = choose_score_device(device)
+    print(f"Accumulating magnitude scores on: {score_device}")
+    aggregated = {}
+    param_names = None
+    
+    for step_idx, (step, delta_path) in enumerate(steps_and_paths):
+        print(f"  [{step_idx+1}/{len(steps_and_paths)}] Processing step {step}...")
+        
+        deltas = torch.load(delta_path, map_location=score_device)
+        
+        # Initialize on first pass: 2D weight tensors only, deduplicated by approximate
+        # value hash to skip tied weights (lm_head == embed_tokens on Qwen3).
+        if param_names is None:
+            param_names = _select_2d_weight_names(deltas, mlp_only)
+            for name in param_names:
+                aggregated[name] = torch.zeros_like(deltas[name], device=score_device)
+        
+        # Accumulate on GPU
+        for name in param_names:
+            if name in deltas:
+                aggregated[name] += deltas[name].abs()
+        
+        # Free memory immediately
+        del deltas
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    if debug:
+        print("\nAggregated score statistics (first 5 layers):")
+        for idx, name in enumerate(list(aggregated.keys())[:5]):
+            score = aggregated[name]
+            print(f"  {name}: min={score.min().item():.10f}, max={score.max().item():.10f}, mean={score.mean().item():.10f}")
+    
+    masks = create_mask_from_scores_gpu_efficient(
+        aggregated,
+        sparsity_percent,
+        score_device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
+    del aggregated
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return masks
+
+
+def compute_momentum_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    window_size=5,
+    device="cuda",
+    debug=False,
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
+    """
+    Momentum mask with streaming: only keep previous checkpoint in memory.
+    """
+    print(f"\n=== Computing Momentum-Based Mask (target sparsity: {sparsity_percent}%, window={window_size}) ===")
+    
+    if len(steps_and_paths) < 2:
+        print("Warning: Need at least 2 steps for momentum. Falling back to magnitude.")
+        return compute_absolute_magnitude_mask_streaming(
+            steps_and_paths,
+            sparsity_percent,
+            device,
+            mlp_only=mlp_only,
+            local_pool=local_pool,
+            min_layer_keep_ratio=min_layer_keep_ratio,
+        )
+    
+    score_device = choose_score_device(device)
+    print(f"Accumulating momentum scores on: {score_device}")
+    # Store recent velocities in a sliding window.
+    velocity_window = defaultdict(list)  # {param_name: [v_t-w, ..., v_t]}
+    prev_deltas = None
+    param_names = None
+    
+    print("Computing velocities in streaming fashion...")
+    for step_idx, (step, delta_path) in enumerate(steps_and_paths):
+        print(f"  [{step_idx+1}/{len(steps_and_paths)}] Processing step {step}...")
+        
+        curr_deltas = torch.load(delta_path, map_location=score_device)
+        
+        if param_names is None:
+            param_names = _select_2d_weight_names(curr_deltas, mlp_only)
+
+        if prev_deltas is not None:
+            # Compute velocity: v_t = delta_t - delta_{t-1}
+            for name in param_names:
+                if name in curr_deltas and name in prev_deltas:
+                    velocity = curr_deltas[name] - prev_deltas[name]
+                    velocity_window[name].append(velocity.cpu())
+                    
+                    # Keep only last 'window_size' velocities
+                    if len(velocity_window[name]) > window_size:
+                        old_v = velocity_window[name].pop(0)
+                        del old_v
+        
+        # Update prev_deltas
+        if prev_deltas is not None:
+            del prev_deltas
+        prev_deltas = curr_deltas
+        
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    # Compute momentum scores from accumulated velocities
+    print("Computing momentum scores...")
+    momentum_scores = {}
+    
+    for name in param_names:
+        if name not in velocity_window or len(velocity_window[name]) < 2:
+            # Fallback to magnitude from last checkpoint
+            momentum_scores[name] = prev_deltas[name].abs()
+            continue
+        
+        # Stack velocities on the score device.
+        vel_stack = torch.stack(velocity_window[name]).to(score_device)
+        
+        mean_velocity = vel_stack.mean(dim=0)
+        std_velocity = vel_stack.std(dim=0) + 1e-8
+        
+        consistency = mean_velocity.abs() / std_velocity
+        magnitude = mean_velocity.abs()
+        
+        momentum_scores[name] = magnitude * (1 + consistency)
+        
+        del vel_stack
+    
+    # Clean up velocity window
+    for name in velocity_window.keys():
+        for v in velocity_window[name]:
+            del v
+    velocity_window.clear()
+    
+    if prev_deltas is not None:
+        del prev_deltas
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    if debug:
+        print("\nMomentum score statistics (first 5 layers):")
+        for idx, name in enumerate(list(momentum_scores.keys())[:5]):
+            score = momentum_scores[name]
+            print(f"  {name}: min={score.min().item():.10f}, max={score.max().item():.10f}, mean={score.mean().item():.10f}")
+    
+    masks = create_mask_from_scores_gpu_efficient(
+        momentum_scores,
+        sparsity_percent,
+        score_device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
+    del momentum_scores
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return masks
+
+
+def compute_fisher_mask_streaming(
+    steps_and_paths,
+    sparsity_percent,
+    device="cuda",
+    mlp_only=False,
+    local_pool=False,
+    min_layer_keep_ratio=DEFAULT_MIN_LAYER_KEEP_RATIO,
+):
+    """
+    Fisher approximation with streaming: accumulate sum and sum-of-squares on GPU.
+    Fisher ≈ Var[delta] + |E[delta]| = E[delta²] - E[delta]² + |E[delta]|
+    """
+    print(f"\n=== Computing Fisher-Approximation Mask (target sparsity: {sparsity_percent}%) ===")
+    print("Computing variance in streaming fashion using Welford's algorithm...")
+    
+    score_device = choose_score_device(device)
+    print(f"Accumulating Fisher statistics on: {score_device}")
+    # Accumulate statistics on the score device.
+    count = 0
+    sum_delta = {}
+    sum_delta_sq = {}
+    param_names = None
+    
+    for step_idx, (step, delta_path) in enumerate(steps_and_paths):
+        print(f"  [{step_idx+1}/{len(steps_and_paths)}] Processing step {step}...")
+        
+        deltas = torch.load(delta_path, map_location=score_device)
+        
+        if param_names is None:
+            param_names = _select_2d_weight_names(deltas, mlp_only)
+            for name in param_names:
+                sum_delta[name] = torch.zeros_like(deltas[name], device=score_device)
+                sum_delta_sq[name] = torch.zeros_like(deltas[name], device=score_device)
+        
+        for name in param_names:
+            if name in deltas:
+                sum_delta[name] += deltas[name]
+                sum_delta_sq[name] += deltas[name] ** 2
+        
+        count += 1
+        
+        del deltas
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    # Compute Fisher scores
+    print("Computing Fisher scores...")
+    fisher_scores = {}
+    
+    for name in param_names:
+        mean_delta = sum_delta[name] / count
+        mean_delta_sq = sum_delta_sq[name] / count
+        
+        # Var[X] = E[X²] - E[X]²
+        variance = mean_delta_sq - mean_delta ** 2
+        variance = torch.clamp(variance, min=0)  # Numerical stability
+        
+        fisher_scores[name] = variance + mean_delta.abs()
+    
+    # Clean up
+    del sum_delta, sum_delta_sq
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    masks = create_mask_from_scores_gpu_efficient(
+        fisher_scores,
+        sparsity_percent,
+        score_device,
+        local_pool=local_pool,
+        min_layer_keep_ratio=min_layer_keep_ratio,
+    )
+
+    del fisher_scores
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    return masks
+
+
+
+
+
+def verify_masks(masks, steps_and_paths):
+    """Verify mask shapes match delta shapes."""
+    print("\n=== Verifying Masks ===")
+    
+    if not steps_and_paths:
+        print("No delta files found for verification")
+        return False
+    
+    _, first_path = steps_and_paths[0]
+    first_deltas = torch.load(first_path, map_location='cpu')
+    
+    for name, mask in masks.items():
+        if name not in first_deltas:
+            print(f"Warning: Mask for {name} not in deltas")
+            continue
+        
+        if mask.shape != first_deltas[name].shape:
+            print(f"ERROR: Shape mismatch for {name}")
+            print(f"  Mask shape: {mask.shape}")
+            print(f"  Delta shape: {first_deltas[name].shape}")
+            del first_deltas
+            return False
+    
+    del first_deltas
+    print("✓ All mask shapes verified")
+    return True
+
+
+def main(args):
+    delta_log_dir = args.delta_log_dir or "./delta_logs"
+
+    # Pipeline stage 2a (CPU Slurm partition) sets this; same effect as --force_cpu for diagnostics.
+    if os.environ.get("RL_CASINO_WARM_MASK_SCORE_DEVICE") == "cpu":
+        args.force_cpu = True
+
+    # Create output directory
+    os.makedirs("masks", exist_ok=True)
+
+    if args.force_cpu:
+        print(
+            "Warm masks: CPU scoring (RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu or --force_cpu); "
+            "skipping GPU diagnostics."
+        )
+    else:
+        # Auto-fix CUDA_VISIBLE_DEVICES if not set
+        if os.environ.get('CUDA_VISIBLE_DEVICES') is None:
+            print("⚠️  CUDA_VISIBLE_DEVICES not set, attempting auto-detection...")
+
+            # Check for GPU devices
+            gpu_devices = []
+            for i in range(8):  # Check up to 8 GPUs
+                if os.path.exists(f'/dev/nvidia{i}'):
+                    gpu_devices.append(str(i))
+
+            if gpu_devices:
+                os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(gpu_devices)
+                print(f"✓ Auto-set CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
+                # Force PyTorch to reinitialize CUDA
+                import importlib
+                if 'torch.cuda' in sys.modules:
+                    importlib.reload(torch.cuda)
+            else:
+                print("⚠️  No GPU devices found in /dev/nvidia*")
+
+        # Check GPU availability with diagnostics
+        print("\n=== GPU Diagnostics ===")
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"CUDA version: {torch.version.cuda if torch.cuda.is_available() else 'N/A'}")
+
+        if torch.cuda.is_available():
+            print(f"GPU count: {torch.cuda.device_count()}")
+            print(f"Current device: {torch.cuda.current_device()}")
+            print(f"GPU name: {torch.cuda.get_device_name(0)}")
+            print(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            print("\n⚠️  CUDA not available — continuing with CPU mask scoring (no silent skip).")
+            print(
+                "    For GPU jobs: use srun/sbatch with GPU allocation, "
+                "or set RL_CASINO_WARM_MASK_SCORE_DEVICE=cpu / --force_cpu on CPU nodes."
+            )
+            args.force_cpu = True
+
+    device = "cuda" if (torch.cuda.is_available() and not args.force_cpu) else "cpu"
+    print(f"\n✓ Using device: {device}")
+    
+    # Get streaming iterator
+    steps_and_paths = load_deltas_streaming(delta_log_dir, args.target_step)
+    if not steps_and_paths:
+        print("ERROR: No delta files found; cannot build masks.", file=sys.stderr)
+        sys.exit(1)
+    
+    steps = [s for s, _ in steps_and_paths]
+    print(f"\nFound deltas for steps: {steps}")
+    
+    # Compute ground truth mask if requested
+    ground_truth_masks = None
+    if args.compute_jaccard:
+        print("\n" + "="*60)
+        print("Computing ground truth mask for Jaccard comparison...")
+        print("="*60)
+        all_steps = load_deltas_streaming(delta_log_dir, target_step=None)
+        ground_truth_masks = compute_ground_truth_mask_streaming(
+            all_steps,
+            args.sparsity_percent,
+            device,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+    
+    # Compute masks based on method
+    print("\n" + "="*60)
+    print(f"Computing {args.method} mask...")
+    print("="*60)
+    
+    if args.method == "magnitude":
+        masks = compute_absolute_magnitude_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            device,
+            args.debug,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+        method_suffix = "magnitude"
+    
+    elif args.method == "momentum":
+        masks = compute_momentum_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            args.momentum_window,
+            device,
+            args.debug,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+        method_suffix = f"momentum_w{args.momentum_window}"
+    
+    elif args.method == "fisher":
+        masks = compute_fisher_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            device,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+        method_suffix = "fisher"
+
+    elif args.method == "ground_truth":
+        # "Ground truth" mask: absolute magnitude of the final-step delta only.
+        # This captures the net drift from initial weights to final checkpoint —
+        # the ideal oracle for what actually changed end-to-end.
+        masks = compute_ground_truth_mask_streaming(
+            steps_and_paths,
+            args.sparsity_percent,
+            device,
+            mlp_only=args.mlp_only,
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        )
+        method_suffix = "ground_truth"
+
+    else:
+        print(f"ERROR: Unknown method: {args.method}", file=sys.stderr)
+        sys.exit(1)
+
+    if masks is None:
+        print("ERROR: Mask computation returned no masks.", file=sys.stderr)
+        sys.exit(1)
+
+    # Verify masks
+    if not verify_masks(masks, steps_and_paths):
+        print("ERROR: Mask verification failed.", file=sys.stderr)
+        sys.exit(1)
+    
+    # Compute Jaccard similarity if requested
+    jaccard_results = None
+    if args.compute_jaccard and ground_truth_masks is not None:
+        jaccard_results = compute_jaccard_similarity(masks, ground_truth_masks)
+    
+    # Save masks
+    step_suffix = f"_step{args.target_step}" if args.target_step else ""
+    model_str = os.path.basename(os.path.normpath(delta_log_dir)).replace("delta_logs_", "")
+    output_file = args.output_file or f"masks/warm_{method_suffix}_{model_str}_sparsity{args.sparsity_percent}pct{step_suffix}.pt"
+    
+    metadata = {
+        "method": args.method,
+        "sparsity_percent": args.sparsity_percent,
+        "target_step": args.target_step,
+        "num_steps_used": len(steps_and_paths),
+        "steps": steps,
+        "device": device,
+        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "score_device": choose_score_device(device),
+        "mlp_only": args.mlp_only,
+        **pooling_metadata(
+            local_pool=args.local_pool,
+            min_layer_keep_ratio=args.min_layer_keep_ratio,
+        ),
+    }
+    
+    if args.method == "momentum":
+        metadata["momentum_window"] = args.momentum_window
+    
+    if jaccard_results:
+        metadata["jaccard_similarity"] = {
+            "aggregate": jaccard_results["aggregate_jaccard"],
+            "mean": jaccard_results["mean_jaccard"],
+            "min": jaccard_results["min_jaccard"],
+            "max": jaccard_results["max_jaccard"],
+        }
+    
+    save_masks(masks, output_file, metadata)
+    
+    if jaccard_results:
+        jaccard_file = output_file.replace(".pt", "_jaccard.json")
+        with open(jaccard_file, "w") as f:
+            json.dump(jaccard_results, f, indent=2)
+        print(f"Detailed Jaccard results saved to: {jaccard_file}")
+    
+    print("\n✓ Mask generation complete!")
+    if torch.cuda.is_available():
+        print(f"Peak GPU memory allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="GPU-accelerated sparse mask generation with streaming for large models"
+    )
+    parser.add_argument("--delta_log_dir", type=str, default="./delta_logs")
+    parser.add_argument("--method", type=str, choices=["magnitude", "momentum", "fisher", "ground_truth"], default="magnitude")
+    parser.add_argument("--sparsity_percent", type=float, default=90.0)
+    parser.add_argument("--target_step", type=int, default=None)
+    parser.add_argument("--momentum_window", type=int, default=5)
+    parser.add_argument("--compute_jaccard", action="store_true")
+    parser.add_argument("--output_file", type=str, default=None)
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--mlp_only",
+        action="store_true",
+        help="Only score and compute masks for MLP parameters (default: full model)",
+    )
+    parser.add_argument(
+        "--local_pool",
+        action="store_true",
+        help=(
+            "Per-weight-matrix top-k (uniform sparsity per matrix). "
+            "Default: global pooling with a small per-tensor floor."
+        ),
+    )
+    parser.add_argument(
+        "--min_layer_keep_ratio",
+        type=float,
+        default=DEFAULT_MIN_LAYER_KEEP_RATIO,
+        help=(
+            "Small per-tensor keep floor for hybrid global masking. "
+            "Set to 0.0 for pure global selection."
+        ),
+    )
+    parser.add_argument("--force_cpu", action="store_true", help="Force CPU execution (slow but works without GPU)")
+    
+    args = parser.parse_args()
+    main(args)
+
+# Example usage:
+# python gpu_mask_finder.py --method magnitude --sparsity_percent 90.0 --target_step 100 --compute_jaccard
+# python gpu_mask_finder.py --method momentum --sparsity_percent 90.0 --momentum_window 10
+# python gpu_mask_finder.py --method fisher --sparsity_percent 90.0
