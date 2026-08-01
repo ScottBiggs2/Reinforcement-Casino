@@ -56,6 +56,11 @@ QUANTITY_META = {
         "short": r"$\tilde m_i$",
         "name": "certifiability margin (relative to the selection boundary)",
     },
+    "margin_sel": {
+        "xlabel": r"$m_i = |\,s_i - \hat\tau_\rho(s)\,|$",
+        "short": r"$m_i$",
+        "name": "certifiability margin on the selection score (tie-break included)",
+    },
     "margin_raw": {
         "xlabel": r"$m_i = |\,s_i - \hat\tau_\rho(s)\,|$",
         "short": r"$m_i$",
@@ -216,7 +221,20 @@ def ecdf(counts: np.ndarray, log_edges: np.ndarray, under: int, total: float) ->
     return centers, cum
 
 
-def xlim_for(series: Sequence[Tuple[np.ndarray, np.ndarray]], mass: float, floor: float) -> Tuple[float, float]:
+def xlim_for(
+    series: Sequence[Tuple[np.ndarray, np.ndarray]],
+    mass: float,
+    floor: float,
+    low_mass: float = 1e-4,
+) -> Tuple[float, float]:
+    """Union range over the plotted series, quantile-trimmed at BOTH ends.
+
+    The low end is taken from a quantile rather than the first occupied bin: a handful of
+    coordinates where s_i happens to land on tau put isolated counts many decades below the bulk,
+    and anchoring to them collapses the informative region. It must not be a fixed floor either --
+    a hard 1e-14 clamp cut off the s_i = 0 mass entirely, which sits at m_i = tau and is the
+    dominant feature of these distributions.
+    """
     lo, hi = np.inf, 0.0
     for counts, log_edges in series:
         total = float(counts.sum())
@@ -228,7 +246,9 @@ def xlim_for(series: Sequence[Tuple[np.ndarray, np.ndarray]], mass: float, floor
         cum = np.cumsum(counts.astype(np.float64)) / total
         j = min(int(np.searchsorted(cum, mass)), len(counts) - 1)
         hi = max(hi, float(10 ** log_edges[j + 1]) * 1.15)
-        lo = min(lo, float(10 ** log_edges[nz[0]]) * 0.85)
+        jl = min(int(np.searchsorted(cum, low_mass)), len(counts) - 1)
+        lo_j = min(jl, int(nz[0]))
+        lo = min(lo, float(10 ** log_edges[lo_j]) * 0.85)
     if hi <= 0:
         return floor, 1.0
     return max(lo, floor), hi
@@ -306,10 +326,9 @@ def draw_panel(
         style_axes(ax)
         return 0
 
-    floor = 1e-6 if quantity.endswith("_rel") else 1e-14
-    lo, hi = xlim_for(plotted, mass=0.9995, floor=floor)
+    lo, hi = xlim_for(plotted, mass=0.9995, floor=1e-40, low_mass=args_low_mass())
     ax.set_xscale("log")
-    ax.set_xlim(lo, hi)
+    ax.set_xlim(_XLIM[0] if _XLIM[0] else lo, _XLIM[1] if _XLIM[1] else hi)
     style_axes(ax)
 
     # Selective annotation instead of labelling every curve: for tau-relative margins the value 1
@@ -375,9 +394,11 @@ def subtitle_for(cell: Cell, rho: float, quantity: str) -> str:
             rf"$\hat\tau_\rho$ from the hybrid global selection (floor "
             rf"{cell.meta.get('hybrid_min_layer_keep_ratio')})"
         )
-    deg = cell.degenerate_arms(rho)
-    if deg:
-        bits.append("omitted as degenerate: " + ", ".join(deg))
+    # Only the tau-normalized quantities are gated on the flag; margin_raw plots every arm.
+    if quantity.endswith("_rel") or quantity.startswith("margin_rel_sig"):
+        deg = cell.degenerate_arms(rho)
+        if deg:
+            bits.append("omitted as degenerate: " + ", ".join(deg))
     return "  ·  ".join(str(b) for b in bits)
 
 
@@ -443,7 +464,7 @@ def figure_combined(cells: Sequence[Cell], rho: float, quantity: str, out_dir: P
             axes[r][1].set_title(f"{cell.label} — cumulative", color=INK_PRIMARY, loc="left", pad=10)
             if r == 0 and n:
                 legend_on(axes[r][1])
-            note = cell.degenerate_arms(rho)
+            note = cell.degenerate_arms(rho) if quantity.endswith("_rel") or quantity.startswith("margin_rel_sig") else []
             if note:
                 axes[r][0].text(
                     0.0,
@@ -527,6 +548,14 @@ def _fmt(v) -> str:
 # ---------------------------------------------------------------- cli
 
 
+_LOW_MASS = [1e-4]
+_XLIM = [None, None]
+
+
+def args_low_mass() -> float:
+    return _LOW_MASS[0]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Certifiability-margin figures.")
     ap.add_argument(
@@ -548,6 +577,9 @@ def main() -> None:
     )
     ap.add_argument("--title", default=None)
     ap.add_argument("--mathtext", default="dejavusans", choices=("dejavusans", "cm", "stix"))
+    ap.add_argument("--xmin", type=float, default=None, help="Override the left x limit.")
+    ap.add_argument("--xmax", type=float, default=None, help="Override the right x limit.")
+    ap.add_argument("--low-mass", type=float, default=1e-4, help="Quantile trim at the low end.")
     ap.add_argument("--no-combined", action="store_true")
     args = ap.parse_args()
 
@@ -563,11 +595,13 @@ def main() -> None:
     if not specs:
         ap.error("pass --analysis-dir or at least one --cell")
 
+    _LOW_MASS[0] = float(args.low_mass)
+    _XLIM[0], _XLIM[1] = args.xmin, args.xmax
     cells = [Cell(d, label) for label, d in specs]
     out_dir = Path(args.out_dir) if args.out_dir else cells[0].path / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    quantities = args.quantity or ["margin_rel_sig_oracle", "margin_rel", "margin_raw"]
+    quantities = args.quantity or ["margin_sel", "margin_rel_sig_oracle", "margin_rel", "margin_raw"]
     rhos = [args.rho] if args.rho is not None else sorted({r for c in cells for r in c.sparsities()})
     if not rhos:
         raise SystemExit("No sparsity values found in the analysis metadata.")

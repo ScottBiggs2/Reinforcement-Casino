@@ -318,3 +318,43 @@ def test_degeneracy_flag_decomposes_and_is_recomputed_on_load(tmp_path):
     tr = reloaded[(arm_name, float(rho_s))]
     assert tr.tau_at_noise_floor is True, victim
     assert tr.tau_degenerate is True, victim
+
+
+def test_selection_margin_is_spread_by_the_tie_break_and_raw_margin_is_not(tmp_path):
+    """The shape difference against the published Figure 5.
+
+    mask_score_gap_analysis.py plots the margin of the SELECTION score, so an s_i = 0 coordinate
+    contributes |noise_i - tau| and the curve spreads over decades; the raw-score margin puts all of
+    those coordinates on tau exactly, collapsing the curve to a step. Both are emitted so the two
+    definitions can be compared directly.
+    """
+    out_dir = _run_pipeline(tmp_path, zero_frac=0.995, tag="out_seldef")
+    data = np.load(out_dir / "certifiability_margins.npz")
+    diag = json.loads((out_dir / "certifiability_diagnostics.json").read_text())
+
+    checked = 0
+    for arm in ("warm_k50", "warm_k200", "oracle"):
+        tag = f"{arm}_rho97.5"
+        rec = diag["arms"].get(tag)
+        if rec is None or rec["frac_score_exactly_zero"] < 0.5:
+            continue
+        raw = data[f"{tag}_margin_raw_counts"]
+        sel = data[f"{tag}_margin_sel_counts"]
+
+        def _total(q):
+            return int(
+                data[f"{tag}_{q}_counts"].sum()
+                + data[f"{tag}_{q}_underflow"][0]
+                + data[f"{tag}_{q}_overflow"][0]
+            )
+
+        # Same coordinates, different quantity. Totals must include the underflow bin: a coordinate
+        # whose noise draw equals tau gives margin_sel == 0, which is underflow, not a bin count.
+        assert _total("margin_raw") == _total("margin_sel"), tag
+        n_raw = int((raw > 0).sum())
+        n_sel = int((sel > 0).sum())
+        assert n_sel > n_raw, (tag, n_raw, n_sel)   # noise spreads the selection margin
+        # the raw margin piles the whole zero mass into essentially one bin
+        assert raw.max() / raw.sum() > 0.5, (tag, raw.max() / raw.sum())
+        checked += 1
+    assert checked >= 2, "fixture did not produce enough high-zero-mass arms to check"

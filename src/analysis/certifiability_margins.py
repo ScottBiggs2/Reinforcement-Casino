@@ -83,7 +83,7 @@ from src.warm_start.even_better_mask_finder import (  # noqa: E402
 # 3: arm shards carry the conditional (signal-restricted) margin histograms, and were written with
 # the noise-floor _tau_usable gate. A version-2 shard is silently missing both, so merging one would
 # either KeyError or quietly emit margin_rel for arms whose tau is noise -- reject it by version.
-SHARD_VERSION = 3
+SHARD_VERSION = 4
 DEFAULT_MILESTONES = "50,100,150,200"
 DEFAULT_SPARSITIES = "97.5"
 # Production hybrid floor (mask_utils.DEFAULT_MIN_LAYER_KEEP_RATIO, and the Olmo3 mask slurm scripts).
@@ -529,6 +529,13 @@ class ArmMeasurement:
     arm: str
     sparsity_percent: float
     margin_raw: LogHist
+    # margin on the SELECTION score, i.e. raw score + tie-break perturbation. This is the quantity
+    # mask_score_gap_analysis.py plots (margin_m = (m_sel - tau).abs()) and therefore the one the
+    # published Figure 5 shows. For an s_i = 0 coordinate it gives |noise_i - tau|, which spreads
+    # over decades because noise_i varies per coordinate -- the width of those curves IS the noise
+    # distribution. margin_raw excludes the perturbation, so the same coordinates all land on tau
+    # exactly and the curve becomes a step.
+    margin_sel: LogHist
     margin_rel: LogHist
     gap_raw: LogHist
     gap_rel: LogHist
@@ -542,6 +549,7 @@ class ArmMeasurement:
     margin_rel_sig_self: LogHist
     margin_rel_sig_oracle: LogHist
     m_margin_raw: Moments
+    m_margin_sel: Moments
     m_margin_rel: Moments
     m_gap_raw: Moments
     m_gap_rel: Moments
@@ -564,12 +572,14 @@ class ArmMeasurement:
             "arm": self.arm,
             "sparsity_percent": float(self.sparsity_percent),
             "margin_raw": self.margin_raw.to_dict(),
+            "margin_sel": self.margin_sel.to_dict(),
             "margin_rel": self.margin_rel.to_dict(),
             "gap_raw": self.gap_raw.to_dict(),
             "gap_rel": self.gap_rel.to_dict(),
             "margin_rel_sig_self": self.margin_rel_sig_self.to_dict(),
             "margin_rel_sig_oracle": self.margin_rel_sig_oracle.to_dict(),
             "m_margin_raw": self.m_margin_raw.to_dict(),
+            "m_margin_sel": self.m_margin_sel.to_dict(),
             "m_margin_rel": self.m_margin_rel.to_dict(),
             "m_gap_raw": self.m_gap_raw.to_dict(),
             "m_gap_rel": self.m_gap_rel.to_dict(),
@@ -601,12 +611,14 @@ def _new_measurement(arm: str, rho: float, bins: int) -> ArmMeasurement:
         arm=arm,
         sparsity_percent=rho,
         margin_raw=LogHist(num_bins=bins, log_min=-30.0, log_max=4.0),
+        margin_sel=LogHist(num_bins=bins, log_min=-30.0, log_max=4.0),
         margin_rel=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
         gap_raw=LogHist(num_bins=bins, log_min=-30.0, log_max=4.0),
         gap_rel=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
         margin_rel_sig_self=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
         margin_rel_sig_oracle=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
         m_margin_raw=Moments(),
+        m_margin_sel=Moments(),
         m_margin_rel=Moments(),
         m_gap_raw=Moments(),
         m_gap_rel=Moments(),
@@ -637,6 +649,17 @@ def measure_arm(
         n_pos_local = int((s_raw > 0).sum().item())
         n_zero_local = int((s_raw == 0).sum().item())
 
+        # Selection vector: exactly what the top-k ranking saw. Regenerated deterministically from
+        # the tensor name, so it matches the vector the tau stage ranked.
+        tb_scale = next(iter(taus.values())).tie_break_scale if taus else 0.0
+        s_sel = s_raw + 0.0
+        if tb_scale > 0.0:
+            g_sel = torch.Generator(device="cpu")
+            g_sel.manual_seed(
+                stream_seed("tie_break", arm.kind, ctx.random_seed if arm.kind == "random" else 0, name)
+            )
+            add_tie_break_noise_(s_sel, scale=tb_scale, generator=g_sel)
+
         for rho, tr in taus.items():
             m = out[rho]
             m.n_score_zero += n_zero_local
@@ -648,6 +671,10 @@ def measure_arm(
             if math.isfinite(tau):
                 m.margin_raw.update(margin_raw)
                 m.m_margin_raw.update(margin_raw)
+                margin_sel = (s_sel - tau).abs()
+                m.margin_sel.update(margin_sel)
+                m.m_margin_sel.update(margin_sel)
+                del margin_sel
             m.gap_raw.update(gap_raw)
             m.m_gap_raw.update(gap_raw)
 
@@ -686,22 +713,15 @@ def measure_arm(
 
             # How much of the keep set is decided by signal vs by the tie-break (RESULTS.md §3.1).
             if math.isfinite(tau):
-                sel = s_raw + 0.0
-                if tr.tie_break_scale > 0.0:
-                    g = torch.Generator(device="cpu")
-                    g.manual_seed(
-                        stream_seed("tie_break", arm.kind, ctx.random_seed if arm.kind == "random" else 0, name)
-                    )
-                    add_tie_break_noise_(sel, scale=tr.tie_break_scale, generator=g)
-                kept = sel >= tau
+                kept = s_sel >= tau
                 m.n_at_or_above_tau += int(kept.sum().item())
                 m.selected_with_zero_score += int((kept & (s_raw == 0)).sum().item())
                 m.nonzero_captured += int((kept & (s_raw > 0)).sum().item())
                 m.nonzero_total += n_pos_local
-                del sel, kept
+                del kept
             del margin_raw
 
-        del s_raw, s_star, gap_raw
+        del s_raw, s_sel, s_star, gap_raw
         if (ti + 1) % 40 == 0:
             print(f"    {arm.name}: {ti + 1}/{len(ctx.names)} tensors", flush=True)
             gc.collect()
@@ -751,6 +771,7 @@ def write_merged_artifacts(
             tag = f"{arm.name}_rho{rho:g}"
             for field_name, hist, mom in (
                 ("margin_raw", m.margin_raw, m.m_margin_raw),
+                ("margin_sel", m.margin_sel, m.m_margin_sel),
                 ("margin_rel", m.margin_rel, m.m_margin_rel),
                 ("gap_raw", m.gap_raw, m.m_gap_raw),
                 ("gap_rel", m.gap_rel, m.m_gap_rel),
@@ -1064,12 +1085,14 @@ def stage_merge(args: argparse.Namespace) -> None:
                 arm=str(d["arm"]),
                 sparsity_percent=float(d["sparsity_percent"]),
                 margin_raw=LogHist.from_dict(d["margin_raw"]),
+                margin_sel=LogHist.from_dict(d["margin_sel"]),
                 margin_rel=LogHist.from_dict(d["margin_rel"]),
                 gap_raw=LogHist.from_dict(d["gap_raw"]),
                 gap_rel=LogHist.from_dict(d["gap_rel"]),
                 margin_rel_sig_self=LogHist.from_dict(d["margin_rel_sig_self"]),
                 margin_rel_sig_oracle=LogHist.from_dict(d["margin_rel_sig_oracle"]),
                 m_margin_raw=Moments.from_dict(d["m_margin_raw"]),
+                m_margin_sel=Moments.from_dict(d["m_margin_sel"]),
                 m_margin_rel=Moments.from_dict(d["m_margin_rel"]),
                 m_gap_raw=Moments.from_dict(d["m_gap_raw"]),
                 m_gap_rel=Moments.from_dict(d["m_gap_rel"]),
