@@ -272,3 +272,49 @@ def test_tie_break_streams_are_independent_across_arms(tmp_path):
     # Independent streams: the rank correlation between them should be ~0, not 1.
     r = float(_t.corrcoef(_t.stack([rnd.double(), tie.double()]))[0, 1].item())
     assert abs(r) < 0.05, r
+
+
+def test_conditional_histograms_match_the_oracle_support(tmp_path):
+    """The conditioned figure must be restricted to exactly the coordinates that moved."""
+    out_dir = _run_pipeline(tmp_path, tag="out_cond")
+    diag = json.loads((out_dir / "certifiability_diagnostics.json").read_text())
+    for rho in ("97.5",):
+        oracle = diag["arms"][f"oracle_rho{rho}"]
+        n_oracle_support = oracle["tau"]["n_total"] - int(
+            round(oracle["frac_score_exactly_zero"] * oracle["tau"]["n_total"])
+        )
+        for arm in ("oracle", "warm_k50", "warm_k200", "random_seed42"):
+            rec = diag["arms"][f"{arm}_rho{rho}"]
+            if rec["n_conditioned_on_oracle_support"] == 0:
+                continue
+            # every arm conditions on the SAME reference set, so the counts must agree
+            assert abs(rec["n_conditioned_on_oracle_support"] - n_oracle_support) <= 1, (arm, rec)
+            # each arm's own support is its own, and never larger than the coverage
+            assert rec["n_conditioned_on_self_support"] <= rec["tau"]["n_total"]
+
+
+def test_degeneracy_flag_decomposes_and_is_recomputed_on_load(tmp_path):
+    """The flag is a pure function of stored fields, so an existing tau JSON is corrected at load
+    time rather than by rerunning the 10-hour tau stage."""
+    out_dir = _run_pipeline(tmp_path, tag="out_flag")
+    taus = json.loads((out_dir / "certifiability_tau.json").read_text())["taus"]
+    for key, rec in taus.items():
+        assert rec["tau_degenerate"] == (rec["support_below_budget"] or rec["tau_at_noise_floor"]), key
+        assert "tau_over_noise" in rec, key
+
+    # Hand-edit a tau JSON to the *old* (support-only) verdict and confirm the loader repairs it.
+    import src.analysis.certifiability_margins as _cm
+
+    p = out_dir / "certifiability_tau.json"
+    payload = json.loads(p.read_text())
+    victim = next(k for k, v in payload["taus"].items() if v["tau_at_noise_floor"])
+    payload["taus"][victim]["tau_degenerate"] = False
+    payload["taus"][victim]["tau_at_noise_floor"] = False
+    p.write_text(json.dumps(payload))
+
+    arms = _cm.build_arm_specs(MILESTONES, [42])
+    reloaded = _cm._load_taus(out_dir, arms, [97.5, 50])
+    arm_name, rho_s = victim.split("|")
+    tr = reloaded[(arm_name, float(rho_s))]
+    assert tr.tau_at_noise_floor is True, victim
+    assert tr.tau_degenerate is True, victim

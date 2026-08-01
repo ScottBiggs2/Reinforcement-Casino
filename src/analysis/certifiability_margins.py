@@ -70,6 +70,7 @@ from src.analysis.certifiability_margin import (  # noqa: E402
     global_keep_count,
     scaled_hybrid_floor_counts_per_layer,
     streaming_exact_kth_largest,
+    tau_is_noise_determined,
     tie_break_scale,
 )
 from src.analysis.mask_score_gap_analysis import build_magnitude_milestone_caches  # noqa: E402
@@ -414,10 +415,36 @@ class TauResult:
     tie_break_scale: float
     tau_rule: str
     info: Dict[str, object]
+    # The two independent reasons a boundary can be meaningless, kept separate because they do not
+    # imply one another: measured on Olmo-3-7B at rho=99% the support was 88.6 M against a 73.0 M
+    # budget (so support_below_budget is False) while tau still landed at 7.3e-15, inside the noise.
+    support_below_budget: bool = False
+    tau_at_noise_floor: bool = False
+
+    @property
+    def tau_over_noise(self) -> float:
+        """tau in units of the tie-break amplitude — the number to report next to the flag."""
+        if not (self.tie_break_scale > 0.0):
+            return float("inf")
+        if not math.isfinite(self.tau):
+            return float("nan")
+        return float(self.tau) / float(self.tie_break_scale)
+
+    def refresh_degeneracy(self) -> "TauResult":
+        """Recompute the flags from the stored fields.
+
+        Pure function of (tau, tie_break_scale, n_raw_positive, keep_count), so an existing
+        certifiability_tau.json gets the corrected flag without rerunning the tau stage.
+        """
+        self.support_below_budget = bool(self.n_raw_positive < self.keep_count)
+        self.tau_at_noise_floor = bool(tau_is_noise_determined(self.tau, self.tie_break_scale))
+        self.tau_degenerate = bool(self.support_below_budget or self.tau_at_noise_floor)
+        return self
 
     def to_dict(self) -> Dict[str, object]:
-        d = dict(self.__dict__)
+        d = {k: v for k, v in self.__dict__.items()}
         d["info"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in self.info.items()}
+        d["tau_over_noise"] = self.tau_over_noise
         return d
 
 
@@ -446,8 +473,9 @@ def compute_tau(
         floor_total = int(sum(floors))
     r_remaining = int(keep - floor_total)
 
-    # Degeneracy is a property of the *raw* scores: if fewer coordinates carry signal than the keep
-    # budget demands, the true boundary is 0 and only the tie-break decides the remainder.
+    # Only one of the two degeneracy conditions is knowable before tau: if fewer coordinates carry
+    # signal than the budget demands, the boundary must be 0. The other -- tau landing inside the
+    # tie-break noise -- is checked by refresh_degeneracy() once tau is known.
     degenerate = bool(n_raw_positive < keep)
 
     if r_remaining <= 0 or n_total <= 0:
@@ -465,7 +493,7 @@ def compute_tau(
             tie_break_scale=scale,
             tau_rule=tau_rule,
             info={"status": "no_global_phase_budget"},
-        )
+        ).refresh_degeneracy()
 
     def source() -> Iterable[torch.Tensor]:
         return selection_chunks(
@@ -487,7 +515,7 @@ def compute_tau(
         tie_break_scale=scale,
         tau_rule=tau_rule,
         info=dict(info),
-    )
+    ).refresh_degeneracy()
 
 
 # ------------------------------------------------------------------ margins / gaps / cert
@@ -501,10 +529,21 @@ class ArmMeasurement:
     margin_rel: LogHist
     gap_raw: LogHist
     gap_rel: LogHist
+    # m~ restricted to coordinates that carry signal. Unconditionally, ~99% of coordinates have
+    # s_i = 0 -> m~ = 1 exactly, so the full distribution is a delta at 1 and every arm's curve
+    # collapses onto every other's; all of the k-dependence lives in the ~1% that moved.
+    #   _self   : conditioned on this arm's own support (s_i > 0)
+    #   _oracle : conditioned on the ORACLE's support (s*_i > 0) -- one fixed reference set, so
+    #             curves are comparable across arms, and a warm arm that missed a real movement
+    #             still contributes its m~ = 1 there rather than silently dropping out.
+    margin_rel_sig_self: LogHist
+    margin_rel_sig_oracle: LogHist
     m_margin_raw: Moments
     m_margin_rel: Moments
     m_gap_raw: Moments
     m_gap_rel: Moments
+    m_margin_rel_sig_self: Moments
+    m_margin_rel_sig_oracle: Moments
     cert_numer: int = 0
     cert_denom: int = 0
     selected_with_zero_score: int = 0
@@ -525,10 +564,14 @@ class ArmMeasurement:
             "margin_rel": self.margin_rel.to_dict(),
             "gap_raw": self.gap_raw.to_dict(),
             "gap_rel": self.gap_rel.to_dict(),
+            "margin_rel_sig_self": self.margin_rel_sig_self.to_dict(),
+            "margin_rel_sig_oracle": self.margin_rel_sig_oracle.to_dict(),
             "m_margin_raw": self.m_margin_raw.to_dict(),
             "m_margin_rel": self.m_margin_rel.to_dict(),
             "m_gap_raw": self.m_gap_raw.to_dict(),
             "m_gap_rel": self.m_gap_rel.to_dict(),
+            "m_margin_rel_sig_self": self.m_margin_rel_sig_self.to_dict(),
+            "m_margin_rel_sig_oracle": self.m_margin_rel_sig_oracle.to_dict(),
             "cert_numer": int(self.cert_numer),
             "cert_denom": int(self.cert_denom),
             "selected_with_zero_score": int(self.selected_with_zero_score),
@@ -558,10 +601,14 @@ def _new_measurement(arm: str, rho: float, bins: int) -> ArmMeasurement:
         margin_rel=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
         gap_raw=LogHist(num_bins=bins, log_min=-30.0, log_max=4.0),
         gap_rel=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
+        margin_rel_sig_self=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
+        margin_rel_sig_oracle=LogHist(num_bins=bins, log_min=-12.0, log_max=8.0),
         m_margin_raw=Moments(),
         m_margin_rel=Moments(),
         m_gap_raw=Moments(),
         m_gap_rel=Moments(),
+        m_margin_rel_sig_self=Moments(),
+        m_margin_rel_sig_oracle=Moments(),
     )
 
 
@@ -615,7 +662,20 @@ def measure_arm(
                 m.m_gap_rel.update(gap_rel)
                 m.cert_numer += int((gap_rel < margin_rel).sum().item())
                 m.cert_denom += int(gap_rel.numel())
-                del s_rel, margin_rel, gap_rel
+
+                sig_self = s_raw > 0
+                sig_oracle = s_star > 0
+                if bool(sig_self.any()):
+                    mm = margin_rel[sig_self]
+                    m.margin_rel_sig_self.update(mm)
+                    m.m_margin_rel_sig_self.update(mm)
+                    del mm
+                if bool(sig_oracle.any()):
+                    mo = margin_rel[sig_oracle]
+                    m.margin_rel_sig_oracle.update(mo)
+                    m.m_margin_rel_sig_oracle.update(mo)
+                    del mo
+                del sig_self, sig_oracle, s_rel, margin_rel, gap_rel
             elif math.isfinite(tau):
                 # Fall back to raw-space certifiability so the number still exists when tau == 0.
                 m.cert_numer += int((gap_raw < margin_raw).sum().item())
@@ -691,6 +751,8 @@ def write_merged_artifacts(
                 ("margin_rel", m.margin_rel, m.m_margin_rel),
                 ("gap_raw", m.gap_raw, m.m_gap_raw),
                 ("gap_rel", m.gap_rel, m.m_gap_rel),
+                ("margin_rel_sig_self", m.margin_rel_sig_self, m.m_margin_rel_sig_self),
+                ("margin_rel_sig_oracle", m.margin_rel_sig_oracle, m.m_margin_rel_sig_oracle),
             ):
                 npz[f"{tag}_{field_name}_counts"] = hist.counts
                 npz[f"{tag}_{field_name}_log_edges"] = hist.edges
@@ -743,6 +805,11 @@ def write_merged_artifacts(
                 "frac_score_exactly_zero": (
                     m.n_score_zero / m.n_score_total if m.n_score_total else float("nan")
                 ),
+                "support_below_budget": tr.support_below_budget,
+                "tau_at_noise_floor": tr.tau_at_noise_floor,
+                "tau_over_noise": tr.tau_over_noise,
+                "n_conditioned_on_self_support": m.m_margin_rel_sig_self.n,
+                "n_conditioned_on_oracle_support": m.m_margin_rel_sig_oracle.n,
                 "frac_margin_rel_exactly_at_boundary": (
                     m.m_margin_rel.n_zero / m.m_margin_rel.n if m.m_margin_rel.n else float("nan")
                 ),
@@ -927,7 +994,8 @@ def _load_taus(out_dir: Path, arms: Sequence[ArmSpec], sparsities: Sequence[floa
                 raise KeyError(f"tau JSON has no entry for {key}; rerun the tau stage with matching args")
             d = dict(raw[key])
             d["info"] = dict(d.get("info") or {})
-            out[(arm.name, float(rho))] = TauResult(**d)
+            d.pop("tau_over_noise", None)  # derived property, not a field
+            out[(arm.name, float(rho))] = TauResult(**d).refresh_degeneracy()
     return out
 
 
@@ -991,10 +1059,14 @@ def stage_merge(args: argparse.Namespace) -> None:
                 margin_rel=LogHist.from_dict(d["margin_rel"]),
                 gap_raw=LogHist.from_dict(d["gap_raw"]),
                 gap_rel=LogHist.from_dict(d["gap_rel"]),
+                margin_rel_sig_self=LogHist.from_dict(d["margin_rel_sig_self"]),
+                margin_rel_sig_oracle=LogHist.from_dict(d["margin_rel_sig_oracle"]),
                 m_margin_raw=Moments.from_dict(d["m_margin_raw"]),
                 m_margin_rel=Moments.from_dict(d["m_margin_rel"]),
                 m_gap_raw=Moments.from_dict(d["m_gap_raw"]),
                 m_gap_rel=Moments.from_dict(d["m_gap_rel"]),
+                m_margin_rel_sig_self=Moments.from_dict(d["m_margin_rel_sig_self"]),
+                m_margin_rel_sig_oracle=Moments.from_dict(d["m_margin_rel_sig_oracle"]),
                 cert_numer=int(d["cert_numer"]),
                 cert_denom=int(d["cert_denom"]),
                 selected_with_zero_score=int(d["selected_with_zero_score"]),

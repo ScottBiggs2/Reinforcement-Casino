@@ -204,3 +204,50 @@ def test_normalized_margin_puts_zero_score_coordinates_at_one():
 def test_tau_relative_refuses_degenerate_tau():
     with pytest.raises(ValueError):
         tau_relative(torch.ones(4), 0.0)
+
+
+# ---------------------------------------------------------------- degeneracy flag
+
+
+def test_noise_floor_flag_catches_the_real_olmo_rho99_rows():
+    """Regression on measured values.
+
+    Olmo-3-7B at rho=99% had raw support 82.3-90.3 M against a 73.0 M keep budget, so the
+    support-vs-budget test passed all four warm arms -- yet tau landed at 1e-16..1e-14, inside the
+    tie-break noise, because only 53.6 M of the 71.7 M post-floor positives exceed 1e-14 (the warm
+    score's tail runs below any fixed relative amplitude; RESULTS.md 3.0). The flag must key on tau
+    vs the noise amplitude.
+    """
+    from src.analysis.certifiability_margin import tau_is_noise_determined as f
+
+    # (tau, max|s|) measured on Olmo-3-7B, tie-break amplitude = max|s| * 1e-12
+    noise = [
+        (2.866e-16, 1.029968e-04),  # warm k=50   rho=99
+        (1.413e-15, 4.520416e-04),  # warm k=100  rho=99
+        (3.640e-15, 1.085281e-03),  # warm k=150  rho=99
+        (7.258e-15, 2.014160e-03),  # warm k=200  rho=99
+        (2.165e-16, 1.029968e-04),  # warm k=50   rho=97.5
+        (4.348e-15, 2.014160e-03),  # warm k=200  rho=97.5
+    ]
+    for tau, mx in noise:
+        assert f(tau, mx * 1e-12), (tau, mx)
+
+    real = [
+        (1.071e-07, 1.029968e-04),  # warm k=50   rho=99.5
+        (5.245e-06, 2.014160e-03),  # warm k=200  rho=99.5
+        (2.861e-06, 1.628876e-03),  # oracle      rho=99.5
+        (3.752e-14, 1.628876e-03),  # oracle      rho=99   -- 23x the amplitude, a real score
+        (9.900e-01, 1.0),           # random      rho=99
+    ]
+    for tau, mx in real:
+        assert not f(tau, mx * 1e-12), (tau, mx)
+
+
+def test_noise_floor_flag_edges():
+    from src.analysis.certifiability_margin import NOISE_GUARD_SIGMA, tau_is_noise_determined as f
+
+    scale = 2e-15
+    assert f(NOISE_GUARD_SIGMA * scale * 0.99, scale)
+    assert not f(NOISE_GUARD_SIGMA * scale * 1.01, scale)
+    assert f(float("nan"), scale)          # no boundary at all is not a usable boundary
+    assert not f(1e-30, 0.0)               # no perturbation applied -> nothing to be confused with

@@ -11,6 +11,7 @@ See mask_utils._create_mask_global_flat tie-break noise (seed 42, scale ∝ max|
 from __future__ import annotations
 
 import heapq
+import math
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import torch
@@ -375,6 +376,28 @@ def streaming_exact_kth_largest(
     info["tau_bracket"] = (lo, hi)
     info["candidates"] = int(cand.numel())
     return float(vals.min().item()), info
+
+
+# A tie-break draw is N(0, scale); over ~7e9 coordinates the largest is ~6.3 sigma, so a boundary
+# within ~6.5 sigma of zero is indistinguishable from the perturbation that produced it.
+NOISE_GUARD_SIGMA = 6.5
+
+
+def tau_is_noise_determined(tau: float, tie_break_scale: float, *, guard: float = NOISE_GUARD_SIGMA) -> bool:
+    """True when tau_rho sits inside the tie-break noise, so it is not a property of the scores.
+
+    This is the test that matters, and it is *not* implied by comparing the raw support to the keep
+    budget: a score vector can have far more positive coordinates than the budget and still have
+    fewer than R of them *above the noise floor*, because ``ulp ∝ |w|`` gives the warm-magnitude
+    score a tail running below any fixed relative amplitude (RESULTS.md §3.0). Measured on
+    Olmo-3-7B at rho=99%: 71.7 M positives survived the per-layer floors, but only 53.6 M exceeded
+    1e-14 against R = 54.7 M, so tau landed at 7.3e-15 with support well above the budget.
+    """
+    if not (tie_break_scale > 0.0):
+        return False
+    if not math.isfinite(tau):
+        return True
+    return tau <= guard * float(tie_break_scale)
 
 
 def tau_relative(x: torch.Tensor, tau: float) -> torch.Tensor:

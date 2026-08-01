@@ -66,6 +66,16 @@ QUANTITY_META = {
         "short": r"$\tilde\delta_i$",
         "name": "score gap to the oracle (relative)",
     },
+    "margin_rel_sig_oracle": {
+        "xlabel": r"$\tilde m_i = |\,s_i - \hat\tau_\rho(s)\,|\;/\;\hat\tau_\rho(s)$",
+        "short": r"$\tilde m_i$",
+        "name": "certifiability margin, restricted to weights that moved ($s^{*}_i>0$)",
+    },
+    "margin_rel_sig_self": {
+        "xlabel": r"$\tilde m_i = |\,s_i - \hat\tau_\rho(s)\,|\;/\;\hat\tau_\rho(s)$",
+        "short": r"$\tilde m_i$",
+        "name": r"certifiability margin, restricted to each arm's own support ($s_i>0$)",
+    },
     "gap_raw": {
         "xlabel": r"$\delta_i = |\,s_i - s^{*}_i\,|$",
         "short": r"$\delta_i$",
@@ -344,6 +354,18 @@ def subtitle_for(cell: Cell, rho: float, quantity: str) -> str:
     bits = [QUANTITY_META[quantity]["name"]]
     if quantity == "margin_rel":
         bits.append(r"$\tilde m_i=1$ marks $s_i=0$ (no resolvable displacement)")
+    if quantity.startswith("margin_rel_sig"):
+        shares = [
+            rec.get("frac_score_exactly_zero")
+            for arm in cell.arm_names()
+            for rec in [cell.record(arm, rho)]
+            if rec and str(arm).startswith(("warm", "oracle"))
+        ]
+        shares = [x for x in shares if isinstance(x, (int, float))]
+        if shares:
+            bits.append(
+                rf"excludes the $s_i=0$ mass ({min(shares):.4f}--{max(shares):.4f} of coordinates)"
+            )
     scope = cell.meta.get("scope") or {}
     if scope.get("n_tensors"):
         bits.append(f"{scope['n_tensors']} tensors / {int(scope.get('covered_elements', 0)):,} weights")
@@ -545,7 +567,7 @@ def main() -> None:
     out_dir = Path(args.out_dir) if args.out_dir else cells[0].path / "figures"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    quantities = args.quantity or ["margin_rel", "margin_raw"]
+    quantities = args.quantity or ["margin_rel_sig_oracle", "margin_rel", "margin_raw"]
     rhos = [args.rho] if args.rho is not None else sorted({r for c in cells for r in c.sparsities()})
     if not rhos:
         raise SystemExit("No sparsity values found in the analysis metadata.")
