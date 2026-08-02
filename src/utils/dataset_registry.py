@@ -53,6 +53,16 @@ DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {
             "problem": "prompt"
         },
     },
+    "tulu3-rlvr-math": {
+        "hf_id": "allenai/RLVR-GSM-MATH-IF-Mixed-Constraints",
+        "domain": "math",
+        "description": "Tülu 3 RLVR mixture, GSM8K+MATH rows only (verifiable-reward GRPO on Tülu-3 RL data)",
+        "sanitized_name": "tulu3_rlvr_math",
+        "field_map": {"messages": "prompt"},
+        # IF rows are scored by constraint verifiers we don't implement; keeping them
+        # would silently zero their accuracy reward, so they are excluded up front.
+        "row_filter": {"column": "dataset", "keep": ["gsm8k", "MATH"]},
+    },
     "codepref": {
         "hf_id": "Vezora/Code-Preference-Pairs",
         "domain": "coding",
@@ -204,10 +214,20 @@ def load_grpo_dataset(
 
     slurm_safe_print(f"[dataset_registry] Resolved '{key_or_hf_id}' → {hf_id} for GRPO (domain: {config['domain']})")
 
-    if field_map:
-        slurm_safe_print(f"[dataset_registry] Applying field remapping: {field_map}")
+    row_filter = config.get("row_filter")
+
+    if field_map or row_filter:
         raw_ds = load_dataset(hf_id, split=split)
-        raw_ds = _apply_field_map(raw_ds, field_map)
+        if row_filter:
+            col, keep = row_filter["column"], set(row_filter["keep"])
+            before = len(raw_ds)
+            raw_ds = raw_ds.filter(lambda rec: rec[col] in keep)
+            slurm_safe_print(
+                f"[dataset_registry] Row filter {col}∈{sorted(keep)}: {before} → {len(raw_ds)} rows"
+            )
+        if field_map:
+            slurm_safe_print(f"[dataset_registry] Applying field remapping: {field_map}")
+            raw_ds = _apply_field_map(raw_ds, field_map)
         return _normalize_grpo_dataset(
             raw_ds,
             subset_size=subset_size,
@@ -255,8 +275,8 @@ def _normalize_grpo_dataset(raw_ds, subset_size=None, label="dataset", grpo_prom
         prompt_raw = rec.get("prompt", "")
         if isinstance(prompt_raw, list):
             prompt_text = "\n".join(
-                m.get("value", "") for m in prompt_raw
-                if isinstance(m, dict) and m.get("from", "").lower() != "assistant"
+                m.get("value", m.get("content", "")) for m in prompt_raw
+                if isinstance(m, dict) and m.get("from", m.get("role", "")).lower() != "assistant"
             ).strip()
             if prompt_text: return prompt_text
         

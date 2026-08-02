@@ -154,20 +154,55 @@ try:
     # Write to transport file
     with open({repr(tmp_results_path)}, 'w') as f:
         json.dump(results, f, default=str)
+    # vLLM 0.26's engine-core child can outlive the evaluation; a normal exit
+    # then hangs forever in multiprocessing's atexit join (observed 2026-08-01,
+    # jobs 248621-29). Results are already on disk — skip interpreter teardown.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # Kill our own children (vLLM engine-core & co) before exiting: they hold
+    # the GPU and, having inherited our stdout/stderr, keep those streams open.
+    import subprocess as _sp
+    _sp.run(["pkill", "-9", "-P", str(os.getpid())], check=False)
+    os._exit(0)
 except Exception as e:
     traceback.print_exc()
-    sys.exit(1)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    import subprocess as _sp
+    _sp.run(["pkill", "-9", "-P", str(os.getpid())], check=False)
+    os._exit(1)
 """
     
     try:
-        # Run process and capture output for debugging
-        result = subprocess.run(
-            [sys.executable, "-c", script_code],
-            capture_output=True,
-            text=True,
-            check=True
+        # Capture subprocess output via FILES, not pipes: a lingering grandchild
+        # (vLLM engine-core) that inherits a pipe keeps it open after the worker
+        # exits, deadlocking communicate() forever. With file redirection,
+        # subprocess.run returns on child exit regardless of grandchildren.
+        # (observed 2026-08-01, mop-up jobs 249006/249007/249013)
+        out_path = tmp_results_path + ".stdout"
+        err_path = tmp_results_path + ".stderr"
+        with open(out_path, "w") as so, open(err_path, "w") as se:
+            proc = subprocess.run(
+                [sys.executable, "-c", script_code],
+                stdout=so,
+                stderr=se,
+                text=True,
+            )
+        sub_stdout = open(out_path).read()
+        sub_stderr = open(err_path).read()
+        for p in (out_path, err_path):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(
+                proc.returncode, proc.args, output=sub_stdout, stderr=sub_stderr
+            )
+        result = subprocess.CompletedProcess(
+            proc.args, proc.returncode, stdout=sub_stdout, stderr=sub_stderr
         )
-        
+
         if verbose:
             if result.stdout:
                 print(result.stdout)

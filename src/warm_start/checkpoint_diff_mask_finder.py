@@ -16,9 +16,40 @@ from src.utils.mask_utils import (
     pooling_metadata,
 )
 
-def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
+def _normalize_torch_dtype(dtype) -> torch.dtype:
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    s = str(dtype).strip().lower()
+    aliases = {
+        "fp32": torch.float32, "float32": torch.float32, "f32": torch.float32,
+        "fp16": torch.float16, "float16": torch.float16, "f16": torch.float16,
+        "bf16": torch.bfloat16, "bfloat16": torch.bfloat16,
+    }
+    if s not in aliases:
+        raise ValueError(f"Unknown dtype {dtype!r}; expected one of {sorted(aliases)}")
+    return aliases[s]
+
+
+def _cast_loaded_state_dict(sd: Dict[str, torch.Tensor], dtype) -> Dict[str, torch.Tensor]:
+    if dtype is None:
+        return sd
+    dtype = _normalize_torch_dtype(dtype)
+    out: Dict[str, torch.Tensor] = {}
+    for k, v in sd.items():
+        if isinstance(v, torch.Tensor) and v.is_floating_point():
+            out[k] = v.to(dtype=dtype)
+        else:
+            out[k] = v
+    return out
+
+
+def load_state_dict(path: str, device: str = "cpu", torch_dtype=None) -> Dict[str, torch.Tensor]:
     """
     Loads a state dict from a .pt file, .safetensors file, or a HuggingFace model (local/remote).
+
+    torch_dtype=None preserves each caller's historical behavior (stored dtype for
+    .pt/.safetensors, float32 for HF dirs); pass e.g. "bfloat16" to cast floating
+    tensors for memory control (mask_score_gap_analysis does).
     """
     # 1. Check if it's a local file or directory that exists
     if os.path.exists(path):
@@ -26,16 +57,18 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
             print(f"Loading state dict from local file: {path}")
             if path.endswith(".safetensors"):
                 from safetensors.torch import load_file
-                return load_file(path, device=device)
+                return _cast_loaded_state_dict(load_file(path, device=device), torch_dtype)
             else:
-                return torch.load(path, map_location=device, weights_only=True)
+                return _cast_loaded_state_dict(
+                    torch.load(path, map_location=device, weights_only=True), torch_dtype
+                )
         else:
             # Treat as local HuggingFace directory
             print(f"Loading local HuggingFace model directory: {path}")
             from transformers import AutoModelForCausalLM
             model = AutoModelForCausalLM.from_pretrained(
-                path, 
-                torch_dtype=torch.float32,
+                path,
+                torch_dtype=torch.float32 if torch_dtype is None else _normalize_torch_dtype(torch_dtype),
                 device_map=None,
                 low_cpu_mem_usage=True
             )
@@ -43,7 +76,7 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
             state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
             del model
             gc.collect()
-            return state_dict
+            return _cast_loaded_state_dict(state_dict, torch_dtype)
 
     # 2. If path doesn't exist locally, check if it might be a HuggingFace Hub ID
     # Hub IDs usually have 0 or 1 slashes (e.g., 'gpt2' or 'meta-llama/Llama-2-7b')
@@ -58,8 +91,8 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
     from transformers import AutoModelForCausalLM
     try:
         model = AutoModelForCausalLM.from_pretrained(
-            path, 
-            torch_dtype=torch.float32,
+            path,
+            torch_dtype=torch.float32 if torch_dtype is None else _normalize_torch_dtype(torch_dtype),
             device_map=None,
             low_cpu_mem_usage=True
         )
@@ -67,7 +100,7 @@ def load_state_dict(path: str, device: str = "cpu") -> Dict[str, torch.Tensor]:
         state_dict = {k: v.cpu().detach() for k, v in state_dict.items()}
         del model
         gc.collect()
-        return state_dict
+        return _cast_loaded_state_dict(state_dict, torch_dtype)
     except Exception as e:
         raise ValueError(f"Could not load HuggingFace model or file from '{path}': {e}")
 

@@ -275,7 +275,7 @@ def evaluate_squad_with_lm_eval(
         print("Environment Variables:")
         for k, v in os.environ.items():
             if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
-                print(f"  {k}: {v}")
+                print(f"  {k}: {'***' if 'TOKEN' in k else v}")
         print("=" * 60)
     
     # Auto-detect device if not specified

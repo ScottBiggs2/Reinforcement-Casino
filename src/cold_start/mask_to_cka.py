@@ -125,6 +125,18 @@ def linear_cka(X: torch.Tensor, Y: torch.Tensor) -> float:
 
     Always runs the linear-algebra core on **CPU float64** so results are stable and we avoid
     rare CUDA float64 / multi-device edge cases; n is at most batch×samples (small).
+
+    Centering is applied to the FEATURES, not to the Gram matrix. Since
+    ``Xc Xcᵀ == H (X Xᵀ) H`` exactly, this is the same quantity, but ``H K H``
+    subtracts nearly-equal large numbers while ``X - mean`` does not.
+
+    The normalisation is a RATIO of Frobenius norms, so it is scale-free and needs
+    no absolute epsilon. The previous version compared ``sqrt(hsic_kk*hsic_ll)``
+    against a hard ``1e-30`` and returned 0.0 below it. That denominator scales as
+    ‖X‖²‖Y‖², so on a model with 97.5% of its weights zeroed — activations of order
+    1e-17 — it lands near 1e-72 and the guard fired on perfectly valid data,
+    silently reporting CKA=0.0 for all 32 layers of the one mask pair whose
+    activations were smallest (job 240279, GRPO-OpenR1 ⇄ GRPO-Tülu3RLVR).
     """
     X = X.detach().cpu().double()
     Y = Y.detach().cpu().double()
@@ -133,23 +145,19 @@ def linear_cka(X: torch.Tensor, Y: torch.Tensor) -> float:
     if n < 2:
         return float("nan")
 
-    K = X @ X.t()   # [n, n]
-    L = Y @ Y.t()   # [n, n]
+    Xc = X - X.mean(dim=0, keepdim=True)
+    Yc = Y - Y.mean(dim=0, keepdim=True)
 
-    ones = torch.ones(n, n, dtype=X.dtype, device=X.device) / n
-    H    = torch.eye(n,     dtype=X.dtype, device=X.device) - ones
+    K = Xc @ Xc.t()   # [n, n] == H (X Xᵀ) H
+    L = Yc @ Yc.t()   # [n, n]
 
-    Kc = H @ K @ H   # [n, n]
-    Lc = H @ L @ H   # [n, n]
-
-    hsic_kl = _hsic(Kc, Lc, n)
-    hsic_kk = _hsic(Kc, Kc, n)
-    hsic_ll = _hsic(Lc, Lc, n)
-
-    denom = (hsic_kk * hsic_ll).sqrt()
-    if denom.abs().item() < 1e-30:
-        return 0.0
-    return (hsic_kl / denom).clamp(0.0, 1.0).item()
+    num = (K * L).sum()
+    den = K.norm(p="fro") * L.norm(p="fro")
+    # Only a genuinely constant (zero-variance) representation reaches this, and
+    # for that CKA is undefined rather than zero — say so instead of inventing 0.0.
+    if not torch.isfinite(den) or den.item() <= 0.0:
+        return float("nan")
+    return (num / den).clamp(0.0, 1.0).item()
 
 def collect_activations(model, extractor, tokenizer, texts, device,
                         max_length=512, batch_size=4):

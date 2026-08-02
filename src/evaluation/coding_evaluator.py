@@ -119,7 +119,7 @@ def evaluate_coding(
         print("Environment Variables:")
         for k, v in os.environ.items():
             if k.startswith(("VLLM_", "HF_", "CUDA_", "PYTHON")):
-                print(f"  {k}: {v}")
+                print(f"  {k}: {'***' if 'TOKEN' in k else v}")
         print("=" * 60)
     
     # Auto-detect device
@@ -213,63 +213,71 @@ def evaluate_coding(
     all_task_results = {}
     
     # Task preparation with custom filtering and prompt wrapping
+    # (lm-eval >= 0.4.12: doc_to_text is a jinja template string on task.config,
+    # and post-processing lives in FilterEnsembles of zero-arg factories on
+    # task._filters; the old render_config / filter_list hooks are gone)
+    import functools
     from lm_eval.tasks import get_task_dict
-    
+    from lm_eval.filters.custom import CustomFilter
+
+    def _markdown_ensemble_filter(resps, docs):
+        # FilterEnsemble.apply passes per-doc lists of sampled responses
+        return [markdown_code_filter(list(r)) for r in resps]
+
+    def _to_continuation(code: str, doc: dict) -> str:
+        """Turn a full-function chat answer into a humaneval-style continuation.
+
+        humaneval's create_test filter builds `doc["prompt"] + resp`, where the
+        prompt already ends inside the function signature — so a response that
+        restates `def entry_point(...)` must be stripped down to the body.
+        Pre-def lines (imports, helpers) are indented into the body, which is
+        legal Python; a restated docstring is a harmless expression statement.
+        """
+        entry = doc.get("entry_point", "")
+        m = re.search(rf"^def\s+{re.escape(entry)}\s*\(.*?:\s*$", code, flags=re.M)
+        if not m:
+            return code
+        pre = "".join(
+            f"    {ln}\n" for ln in code[: m.start()].splitlines() if ln.strip()
+        )
+        return "\n" + pre + code[m.end():]
+
+    def _humaneval_chat_filter(resps, docs):
+        cleaned = [markdown_code_filter(list(r)) for r in resps]
+        return [
+            [_to_continuation(code, doc) for code in resp]
+            for resp, doc in zip(cleaned, docs)
+        ]
+
     def prepare_tasks(task_names: List[str], use_chat_template: bool):
         t_dict = get_task_dict(task_names)
-        
-        for name, task_obj in t_dict.items():
-            # Apply prompt wrapping for Instruct models to force code-only output
-            if use_chat_template:
-                # Wrap doc_to_text to include instructions
-                orig_doc_to_text = task_obj.doc_to_text
-                
-                def wrapped_doc_to_text(doc):
-                    text = orig_doc_to_text(doc) if callable(orig_doc_to_text) else task_obj.render_config.doc_to_text
-                    # Inject strong instruction
-                    instruction = "Provide ONLY the Python code block starting with 'def' and ending with the completed function logic. Do not include any explanation or markdown formatting outside the code block."
-                    if name == "mbpp":
-                        instruction = "Provide ONLY the Python code. Do not include any explanation."
-                    
-                    # Prepend instruction to the user message
-                    return f"{instruction}\n\n{text}"
-                
-                # Update the task object's prompt logic
-                # For v0.4.11, we often need to update multiple places
-                if hasattr(task_obj, "render_config"):
-                    task_obj.render_config.doc_to_text = wrapped_doc_to_text
-                else:
-                    task_obj._doc_to_text = wrapped_doc_to_text
 
-            # Inject our robust markdown filter
-            # lm-eval filters are applied after generation
-            from lm_eval.filters.custom import CustomFilter
-            
-            robust_filter = CustomFilter(filter_fn=markdown_code_filter)
-            
-            # Add or override the 'create_test' (HumanEval) or 'none' (MBPP) filters
-            # We add a new filter named 'robust_extraction' and set it as default
-            if not hasattr(task_obj, "filter_list"):
-                task_obj.filter_list = []
-            
-            # We want our filter to run
-            # For HumanEval, 'create_test' is important as it appends tests.
-            # So we might want to CHAIN them?
-            # lm-eval doesn't support easy chaining in v0.4.11 via config, 
-            # but we can wrap the existing function.
-            
-            for f_conf in task_obj.filter_list:
-                orig_filter_fn = f_conf.get("filter", [{}])[0].get("function")
-                if callable(orig_filter_fn):
-                    # Wrap existing filter to clean markdown FIRST
-                    def wrapped_filter(resps):
-                        cleaned = markdown_code_filter(resps)
-                        return orig_filter_fn(cleaned)
-                    f_conf["filter"][0]["function"] = wrapped_filter
-                else:
-                    # No filter or simple string filter, just inject ours
-                    f_conf["filter"] = [{"function": markdown_code_filter}]
-                    
+        for name, task_obj in t_dict.items():
+            # Prepend a code-only instruction for Instruct models
+            if use_chat_template:
+                instruction = "Provide ONLY the Python code block starting with 'def' and ending with the completed function logic. Do not include any explanation or markdown formatting outside the code block."
+                if name == "mbpp":
+                    instruction = "Provide ONLY the Python code. Do not include any explanation."
+                tmpl = getattr(task_obj.config, "doc_to_text", None)
+                if isinstance(tmpl, str):
+                    task_obj.config.doc_to_text = f"{instruction}\n\n{tmpl}"
+
+            # Run markdown/code extraction BEFORE each task's own filter pipeline
+            chat_humaneval = use_chat_template and name == "humaneval"
+            extract_fn = _humaneval_chat_filter if chat_humaneval else _markdown_ensemble_filter
+            for ensemble in getattr(task_obj, "_filters", []):
+                ensemble.filters.insert(
+                    0, functools.partial(CustomFilter, filter_fn=extract_fn)
+                )
+
+            if chat_humaneval:
+                # humaneval's completion-style stops ("\ndef", "\n#", ...) fire on
+                # the first line of a chat answer ("```python\ndef ..."), leaving
+                # an empty shell — rely on the model's end-of-turn token instead.
+                gen_kwargs = getattr(task_obj.config, "generation_kwargs", None)
+                if isinstance(gen_kwargs, dict):
+                    gen_kwargs["until"] = []
+
         return t_dict
 
     # First attempt: Run all tasks together
@@ -285,24 +293,20 @@ def evaluate_coding(
             # Load and modify tasks for this attempt
             modified_task_dict = prepare_tasks(tasks_to_run, use_chat)
             
-            import lm_eval.evaluator
-            
             current_eval_kwargs = eval_kwargs.copy()
-            current_eval_kwargs["tasks"] = tasks_to_run
             current_eval_kwargs.update(config)
-            
-            filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None and k != "apply_chat_template"}
+
+            # lm-eval 0.4.12 handles apply_chat_template natively — pass it through
+            # (the old code stripped it and wrapped prompts itself; without it the
+            # instruct model sees a raw completion prompt and humaneval scores ~0)
+            filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
             filtered_eval_kwargs["confirm_run_unsafe_code"] = True
-            
-            original_get_task_dict = lm_eval.evaluator.get_task_dict
-            def mock_get_task_dict(*args, **kwargs):
-                return modified_task_dict
-                
-            try:
-                lm_eval.evaluator.get_task_dict = mock_get_task_dict
-                initial_results = simple_evaluate(**filtered_eval_kwargs)
-            finally:
-                lm_eval.evaluator.get_task_dict = original_get_task_dict
+
+            # lm-eval >= 0.4.12: lm_eval.evaluator.get_task_dict is gone, but
+            # TaskManager.load accepts pre-built Task objects, so the modified
+            # tasks can be passed straight through `tasks`.
+            filtered_eval_kwargs["tasks"] = list(modified_task_dict.values())
+            initial_results = simple_evaluate(**filtered_eval_kwargs)
             break
         except Exception as e:
             if verbose:
@@ -344,8 +348,6 @@ def evaluate_coding(
                     use_chat = config.get("apply_chat_template", False)
                     modified_task_dict = prepare_tasks([task_name], use_chat)
                     
-                    import lm_eval.evaluator
-                    
                     # Cleanup previous vLLM engine if any
                     gc.collect()
                     if torch.cuda.is_available():
@@ -358,22 +360,13 @@ def evaluate_coding(
                         pass
                         
                     current_eval_kwargs = eval_kwargs.copy()
-                    current_eval_kwargs["tasks"] = [task_name]
                     current_eval_kwargs["num_fewshot"] = retry_fewshot
                     current_eval_kwargs.update(config)
-                    
-                    filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None and k != "apply_chat_template"}
+
+                    filtered_eval_kwargs = {k: v for k, v in current_eval_kwargs.items() if v is not None}
                     filtered_eval_kwargs["confirm_run_unsafe_code"] = True
-                    
-                    original_get_task_dict = lm_eval.evaluator.get_task_dict
-                    def mock_retry_get_task_dict(*args, **kwargs):
-                        return modified_task_dict
-                    
-                    try:
-                        lm_eval.evaluator.get_task_dict = mock_retry_get_task_dict
-                        retry_results = simple_evaluate(**filtered_eval_kwargs)
-                    finally:
-                        lm_eval.evaluator.get_task_dict = original_get_task_dict
+                    filtered_eval_kwargs["tasks"] = list(modified_task_dict.values())
+                    retry_results = simple_evaluate(**filtered_eval_kwargs)
                     if retry_results:
                         all_task_results["results"][task_name] = retry_results["results"][task_name]
                         if verbose:

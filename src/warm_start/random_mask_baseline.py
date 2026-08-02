@@ -54,6 +54,7 @@ def generate_random_mask(
     seed: int = None,
     local_pool: bool = False,
     min_layer_keep_ratio: float = DEFAULT_MIN_LAYER_KEEP_RATIO,
+    float64_scores: bool = False,
 ) -> dict:
     """
     Generate a random binary mask with the same parameter shapes and
@@ -76,8 +77,16 @@ def generate_random_mask(
     # exact selector path stays aligned with the other large-model mask builders.
     device = "cpu"
 
-    # Draw uniform random scores -- no task signal whatsoever
-    scores = {name: torch.rand_like(mask.float()) for name, mask in reference_masks.items()}
+    # Draw uniform random scores -- no task signal whatsoever.
+    # float64 is needed above ~10B params: 32.7B float32 uniforms carry ~2000
+    # exact duplicates per representable value near the keep threshold, which
+    # breaks the chunked selector's boundary-candidate accounting (histc bins
+    # vs epsilon compares round the tie mass differently -- 2026-08-01 Qwen3-32B).
+    score_dtype = torch.float64 if float64_scores else torch.float32
+    scores = {
+        name: torch.rand(mask.shape, dtype=score_dtype)
+        for name, mask in reference_masks.items()
+    }
 
     # Utilize mask_utils directly
     masks = create_mask_from_scores_gpu_efficient(
@@ -122,6 +131,7 @@ def main(args):
         seed=args.seed,
         local_pool=args.local_pool,
         min_layer_keep_ratio=args.min_layer_keep_ratio,
+        float64_scores=args.float64_scores,
     )
 
     # Optionally compute Jaccard against the reference mask.
@@ -141,6 +151,7 @@ def main(args):
         "method": "random_baseline",
         "sparsity_percent": sparsity,
         "seed": args.seed,
+        "score_dtype": "float64" if args.float64_scores else "float32",
         "reference_mask": args.reference_mask,
         "expected_jaccard_vs_random": expected_random_jaccard(sparsity),
         **pooling_metadata(
@@ -175,6 +186,13 @@ if __name__ == "__main__":
         "--local_pool",
         action="store_true",
         help="Per-weight-matrix random mask (uniform sparsity per matrix). Default: global pooling.",
+    )
+    parser.add_argument(
+        "--float64_scores",
+        action="store_true",
+        help="Draw uniform scores in float64. Required above ~10B params: float32 "
+             "tie collisions at the keep threshold break the chunked selector's "
+             "boundary accounting (Qwen3-32B, 2026-08-01).",
     )
     parser.add_argument(
         "--min_layer_keep_ratio",

@@ -76,6 +76,10 @@ def main() -> None:
                     help="Also compute per-matrix stable rank of dW (2-D tensors only).")
     ap.add_argument("--rank_max_tensors", type=int, default=64,
                     help="Cap on how many 2-D tensors get a stable rank (SVD-free but O(n^2) matmul).")
+    ap.add_argument("--spectrum_topk", type=int, default=0,
+                    help="Also record the top-K squared singular values of each ranked dW "
+                         "(randomized SVD). Turns the Eckart-Young capture bound r/srank into "
+                         "the EXACT best-rank-r capture sum_{i<=r} sigma_i^2 / ||dW||_F^2 for any r<=K.")
     ap.add_argument("--tag", default=None)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -130,12 +134,18 @@ def main() -> None:
                 nv = v.norm()
                 v = v / (nv + 1e-12)
             spec2 = (nv ** 2).item()
-            ranks.append({
+            entry = {
                 "name": name,
                 "shape": list(dW.shape),
+                "fro_sq": fro2,
                 "stable_rank": fro2 / spec2 if spec2 > 0 else float("nan"),
                 "max_possible_rank": min(dW.shape),
-            })
+            }
+            if args.spectrum_topk > 0:
+                q = min(args.spectrum_topk + 16, min(dW.shape))
+                _, sv, _ = torch.svd_lowrank(dW, q=q, niter=4)
+                entry["sigma_sq_topk"] = (sv[: args.spectrum_topk] ** 2).tolist()
+            ranks.append(entry)
             n_ranked += 1
             del dW
 
@@ -171,6 +181,14 @@ def main() -> None:
             print(f"\n  stable rank of dW over {len(sr)} matrices:")
             print(f"    min {min(sr):.1f}   median {sr_sorted[len(sr)//2]:.1f}   max {max(sr):.1f}")
             print(f"    (LoRA rank r caps this at r — compare against the r used in the baseline)")
+        caps = [sum(r["sigma_sq_topk"][:64]) / r["fro_sq"]
+                for r in ranks
+                if len(r.get("sigma_sq_topk", [])) >= min(64, r["max_possible_rank"])
+                and r["fro_sq"] > 0]
+        if caps:
+            caps.sort()
+            print(f"\n  EXACT best-rank-64 capture of ||dW||_F^2 over {len(caps)} matrices:")
+            print(f"    min {caps[0]:.3f}   median {caps[len(caps)//2]:.3f}   max {caps[-1]:.3f}")
     print(f"\nWrote {args.out}")
 
 
